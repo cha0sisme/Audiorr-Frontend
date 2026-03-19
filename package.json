@@ -1,0 +1,132 @@
+{
+  "name": "audiorr",
+  "version": "0.0.1",
+  "description": "Audiorr - Advanced Audio Player with Smart Mixing",
+  "author": "Audiorr",
+  "private": true,
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"cross-env NODE_ENV=development vite\" \"tsc -p tsconfig.electron.json && wait-on http://localhost:5173 && electron .\"",
+    "build": "npm run build:react && npm run build:electron",
+    "build:react": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "dev:electron": "tsc -p tsconfig.electron.json && electron .",
+    "preview": "vite preview",
+    "electron": "tsc -p tsconfig.electron.json && electron .",
+    "dist": "npm run build && node scripts/build-dist.js",
+    "verify-icon": "node scripts/verify-icon.js",
+    "clear-icon-cache": "powershell -ExecutionPolicy Bypass -File scripts/clear-windows-icon-cache.ps1",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\" \"electron/**/*.{ts,json}\""
+  },
+  "build": {
+    "appId": "com.audiorr.app",
+    "productName": "Audiorr",
+    "icon": "assets/icon.ico",
+    "directories": {
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "assets/**/*",
+      "scripts/analyze_audio.py",
+      "!assets/bin/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "**/*",
+          "!bin/**/*"
+        ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "assets/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**/*",
+      "**/node_modules/canvas/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker",
+      "forceCodeSigning": false,
+      "signAndEditExecutable": false,
+      "signExts": [],
+      "artifactName": "${productName} Setup ${version}.${ext}",
+      "legalTrademarks": "Audiorr",
+      "executableName": "Audiorr"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Audiorr",
+      "uninstallDisplayName": "Audiorr",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
+    }
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/ios": "^8.2.0",
+    "@heroicons/react": "^2.2.0",
+    "@types/node-fetch": "^2.6.13",
+    "better-sqlite3": "^12.4.1",
+    "bonjour-service": "^1.3.0",
+    "canvas": "^3.2.0",
+    "dotenv": "^17.2.3",
+    "framer-motion": "^12.23.24",
+    "md5": "^2.3.0",
+    "node-fetch": "^2.7.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.9.5",
+    "socket.io-client": "^4.8.3",
+    "sql.js": "^1.10.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/md5": "^2.3.6",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/sql.js": "^1.4.9",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "cssnano": "^7.1.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^26.0.12",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "git-rev-sync": "^3.0.2",
+    "kill-port": "^2.0.1",
+    "postcss": "^8.4.35",
+    "prettier": "^3.2.5",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.11",
+    "wait-on": "^7.2.0"
+  }
+}

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Runtime config: sobreescrito por el entrypoint Docker con VITE_API_URL -->
+    <script src="/env.js"></script>
+    <link rel="icon" type="image/svg+xml" href="/assets/logo-icon.svg" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Audiorr</title>
+    <!-- Precarga del tema para evitar flash blanco -->
+    <script>
+      ;(function () {
+        // Obtener tema guardado o usar 'light' como default
+        var savedTheme = localStorage.getItem('theme') || 'light'
+        var isDark =
+          savedTheme === 'dark' ||
+          (savedTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+
+        // Aplicar clase inmediatamente ANTES de que se cargue el CSS
+        document.documentElement.classList.add(isDark ? 'dark' : 'light')
+
+        // Aplicar color de fondo inmediatamente para evitar flash
+        document.documentElement.style.backgroundColor = isDark ? '#1f2937' : '#f3f4f6'
+        document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
+      })()
+    </script>
+    <style>
+      /* Fuentes — declaradas aquí para garantizar disponibilidad antes de cualquier CSS externo */
+      @font-face {
+        font-family: 'Inter';
+        src: url('/assets/Inter/Inter-VariableFont_opsz,wght.ttf') format('truetype');
+        font-weight: 100 900;
+        font-display: swap;
+        font-style: normal;
+      }
+      @font-face {
+        font-family: 'Inter';
+        src: url('/assets/Inter/Inter-Italic-VariableFont_opsz,wght.ttf') format('truetype');
+        font-weight: 100 900;
+        font-display: swap;
+        font-style: italic;
+      }
+      @font-face {
+        font-family: 'Space Grotesk';
+        src: url('/assets/Space_Grotesk/SpaceGrotesk-VariableFont_wght.ttf') format('truetype');
+        font-weight: 300 900;
+        font-display: swap;
+      }
+
+      /* Estilos críticos para evitar flash - se sobreescribirán por Tailwind */
+      html {
+        background-color: #f3f4f6;
+        font-family: 'Inter', system-ui, sans-serif;
+        font-optical-sizing: auto;
+        overscroll-behavior: none;
+      }
+      html.dark {
+        background-color: #1f2937;
+      }
+      body {
+        margin: 0;
+        background-color: inherit;
+        font-family: 'Inter', system-ui, sans-serif;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      /* Ocultar contenido hasta que React se hidrate */
+      #root:empty {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #root:empty::after {
+        content: '';
+        width: 40px;
+        height: 40px;
+        border: 3px solid rgba(156, 163, 175, 0.3);
+        border-top-color: #6b7280;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      html.dark #root:empty::after {
+        border-color: rgba(156, 163, 175, 0.2);
+        border-top-color: #9ca3af;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
