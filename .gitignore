@@ -14,8 +14,7 @@ dist-electron
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 *.suo
 *.ntvs*
@@ -52,6 +51,13 @@ ios/App/App/GoogleService-Info.plist
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Excluded from public repo
+docker-compose.yml
+electron-main/
+scripts/
+docs/
+IMPLEMENTACION-CARPLAY.md
 
 # Release binaries
 release/
