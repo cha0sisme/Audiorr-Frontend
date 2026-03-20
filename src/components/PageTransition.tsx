@@ -18,13 +18,23 @@ export default function PageTransition({ children, className = '' }: PageTransit
   const isRootTab = ROOT_TABS.has(location.pathname)
   const isPop = navigationType === 'POP'
 
+  // Tabs raíz en nativo: cambio instantáneo sin animación (como UITabBar nativo de iOS)
+  if (isNative && isRootTab) {
+    return (
+      <motion.div
+        initial={false}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0, transition: { duration: 0.05 } }}
+        className={className}
+      >
+        {children}
+      </motion.div>
+    )
+  }
+
   // En nativo + página de detalle: transición con slide direccional
-  // El gesto de swipe nativo de iOS (AppDelegate) ya provee la animación
-  // completa de slide; aquí añadimos la misma sensación al navegar con botones.
   if (isNative && !isRootTab) {
-    // Entrada: detalle entra desde la derecha (PUSH) o desde la izquierda (POP)
     const enterX = isPop ? -28 : 28
-    // Salida: fade rápido + ligero desplazamiento opuesto
     const exitX = isPop ? 28 : -14
 
     return (
@@ -38,7 +48,7 @@ export default function PageTransition({ children, className = '' }: PageTransit
         exit={{
           x: exitX,
           opacity: 0,
-          transition: { duration: 0.14, ease: [0.4, 0.0, 1, 1] },
+          transition: { duration: 0.12, ease: [0.4, 0.0, 1, 1] },
         }}
         className={className}
         style={{ willChange: 'transform, opacity' }}
@@ -48,7 +58,7 @@ export default function PageTransition({ children, className = '' }: PageTransit
     )
   }
 
-  // Tabs raíz y web: fade suave sin desplazamiento (no hay dirección conceptual)
+  // Web: fade suave
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}

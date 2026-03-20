@@ -8,23 +8,38 @@ export interface Device {
   lanType?: string;
 }
 
+export interface PlaybackMetadata {
+  title: string;
+  artist: string;
+  album: string;
+  coverArt?: string;
+  duration: number;
+}
+
 export interface PlaybackState {
   trackId: string | null;
-  metadata?: {
-    title: string;
-    artist: string;
-    album: string;
-    coverArt?: string;
-    duration: number;
-  } | null;
+  metadata?: PlaybackMetadata | null;
   position: number;
   startedAt: number;
   playing: boolean;
   volume: number;
-  queue: unknown[];
+  queue: PlaybackQueueItem[];
   currentSource: string | null;
   deviceId: string;
   serverTime?: number;
+}
+
+/** Song-like shape for items in the remote queue (matches Song from navidromeApi) */
+export interface PlaybackQueueItem {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
+  path: string;
+  coverArt?: string;
+  albumId?: string;
+  [key: string]: unknown;
 }
 
 export interface RemoteCommand {

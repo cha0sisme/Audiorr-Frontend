@@ -30,13 +30,17 @@ import NativeBackButton from './components/NativeBackButton'
 const NATIVE_ROOT_TABS = new Set(['/', '/artists', '/playlists', '/search', '/audiorr'])
 const isNativePlatform = Capacitor.isNativePlatform()
 
-// Lazy load de páginas (code splitting)
-const HomePage = lazy(() => import('./components/HomePage'))
+// Páginas de tabs raíz: carga eager para evitar flash de Suspense al cambiar de pestaña
+import HomePage from './components/HomePage'
+import ArtistsPage from './components/ArtistsPage'
+import PlaylistsPage from './components/PlaylistsPage'
+import SearchPage from './components/SearchPage'
+import AudiorrPage from './components/AudiorrPage'
+
+// Resto de páginas: lazy load (code splitting)
 const AlbumsPage = lazy(() => import('./components/AlbumsPage'))
 const AlbumDetail = lazy(() => import('./components/AlbumDetail'))
-const ArtistsPage = lazy(() => import('./components/ArtistsPage'))
 const ArtistsDetail = lazy(() => import('./components/ArtistsDetail'))
-const PlaylistsPage = lazy(() => import('./components/PlaylistsPage'))
 const PlaylistDetail = lazy(() => import('./components/PlaylistDetail'))
 const SettingsPage = lazy(() => import('./components/SettingsPage'))
 const UserProfile = lazy(() => import('./components/UserProfile'))
@@ -48,8 +52,6 @@ const GenreDetail = lazy(() => import('./components/GenreDetail'))
 const WrappedPage = lazy(() => import('./components/WrappedPage'))
 const AdminPage = lazy(() => import('./components/AdminPage'))
 const ReceiverPage = lazy(() => import('./components/ReceiverPage').then(m => ({ default: m.ReceiverPage })))
-const SearchPage = lazy(() => import('./components/SearchPage'))
-const AudiorrPage = lazy(() => import('./components/AudiorrPage'))
 
 // Componente para redirigir /profile al perfil del usuario actual
 function ProfileRedirect() {
@@ -90,7 +92,7 @@ function AnimatedRoutes() {
   }, [location.pathname])
   
   return (
-    <AnimatePresence mode="wait" initial={false}>
+    <AnimatePresence mode="popLayout" initial={false}>
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<PageTransition><HomePage /></PageTransition>} />
         <Route path="/albums" element={<PageTransition><AlbumsPage /></PageTransition>} />

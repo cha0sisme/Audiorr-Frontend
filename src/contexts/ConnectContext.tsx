@@ -430,6 +430,13 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       newSocket.on('disconnect', () => {
         setIsConnected(false);
+        // Limpiar sesión remota: si controlábamos un dispositivo, ya no podemos comunicarnos
+        if (activeDeviceIdRef.current) {
+          console.log('[Connect] Disconnected — clearing remote session');
+          activeDeviceIdRef.current = null;
+          setActiveDeviceId(null);
+          setRemotePlaybackState(null);
+        }
         console.log('[Connect] Disconnected');
       });
 
@@ -533,8 +540,10 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // Si no estamos reproduciendo activamente (canción en pausa o sin canción),
     // simplemente nos convertimos en controlador del dispositivo destino sin enviar
     // ningún comando — así no se interrumpe lo que ya está sonando en ese dispositivo.
+    // Pedimos sync al hub para recibir el estado actual del dispositivo remoto.
     if (!playerState.currentSong || !playerState.isPlaying) {
       setActiveDeviceId(targetDeviceId);
+      socket.emit('request_sync');
       return;
     }
 
@@ -634,6 +643,24 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     socket.on(event, handler);
     return () => { socket.off(event, handler); };
   }, [socket]);
+
+  // --- Detección de dispositivo remoto desconectado ---
+  // Cuando el Hub envía una devices_list actualizada sin nuestro activeDeviceId,
+  // el dispositivo controlado se fue (cerró sesión, apagó, etc.) → limpiar sesión.
+  useEffect(() => {
+    if (!activeDeviceId || activeDeviceId === currentDeviceId) return;
+    // Comprobar si es un dispositivo LAN (cast) — esos no están en `devices`
+    const isLanDevice = lanDevices.some(d => d.id === activeDeviceId);
+    if (isLanDevice) return;
+    // Si el dispositivo ya no existe en la lista, limpiar
+    const stillExists = devices.some(d => d.id === activeDeviceId);
+    if (!stillExists) {
+      console.log(`[Connect] Active device ${activeDeviceId} disappeared — clearing remote session`);
+      activeDeviceIdRef.current = null;
+      setActiveDeviceId(null);
+      setRemotePlaybackState(null);
+    }
+  }, [devices, lanDevices, activeDeviceId, currentDeviceId]);
 
   // --- Sincronización Inmediata ---
   useEffect(() => {

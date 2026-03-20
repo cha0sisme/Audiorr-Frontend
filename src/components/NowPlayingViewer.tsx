@@ -86,6 +86,9 @@ export default function NowPlayingViewer({
   const lyricsScrollTimer = useRef<ReturnType<typeof setTimeout>>()
   // Evitar seek accidental al terminar de scrollear dentro del recuadro
   const lyricsJustScrolledRef = useRef(false)
+  // Scroll del contenedor principal (sección player ↔ letras)
+  const userScrollingRef = useRef(false)
+  const scrollResumeTimer = useRef<ReturnType<typeof setTimeout>>()
   // Context menu state
   const [showMenu, setShowMenu] = useState(false)
 
@@ -93,7 +96,11 @@ export default function NowPlayingViewer({
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
   const activeDevice = devices.find(d => d.id === activeDeviceId)
 
-  const currentSong = playerState.currentSong
+  // Usar la canción del dispositivo remoto si estamos en modo controlador
+  const remoteSong = isRemote && remotePlaybackState
+    ? remotePlaybackState.queue?.find(s => s.id === remotePlaybackState.trackId) ?? null
+    : null
+  const currentSong = isRemote ? (remoteSong || playerState.currentSong) : playerState.currentSong
   const artistStr = getArtistString(currentSong?.artist)
   const coverUrl = currentSong?.coverArt ? navidromeApi.getCoverUrl(currentSong.coverArt, 2000) : null
   const hasCanvas = !!canvasUrl
@@ -316,11 +323,15 @@ export default function NowPlayingViewer({
   }
 
   // ── Derived ──────────────────────────────────────────────────────────────────
+  // Progreso: usar estado remoto si controlamos otro dispositivo
+  const effectiveProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
+  const effectiveDuration = isRemote ? (remoteSong?.duration || remotePlaybackState?.metadata?.duration || 0) : playerProgress.duration
+
   const rawProgressPct =
-    playerProgress.duration > 0 &&
-    isFinite(playerProgress.duration) &&
-    isFinite(playerProgress.progress)
-      ? (playerProgress.progress / playerProgress.duration) * 100
+    effectiveDuration > 0 &&
+    isFinite(effectiveDuration) &&
+    isFinite(effectiveProgress)
+      ? (effectiveProgress / effectiveDuration) * 100
       : 0
 
   // Durante el drag mostramos la posición local (sin esperar a que el seek actualice el estado)
@@ -328,10 +339,10 @@ export default function NowPlayingViewer({
 
   // Tiempo mostrado en el label izquierdo (durante drag = posición estimada)
   const displayTime = dragPct !== null
-    ? (dragPct / 100) * (playerProgress.duration || 0)
-    : playerProgress.progress
+    ? (dragPct / 100) * (effectiveDuration || 0)
+    : effectiveProgress
 
-  const remaining = Math.max(0, (playerProgress.duration || 0) - displayTime)
+  const remaining = Math.max(0, (effectiveDuration || 0) - displayTime)
 
   const formatTime = (s: number) => {
     if (!isFinite(s) || s < 0 || isNaN(s)) return '0:00'

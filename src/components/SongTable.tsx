@@ -24,6 +24,17 @@ export interface SongTableProps {
   className?: string
 }
 
+function getGridTemplate(showIndex: boolean, showAlbum: boolean) {
+  if (showIndex) {
+    return showAlbum
+      ? 'grid-cols-[2rem,1fr,auto] md:grid-cols-[2rem,1.8fr,1.2fr,2.5rem]'
+      : 'grid-cols-[2rem,1fr,auto] md:grid-cols-[2rem,1fr,2.5rem]'
+  }
+  return showAlbum
+    ? 'grid-cols-[1fr,auto] md:grid-cols-[1.8fr,1.2fr,2.5rem]'
+    : 'grid-cols-[1fr,auto] md:grid-cols-[1fr,2.5rem]'
+}
+
 const SongRow = memo(({
   song,
   index,
@@ -49,10 +60,7 @@ const SongRow = memo(({
   showIndex?: boolean
   useTrackNumber?: boolean
 }) => {
-  const gridTemplate = `
-    grid-cols-[2rem,1fr,auto]
-    ${showAlbum ? 'md:grid-cols-[2rem,1.8fr,1.2fr,2.5rem]' : 'md:grid-cols-[2rem,1fr,2.5rem]'}
-  `
+  const gridTemplate = getGridTemplate(showIndex, showAlbum)
 
   // On touch devices: single tap plays. On desktop: double-click plays.
   // Re-tapping/clicking the currently playing song always restarts it.
@@ -185,10 +193,7 @@ export function SongTable({
   useTrackNumber = false,
   className = "",
 }: SongTableProps) {
-  const gridTemplate = `
-    grid-cols-[2rem,1fr,auto]
-    ${showAlbum ? 'md:grid-cols-[2rem,1.8fr,1.2fr,2.5rem]' : 'md:grid-cols-[2rem,1fr,2.5rem]'}
-  `
+  const gridTemplate = getGridTemplate(showIndex, showAlbum)
 
   return (
     <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-4 md:mx-0 ${className}`}>
@@ -196,7 +201,7 @@ export function SongTable({
       <div className={`grid items-center gap-2 md:gap-3 px-3 md:px-4 py-2 border-b border-gray-100 dark:border-white/5
         ${gridTemplate}
         text-[10px] md:text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500`}>
-        {showIndex ? <span className="text-center">#</span> : <div />}
+        {showIndex && <span className="text-center">#</span>}
         <span>Título</span>
         {showAlbum && <span className="hidden md:block">Álbum</span>}
         <span className="flex items-center justify-end gap-1.5">

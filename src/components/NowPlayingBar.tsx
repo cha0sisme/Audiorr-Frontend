@@ -199,10 +199,14 @@ export default function NowPlayingBar({
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
   const activeDevice = devices.find(d => d.id === activeDeviceId)
 
-  // Usar estado remoto si aplica, sino el local
-  const currentSong = isRemote ? remotePlaybackState?.metadata : playerState.currentSong
+  // Usar estado remoto si aplica, sino el local.
+  // Buscamos la Song completa en el queue remoto para tener todos los campos (coverArt, albumId, etc.)
+  const remoteSong = isRemote && remotePlaybackState
+    ? remotePlaybackState.queue?.find(s => s.id === remotePlaybackState.trackId) ?? null
+    : null
+  const currentSong = isRemote ? (remoteSong ?? remotePlaybackState?.metadata ?? null) : playerState.currentSong
   const currentProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
-  const currentDuration = isRemote ? (remotePlaybackState?.metadata?.duration || 0) : playerProgress.duration
+  const currentDuration = isRemote ? (remoteSong?.duration || remotePlaybackState?.metadata?.duration || 0) : playerProgress.duration
 
   const volumeBarRef = useRef<HTMLDivElement>(null)
   // Guardar el volumen anterior antes de hacer mute

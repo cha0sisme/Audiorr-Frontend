@@ -358,6 +358,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.warn('[MediaSession] Playback state not supported:', error)
       }
+
+      // Establecer duración real de la canción para que WKWebView no use la del
+      // keepalive WAV de 1s en la pantalla de bloqueo
+      if (song?.duration && song.duration > 0) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: song.duration,
+            playbackRate: 1,
+            position: 0,
+          })
+        } catch {
+          // setPositionState no soportado en algunos navegadores
+        }
+      }
     },
     []
   )
