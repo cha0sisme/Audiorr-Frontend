@@ -385,7 +385,10 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       const newSocket = io(connectUrl, {
         auth: { token },
-        reconnectionAttempts: 5,
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 30000,
         timeout: 10000,
       });
       socketRef = newSocket;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -58,6 +58,21 @@ export default function SongContextMenu({
   const [showSmartTagModal, setShowSmartTagModal] = useState(false)
   const [showCreatePlaylistModal, setShowCreatePlaylistModal] = useState(false)
   const [isMobile] = useState(() => window.innerWidth < 768)
+  const [closing, setClosing] = useState(false)
+  const sheetRef = useRef<HTMLDivElement>(null)
+
+  const handleClose = useCallback(() => {
+    if (!isMobile) { onClose(); return }
+    setClosing(true)
+    // Wait for the CSS exit animation to finish before unmounting
+    const sheet = sheetRef.current
+    if (sheet) {
+      const onEnd = () => { sheet.removeEventListener('animationend', onEnd); onClose() }
+      sheet.addEventListener('animationend', onEnd)
+    } else {
+      onClose()
+    }
+  }, [isMobile, onClose])
 
   useEffect(() => {
     const fetchPlaylists = async () => {
@@ -127,23 +142,17 @@ export default function SongContextMenu({
     }
   }
 
-  // ── Mobile: iOS action sheet ─────────────────────────────────────────────────
+  // ── Mobile: iOS action sheet (CSS-animated for 120 Hz perf) ─────────────────
   if (isMobile) {
     return createPortal(
       <>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9998] bg-black/50"
-          onClick={onClose}
+        <div
+          className={`fixed inset-0 z-[9998] bg-black/50 ctx-backdrop${closing ? ' closing' : ''}`}
+          onClick={handleClose}
         />
-        <motion.div
-          initial={{ y: '100%' }}
-          animate={{ y: 0 }}
-          exit={{ y: '100%' }}
-          transition={{ type: 'spring', damping: 32, stiffness: 320 }}
-          className="fixed bottom-0 left-0 right-0 z-[9999]"
+        <div
+          ref={sheetRef}
+          className={`fixed bottom-0 left-0 right-0 z-[9999] ctx-sheet${closing ? ' closing' : ''}`}
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           {/* Song info header */}
@@ -235,16 +244,16 @@ export default function SongContextMenu({
           </div>
 
           {/* Cancel */}
-          <button className="mx-3 mb-3 w-[calc(100%-1.5rem)] py-4 bg-[#2c2c2e] rounded-2xl text-[#0a84ff] font-semibold text-[17px] hover:bg-[#3a3a3c] active:bg-[#3a3a3c] transition-colors" onClick={onClose}>
+          <button className="mx-3 mb-3 w-[calc(100%-1.5rem)] py-4 bg-[#2c2c2e] rounded-2xl text-[#0a84ff] font-semibold text-[17px] hover:bg-[#3a3a3c] active:bg-[#3a3a3c] transition-colors" onClick={handleClose}>
             Cancelar
           </button>
-        </motion.div>
+        </div>
 
         {showUpdatePlayCountModal && (
-          <UpdatePlayCountModal song={song} onClose={() => { setShowUpdatePlayCountModal(false); onClose() }} />
+          <UpdatePlayCountModal song={song} onClose={() => { setShowUpdatePlayCountModal(false); handleClose() }} />
         )}
         {showSmartTagModal && (
-          <SmartTagModal song={song} onClose={() => { setShowSmartTagModal(false); onClose() }} />
+          <SmartTagModal song={song} onClose={() => { setShowSmartTagModal(false); handleClose() }} />
         )}
         <CreatePlaylistModal
           isOpen={showCreatePlaylistModal}

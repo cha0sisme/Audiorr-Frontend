@@ -69,12 +69,12 @@ export default function PageHero({
 }: PageHeroProps) {
   const location = useLocation()
   const hasBackButton = isNative && !ROOT_TABS.has(location.pathname)
-  const { setHeroPresent } = useHeroPresence()
+  const { incHero, decHero } = useHeroPresence()
 
   useEffect(() => {
-    setHeroPresent(true)
-    return () => setHeroPresent(false)
-  }, [setHeroPresent])
+    incHero()
+    return () => decHero()
+  }, [incHero, decHero])
 
   const [heroProgress, setHeroProgress] = useState(0)
   const heroRef = useRef<HTMLDivElement>(null)

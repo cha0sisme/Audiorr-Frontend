@@ -16,6 +16,8 @@ import { AnalyzedSong, sortSongs } from '../utils/smartMixUtils'
 import { analysisQueue, AnalysisPriority } from '../services/analysisQueue'
 import { backendApi } from '../services/backendApi'
 import { WebAudioPlayer } from '../services/webAudioPlayer'
+import { queuePrefetcher } from '../services/queuePrefetcher'
+import { streamRetryManager } from '../services/streamRetry'
 
 // En iOS nativo, HTMLAudioElement.volume es de solo lectura (iOS lo ignora).
 // Esto afecta al crossfade basado en volumen: ambas canciones suenan simultáneamente.
@@ -61,6 +63,7 @@ export interface PlayerStateType {
   smartMixStatus: SmartMixStatus
   smartMixPlaylistId: string | null
   generatedSmartMix: AnalyzedSong[]
+  isReconnecting: boolean
 }
 
 interface PlayerProgressType {
@@ -236,6 +239,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   })
   const [isCrossfading, setIsCrossfading] = useState(false)
   const [crossfadeDuration, setCrossfadeDuration] = useState(8)
+  const [isReconnecting, setIsReconnecting] = useState(false)
   const [currentSource, setCurrentSource] = useState<string | null>(() => {
     try {
       if (typeof localStorage !== 'undefined') {
@@ -297,6 +301,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const endedHandlerRef = useRef<() => void>()
   const loadedMetadataHandlerRef = useRef<() => void>()
   const errorHandlerRef = useRef<((event: Event) => void) | null>(null)
+  const stalledHandlerRef = useRef<(() => void) | null>(null)
   const isResettingAudioRef = useRef(false)
   const crossfadeDurationRef = useRef(8) // Default crossfade duration
   // ⚡ PERFORMANCE: Refs para optimizar actualizaciones de progreso
@@ -766,7 +771,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const streamUrl = navidromeApi.getStreamUrl(song.id, song.path)
+        // Notificar al manager de retry que cambió la canción
+        streamRetryManager.onSongChange(song.id)
+        setIsReconnecting(false)
+
+        // Comprobar si la canción está en el cache de audio local (pre-descargada)
+        const cachedBlobUrl = await queuePrefetcher.getCachedBlobUrl(song.id)
+        const streamUrl = cachedBlobUrl || navidromeApi.getStreamUrl(song.id, song.path)
+        if (cachedBlobUrl) {
+          console.log(`[Player] 🚀 Reproduciendo desde caché local: "${song.title}"`)
+        }
 
         // === SISTEMA CONDICIONAL: Web Audio vs HTML Audio ===
         if (shouldUseWebAudio()) {
@@ -911,8 +925,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // Esto evita que el stream arranque desde 0 y el seek mediante currentTime falle.
         const positionForHtmlOffset = keepPosition ? progressRef.current : 0
         const htmlTimeOffset = positionForHtmlOffset > 2 ? Math.floor(positionForHtmlOffset) : 0
-        streamOffsetRef.current = htmlTimeOffset
-        const streamUrl = navidromeApi.getStreamUrl(song.id, song.path, htmlTimeOffset > 0 ? htmlTimeOffset : undefined)
+        streamOffsetRef.current = cachedBlobUrl ? 0 : htmlTimeOffset
+        // Si tenemos blob cacheado, usarlo directamente (no soporta timeOffset pero podemos seek después)
+        const htmlStreamUrl = cachedBlobUrl || navidromeApi.getStreamUrl(song.id, song.path, htmlTimeOffset > 0 ? htmlTimeOffset : undefined)
         const audio = audioRef.current
         if (!audio) return
 
@@ -924,9 +939,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           album: song.album,
           path: song.path,
           duration: song.duration,
-          streamUrl: streamUrl,
-          urlLength: streamUrl.length,
+          streamUrl: htmlStreamUrl,
+          urlLength: htmlStreamUrl.length,
           hasConfig: !!navidromeApi.getConfig(),
+          fromCache: !!cachedBlobUrl,
         })
 
         // Resetear el audio completamente antes de cargar nueva canción
@@ -948,16 +964,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         // Verificar que la URL no esté vacía
-        if (!streamUrl || streamUrl.trim() === '') {
+        if (!htmlStreamUrl || htmlStreamUrl.trim() === '') {
           throw new Error('URL de stream vacía o inválida')
         }
 
         // Ahora cargar la nueva canción
-        audio.src = streamUrl
-        
+        audio.src = htmlStreamUrl
+
         // Aplicaremos currenTime después de cargar metadatos
 
-        console.log('[Player] Cargando audio con URL:', streamUrl.substring(0, 100) + '...')
+        console.log('[Player] Cargando audio con URL:', htmlStreamUrl.substring(0, 100) + '...')
         audio.load()
 
         // Esperar a que se carguen los metadatos antes de reproducir
@@ -1551,6 +1567,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (currentSong && currentSongRef.current) {
       const songRef = currentSongRef.current
       prepareNextSong(songRef)
+
+      // Pre-cachear las próximas canciones de la cola para resiliencia de red
+      queuePrefetcher.prefetchQueue(queueRef.current, songRef.id).catch(() => {})
       
       const cacheId = generateStableCacheId(songRef)
       
@@ -1584,9 +1603,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (loadedMetadataHandlerRef.current) {
         audio.removeEventListener('loadedmetadata', loadedMetadataHandlerRef.current)
       }
-      // Remover listener de error si existe
+      // Remover listener de error y stalled si existen
       if (errorHandlerRef.current) {
         audio.removeEventListener('error', errorHandlerRef.current)
+      }
+      if (stalledHandlerRef.current) {
+        audio.removeEventListener('stalled', stalledHandlerRef.current)
       }
 
       // Crear nuevos handlers
@@ -1805,7 +1827,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (audioRef.current) setDuration(audioRef.current.duration)
       }
 
-      const onError = (event: Event) => {
+      const onError = (_event: Event) => {
         // Ignorar errores si estamos reseteando el audio intencionalmente
         if (isResettingAudioRef.current) {
           return
@@ -1822,53 +1844,110 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // Verificar el código de error del elemento de audio
         const error = audio.error
         if (error) {
-          // Log detallado del error
-          const errorInfo = {
+          // Código 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) puede ocurrir durante reseteos normales
+          if (error.code === 4) return
+
+          const songId = currentSongRef.current?.id
+          const song = currentSongRef.current
+
+          // === STREAM RETRY: reintentar en errores de red en vez de resetear ===
+          if (songId && song && error.code === 2 /* MEDIA_ERR_NETWORK */ && streamRetryManager.shouldRetry(songId, error.code)) {
+            console.warn(`[Player] Error de red en stream, programando retry...`)
+            const currentPosition = progressRef.current
+
+            streamRetryManager.scheduleRetry(async () => {
+              const retryOffset = currentPosition > 2 ? Math.floor(currentPosition) : 0
+              const retryUrl = navidromeApi.getStreamUrl(song.id, song.path, retryOffset > 0 ? retryOffset : undefined)
+              if (!audioRef.current) throw new Error('No audio element')
+
+              streamOffsetRef.current = retryOffset
+              audioRef.current.src = retryUrl
+              audioRef.current.load()
+
+              await new Promise<void>((resolve, reject) => {
+                const a = audioRef.current!
+                const onOk = () => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); resolve() }
+                const onFail = () => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); reject(new Error('Retry load failed')) }
+                a.addEventListener('canplay', onOk, { once: true })
+                a.addEventListener('error', onFail, { once: true })
+                setTimeout(() => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); reject(new Error('Retry timeout')) }, 15000)
+              })
+
+              await audioRef.current.play()
+              setIsPlaying(true)
+            })
+            return // No resetear — el retry se encarga
+          }
+
+          // Log detallado del error (solo para errores no recuperables)
+          console.error('[Player] Error en elemento de audio:', {
             code: error.code,
             message: error.message || 'Error desconocido',
             networkState: audio.networkState,
             readyState: audio.readyState,
-            src: audio.src,
             currentSong: currentSongRef.current
-              ? {
-                  id: currentSongRef.current.id,
-                  title: currentSongRef.current.title,
-                  artist: currentSongRef.current.artist,
-                  path: currentSongRef.current.path,
-                }
+              ? { id: currentSongRef.current.id, title: currentSongRef.current.title }
               : null,
-            event,
+          })
+
+          // Marcar que estamos reseteando para evitar bucles infinitos
+          isResettingAudioRef.current = true
+
+          // Resetear el audio cuando hay un error no recuperable
+          try {
+            audio.pause()
+            audio.src = ''
+            audio.load()
+            setIsPlaying(false)
+            setCurrentSong(null)
+            currentSongRef.current = null
+          } catch (resetError) {
+            console.error('[Player] Error al resetear audio después de error:', resetError)
+          } finally {
+            setTimeout(() => {
+              isResettingAudioRef.current = false
+            }, 200)
           }
-
-          // Código 4 (MEDIA_ERR_SRC_NOT_SUPPORTED) puede ocurrir durante reseteos normales
-          // Solo procesar errores reales
-          if (error.code !== 4) {
-            console.error('[Player] Error en elemento de audio:', errorInfo)
-
-            // Marcar que estamos reseteando para evitar bucles infinitos
-            isResettingAudioRef.current = true
-
-            // Resetear el audio cuando hay un error
-            try {
-              audio.pause()
-              audio.src = ''
-              audio.load()
-              setIsPlaying(false)
-              // Limpiar la canción actual para permitir reintento
-              setCurrentSong(null)
-              currentSongRef.current = null
-            } catch (resetError) {
-              console.error('[Player] Error al resetear audio después de error:', resetError)
-            } finally {
-              // Resetear la bandera después de un breve delay
-              setTimeout(() => {
-                isResettingAudioRef.current = false
-              }, 200)
-            }
-          }
-          // Si es código 4, simplemente ignorarlo sin log (es normal durante reseteos)
         }
-        // Si no hay código de error específico y el src está vacío, ignorar silenciosamente
+      }
+
+      // Handler de stall: cuando el stream se congela por red
+      const onStalled = () => {
+        if (isResettingAudioRef.current) return
+        const songId = currentSongRef.current?.id
+        const song = currentSongRef.current
+        if (!songId || !song || !audioRef.current) return
+
+        // Solo actuar si llevamos un rato sin datos (evitar falsos positivos)
+        const audio = audioRef.current
+        if (audio.networkState !== 2 /* NETWORK_LOADING */) return
+
+        console.warn(`[Player] Stream stalled para "${song.title}" en ${progressRef.current.toFixed(1)}s`)
+
+        if (streamRetryManager.shouldRetry(songId)) {
+          const currentPosition = progressRef.current
+          streamRetryManager.scheduleRetry(async () => {
+            const retryOffset = currentPosition > 2 ? Math.floor(currentPosition) : 0
+            const retryUrl = navidromeApi.getStreamUrl(song.id, song.path, retryOffset > 0 ? retryOffset : undefined)
+            if (!audioRef.current) throw new Error('No audio element')
+
+            streamOffsetRef.current = retryOffset
+            audioRef.current.src = retryUrl
+            audioRef.current.load()
+
+            await new Promise<void>((resolve, reject) => {
+              const a = audioRef.current!
+              const onOk = () => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); resolve() }
+              const onFail = () => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); reject(new Error('Retry load failed')) }
+              a.addEventListener('canplay', onOk, { once: true })
+              a.addEventListener('error', onFail, { once: true })
+              setTimeout(() => { a.removeEventListener('canplay', onOk); a.removeEventListener('error', onFail); reject(new Error('Retry timeout')) }, 15000)
+            })
+
+            await audioRef.current.play()
+            setIsPlaying(true)
+          })
+        }
       }
 
       // Guardar referencias para poder removerlos después
@@ -1876,12 +1955,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       endedHandlerRef.current = onEnded
       loadedMetadataHandlerRef.current = onLoadedMetadata
       errorHandlerRef.current = onError
+      stalledHandlerRef.current = onStalled
 
       // Aplicar listeners
       audio.addEventListener('timeupdate', onTimeUpdate)
       audio.addEventListener('ended', onEnded)
       audio.addEventListener('loadedmetadata', onLoadedMetadata)
       audio.addEventListener('error', onError)
+      audio.addEventListener('stalled', onStalled)
     },
     [settings.isDjMode]
   )
@@ -2650,6 +2731,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       onError: (error) => {
         console.error('[WebAudioPlayer] Error:', error)
+        // Intentar retry si es un error de red
+        const songId = currentSongRef.current?.id
+        const song = currentSongRef.current
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        const isNetworkError = errorMsg.includes('fetch') || errorMsg.includes('network') || errorMsg.includes('Failed') || errorMsg.includes('abort')
+
+        if (songId && song && isNetworkError && streamRetryManager.shouldRetry(songId)) {
+          const currentPosition = progressRef.current
+          streamRetryManager.scheduleRetry(async () => {
+            if (!webAudioPlayerRef.current || !currentSongRef.current) throw new Error('No player')
+            const retryUrl = navidromeApi.getStreamUrl(song.id, song.path)
+            await webAudioPlayerRef.current.play(song, retryUrl, false)
+            if (currentPosition > 0) {
+              webAudioPlayerRef.current.seek(currentPosition)
+            }
+            setIsPlaying(true)
+          })
+          return
+        }
         setIsPlaying(false)
       },
       onCrossfadeStart: () => {
@@ -2748,6 +2848,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       nextAudioRef.current = new Audio()
     }
 
+    // Configurar callbacks de reconexión de stream
+    streamRetryManager.setCallbacks({
+      onRetrying: (attempt, max) => {
+        console.log(`[StreamRetry] Reconectando... (${attempt}/${max})`)
+        setIsReconnecting(true)
+      },
+      onRecovered: () => {
+        setIsReconnecting(false)
+      },
+      onGaveUp: () => {
+        console.warn('[StreamRetry] Se agotaron los reintentos')
+        setIsReconnecting(false)
+      },
+    })
+
     // Inicializar cola de análisis con la función analyze
     analysisQueue.setAnalyzeFunction(async (streamUrl, songId, isProactive) => {
       const result = await analyze(streamUrl, songId, isProactive)
@@ -2812,8 +2927,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (webAudioPlayerRef.current) {
         webAudioPlayerRef.current.dispose()
       }
-      // Limpiar cola de análisis
+      // Limpiar cola de análisis y servicios de resiliencia
       analysisQueue.clear()
+      queuePrefetcher.cancelAll()
+      streamRetryManager.dispose()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyze]) // Incluir analyze como dependencia
@@ -3284,6 +3401,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                  // Sincronizar savedAt local
                  if (state.savedAt) localStorage.setItem('playerSavedAt', state.savedAt)
 
+                 // Actualizar MediaSession para que el mini-player / Lock Screen reflejen la canción restaurada
+                 updateMediaSession(restoredSong, false)
+
                  // Restaurar audio source
                  const streamUrl = navidromeApi.getStreamUrl(restoredSong.id, restoredSong.path)
                  if (audioRef.current && (!audioRef.current.src || audioRef.current.src === window.location.href)) {
@@ -3339,6 +3459,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       smartMixStatus,
       smartMixPlaylistId,
       generatedSmartMix,
+      isReconnecting,
     }),
     [
       currentSong,
@@ -3353,6 +3474,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       smartMixStatus,
       smartMixPlaylistId,
       generatedSmartMix,
+      isReconnecting,
     ]
   )
 

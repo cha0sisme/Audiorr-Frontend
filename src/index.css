@@ -484,3 +484,42 @@
   50% { background-position: 100% 50%; }
   100% { background-position: 0% 50%; }
 }
+
+/* ── Context menu bottom sheet (mobile) ──────────────────────────────────── */
+/* GPU-composited animations — no JS per-frame cost on 120 Hz displays      */
+
+@keyframes ctx-backdrop-in {
+  from { opacity: 0 }
+  to   { opacity: 1 }
+}
+@keyframes ctx-backdrop-out {
+  from { opacity: 1 }
+  to   { opacity: 0 }
+}
+
+@keyframes ctx-sheet-in {
+  from { transform: translate3d(0, 100%, 0) }
+  to   { transform: translate3d(0, 0, 0) }
+}
+@keyframes ctx-sheet-out {
+  from { transform: translate3d(0, 0, 0) }
+  to   { transform: translate3d(0, 100%, 0) }
+}
+
+.ctx-backdrop {
+  will-change: opacity;
+  animation: ctx-backdrop-in 0.25s ease-out both;
+}
+.ctx-backdrop.closing {
+  animation: ctx-backdrop-out 0.2s ease-in both;
+}
+
+.ctx-sheet {
+  will-change: transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  animation: ctx-sheet-in 0.35s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.ctx-sheet.closing {
+  animation: ctx-sheet-out 0.25s cubic-bezier(0.32, 0.72, 0, 1) both;
+}

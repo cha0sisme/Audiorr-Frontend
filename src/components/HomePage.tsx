@@ -175,50 +175,48 @@ export default function HomePage() {
         </motion.section>
       )}
 
-      {/* 1. Lo más escuchado — horizontal scroll, 2 filas */}
+      {/* 1. Lo más escuchado — 2 columnas, 5 canciones cada una */}
       {topWeekly.length > 0 && (
         <section>
           <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-3 px-1">Lo más escuchado</h2>
-          <div className="overflow-x-auto -mx-4 px-4 scrollbar-none">
-            <div
-              className="grid grid-rows-2 grid-flow-col gap-x-2 gap-y-0 w-max pb-1"
-              style={{ gridAutoColumns: 'min(calc(45vw - 1rem), 240px)' }}
-            >
-              {topWeekly.slice(0, 10).map(entry => (
-                <div
-                  key={entry.song_id}
-                  className="flex items-center gap-2.5 py-2 px-2 rounded-xl cursor-pointer select-none active:bg-black/5 dark:active:bg-white/5 transition-colors"
-                  onClick={() => playerActions.playSong(toSong(entry))}
-                >
-                  <span className="w-5 text-center font-bold tabular-nums text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">
-                    {entry.rank}
-                  </span>
-                  <div className="w-10 h-10 flex-shrink-0 rounded-md overflow-hidden shadow">
-                    <AlbumCover coverArtId={entry.cover_art} size={80} className="w-full h-full" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-semibold leading-tight truncate text-gray-900 dark:text-white">
-                      {entry.title}
-                    </p>
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">{entry.artist}</p>
-                  </div>
-                  <div className="flex items-center gap-0.5 flex-shrink-0">
-                    <TrendIndicator trend={entry.trend} change={entry.change} />
-                    <button
-                      className="flex items-center justify-center w-7 h-7 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 transition-colors"
-                      aria-label="Más opciones"
-                      onClick={e => { e.stopPropagation(); handleContextMenu(e, toSong(entry)) }}
-                    >
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                        <circle cx="5" cy="12" r="1.75" />
-                        <circle cx="12" cy="12" r="1.75" />
-                        <circle cx="19" cy="12" r="1.75" />
-                      </svg>
-                    </button>
-                  </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+            {topWeekly.slice(0, 10).map((entry, idx) => (
+              <div
+                key={entry.song_id}
+                className="flex items-center gap-2.5 py-2 px-2 rounded-xl cursor-pointer select-none active:bg-black/5 dark:active:bg-white/5 transition-colors"
+                onClick={() => {
+                  const allSongs = topWeekly.slice(0, 10).map(toSong)
+                  playerActions.playPlaylistFromSong(allSongs, allSongs[idx])
+                }}
+              >
+                <span className="w-5 text-center font-bold tabular-nums text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">
+                  {entry.rank}
+                </span>
+                <div className="w-10 h-10 flex-shrink-0 rounded-md overflow-hidden shadow">
+                  <AlbumCover coverArtId={entry.cover_art} size={80} className="w-full h-full" />
                 </div>
-              ))}
-            </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-semibold leading-tight truncate text-gray-900 dark:text-white">
+                    {entry.title}
+                  </p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">{entry.artist}</p>
+                </div>
+                <div className="flex items-center gap-0.5 flex-shrink-0">
+                  <TrendIndicator trend={entry.trend} change={entry.change} />
+                  <button
+                    className="flex items-center justify-center w-7 h-7 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 transition-colors"
+                    aria-label="Más opciones"
+                    onClick={e => { e.stopPropagation(); handleContextMenu(e, toSong(entry)) }}
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <circle cx="5" cy="12" r="1.75" />
+                      <circle cx="12" cy="12" r="1.75" />
+                      <circle cx="19" cy="12" r="1.75" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       )}

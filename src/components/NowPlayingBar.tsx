@@ -468,7 +468,7 @@ export default function NowPlayingBar({
 
         {/* AutoMix / Remote indicator */}
         <AnimatePresence mode="wait">
-          {(playerState.isCrossfading || (isRemote && activeDevice)) && (
+          {(playerState.isCrossfading || playerState.isReconnecting || (isRemote && activeDevice)) && (
             <motion.div
               key="bottom-indicator-mobile"
               initial={{ opacity: 0, scaleY: 0, transformOrigin: 'top' }}
@@ -477,7 +477,14 @@ export default function NowPlayingBar({
               transition={{ duration: 0.2, ease: 'easeOut' }}
               className="flex items-center justify-center pb-2.5 relative z-10"
             >
-              {playerState.isCrossfading ? (
+              {playerState.isReconnecting ? (
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse" />
+                  <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                    Reconectando...
+                  </span>
+                </div>
+              ) : playerState.isCrossfading ? (
                 <div className="flex items-center gap-1.5 text-[10px] font-bold wave-text bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-blue-400 to-blue-700 dark:text-transparent dark:from-sky-400 dark:via-sky-300 dark:to-cyan-400 bg-[length:200%_100%]">
                   <span>AutoMix</span>
                 </div>
@@ -565,7 +572,22 @@ export default function NowPlayingBar({
           </div>
           <div className="h-5 flex items-center justify-center">
             <AnimatePresence mode="wait">
-              {playerState.isCrossfading ? (
+              {playerState.isReconnecting ? (
+                <motion.div
+                  key="reconnecting-indicator-desktop"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.3, ease: 'easeOut' }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-pulse flex-shrink-0" />
+                    <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400 leading-none">
+                      Reconectando...
+                    </span>
+                  </div>
+                </motion.div>
+              ) : playerState.isCrossfading ? (
                 <motion.div
                   key="crossfade-indicator-desktop"
                   initial={{ opacity: 0, scale: 0.9 }}

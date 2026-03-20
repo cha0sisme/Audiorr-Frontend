@@ -163,6 +163,9 @@ function App() {
   )
 }
 
+// Cache de posiciones de scroll por ruta — persiste entre navegaciones
+const scrollPositions = new Map<string, number>()
+
 function MainApp() {
   const [showQueue, setShowQueue] = useState(false)
   const [showLyrics, setShowLyrics] = useState(false)
@@ -172,11 +175,36 @@ function MainApp() {
   const location = useLocation()
   const navigationType = useNavigationType()
   const mainContentRef = useRef<HTMLDivElement>(null)
+  const previousPathnameRef = useRef(location.pathname)
 
-  // Solo reset scroll al navegar hacia adelante (PUSH/REPLACE), no al ir atrás (POP)
+  // Guardar scroll de la página anterior y restaurar/resetear en la nueva
   useEffect(() => {
-    if (navigationType !== 'POP' && mainContentRef.current) {
-      mainContentRef.current.scrollTo(0, 0)
+    const el = mainContentRef.current
+    if (!el) return
+
+    // Guardar la posición de scroll de la ruta que dejamos
+    const prevPath = previousPathnameRef.current
+    if (prevPath !== location.pathname) {
+      scrollPositions.set(prevPath, el.scrollTop)
+    }
+    previousPathnameRef.current = location.pathname
+
+    if (navigationType === 'POP') {
+      // Volver atrás: restaurar posición guardada
+      const saved = scrollPositions.get(location.pathname)
+      if (saved != null) {
+        // Intentar restaurar varias veces para manejar contenido lazy-loaded
+        const restore = () => el.scrollTo({ top: saved, behavior: 'instant' })
+        // Primer intento inmediato tras el paint
+        requestAnimationFrame(() => {
+          restore()
+          // Segundo intento tras el siguiente frame (contenido lazy puede necesitarlo)
+          requestAnimationFrame(restore)
+        })
+      }
+    } else {
+      // Navegar hacia adelante: scroll al top
+      el.scrollTo(0, 0)
     }
   }, [location.pathname, navigationType])
 
