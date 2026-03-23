@@ -106,7 +106,7 @@ export function AboutModal({ isOpen, onClose }: AboutModalProps) {
 
               {/* Footer */}
               <p className="text-xs text-white/30">
-                Made with ❤️ by Leandro PB
+                Made with <span className="text-red-500">&hearts;</span> by Leandro PB
               </p>
             </div>
           </motion.div>

@@ -435,6 +435,10 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setLastError(error.message);
         if (error.message.toLowerCase().includes('auth') || error.message.toLowerCase().includes('token')) {
           localStorage.removeItem(connectUserKey('audiorr_session_token'));
+          // Force full reconnect with fresh token — socket.io keeps retrying
+          // with the stale auth option, so we must tear down and recreate.
+          newSocket.disconnect();
+          setTimeout(() => setReconnectKey(k => k + 1), 2000);
         }
       });
 
@@ -647,6 +651,18 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setIsConnected(false);
     setReconnectKey(k => k + 1);
   }, []);
+
+  // Auto-reconnect when app returns to foreground (iOS suspend kills the socket silently)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !isConnected && !isConnecting) {
+        console.log('[Connect] App returned to foreground — triggering reconnect');
+        reconnect();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isConnected, isConnecting, reconnect]);
 
   const subscribeToEvent = useCallback((event: string, handler: (data: unknown) => void) => {
     if (!socket) return () => {};

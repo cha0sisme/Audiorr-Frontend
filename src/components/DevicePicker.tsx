@@ -27,7 +27,7 @@ const GoogleHubIcon = ({ className }: { className?: string }) => (
 
 export const DevicePicker: React.FC<{ align?: 'up' | 'down', buttonClassName?: string, iconClassName?: string, theme?: 'default' | 'player' }> = ({ align = 'down', buttonClassName, iconClassName, theme = 'default' }) => {
   const isPlayer = theme === 'player';
-  const { devices, lanDevices, isConnected, isConnecting, currentDeviceId, transferPlayback, castToLanDevice, activeDeviceId, castSession, stopCast } = useConnect();
+  const { devices, lanDevices, isConnected, isConnecting, currentDeviceId, transferPlayback, castToLanDevice, activeDeviceId, castSession, stopCast, reconnect } = useConnect();
   const [showPicker, setShowPicker] = useState(false);
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
   const isNativeIOS = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
@@ -144,6 +144,18 @@ export const DevicePicker: React.FC<{ align?: 'up' | 'down', buttonClassName?: s
                           : 'Asegúrate de que el backend está ejecutándose en tu red local.'}
                       </p>
                     </div>
+                    {!isConnecting && (
+                      <button
+                        onClick={() => reconnect()}
+                        className={`mt-2 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          isPlayer
+                            ? 'bg-white/10 hover:bg-white/20 text-white/70'
+                            : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'
+                        }`}
+                      >
+                        Reintentar
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <>

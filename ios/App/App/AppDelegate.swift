@@ -90,6 +90,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             object: nil
         )
 
+        // Manejar interrupciones de la sesión de audio (llamadas, Siri, otra app).
+        // Sin esto, la sesión puede quedar en un estado inválido y el widget de
+        // Now Playing no se recupera hasta reiniciar la app.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: nil
+        )
+
         // Reemplazar UIWindow con NativeAwareWindow para que UITabBar y el mini-player
         // reciban los toques antes que WKWebView (fix: "solo funciona tras hacer scroll")
         if let existing = window {
@@ -184,10 +194,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             DispatchQueue.main.async {
                 self.viewerIsOpen = true
                 let tabBarH = self.tabBar?.frame.height ?? 80
-                // Desactivar interacción del shadow INMEDIATAMENTE para que
-                // NativeAwareWindow.hitTest lo omita y los toques lleguen al WKWebView.
-                // (El shadow wrapper nunca se ocultaba — solo el container interior —
-                // lo que hacía que interceptara los toques en la zona de los controles.)
                 self.miniPlayerShadow?.isUserInteractionEnabled = false
                 UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseIn) {
                     self.nowPlayingContainer?.alpha     = 0
@@ -197,7 +203,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                     self.nowPlayingContainer?.isHidden = true
                     self.miniPlayerShadow?.isHidden    = true
                     self.tabBar?.isHidden              = true
-                    // Preparar para la entrada posterior
                     self.nowPlayingContainer?.transform = CGAffineTransform(translationX: 0, y: 16)
                 }
             }
@@ -206,10 +211,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             DispatchQueue.main.async {
                 self.viewerIsOpen = false
                 let tabBarH = self.tabBar?.frame.height ?? 80
-                // Restaurar shadow antes de la animación de reaparición
-                self.miniPlayerShadow?.isHidden              = false
+                self.miniPlayerShadow?.isHidden                = false
                 self.miniPlayerShadow?.isUserInteractionEnabled = true
-                // Preparar posiciones de entrada (fuera de pantalla / invisible)
                 self.tabBar?.transform = CGAffineTransform(translationX: 0, y: tabBarH)
                 self.tabBar?.isHidden  = false
                 if self.miniPlayerShouldShow {
@@ -244,6 +247,38 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         }
     }
 
+    // ── Audio session interruption (llamada, Siri, otra app) ────────────────
+
+    @objc private func handleAudioInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+        else { return }
+
+        switch type {
+        case .began:
+            print("[Audiorr] Audio session interrupted")
+            evalJS("window.dispatchEvent(new CustomEvent('_audioSessionInterrupted'))")
+
+        case .ended:
+            print("[Audiorr] Audio session interruption ended — reactivating")
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("[Audiorr] Failed to reactivate audio session after interruption: \(error)")
+            }
+
+            let options = AVAudioSession.InterruptionOptions(
+                rawValue: (userInfo[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+            )
+            let shouldResume = options.contains(.shouldResume)
+            evalJS("window.dispatchEvent(new CustomEvent('_audioSessionResumed', { detail: { shouldResume: \(shouldResume) } }))")
+
+        @unknown default:
+            break
+        }
+    }
+
     // ── Native → JS ──────────────────────────────────────────────────────────
 
     private func evalJS(_ script: String) {
@@ -258,12 +293,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         guard let win   = window,
               let rootVC = win.rootViewController else { return }
 
+        let audioIcon = UIImage(named: "AudiorrTabIcon")?.withRenderingMode(.alwaysTemplate)
         let tabs = [
             UITabBarItem(title: "Inicio",    image: UIImage(systemName: "house.fill"),           tag: 0),
             UITabBarItem(title: "Artistas",  image: UIImage(systemName: "person.2.fill"),        tag: 1),
             UITabBarItem(title: "Playlists", image: UIImage(systemName: "music.note.list"),      tag: 2),
-            UITabBarItem(title: "Buscar",    image: UIImage(systemName: "magnifyingglass"),      tag: 3),
-            UITabBarItem(title: "Audiorr",   image: UIImage(systemName: "square.grid.2x2.fill"), tag: 4),
+            UITabBarItem(title: "Audiorr",   image: audioIcon,                                    tag: 3),
+            UITabBarItem(title: "Buscar",    image: UIImage(systemName: "magnifyingglass"),      tag: 4),
         ]
 
         let bar = UITabBar()
@@ -277,7 +313,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         bar.standardAppearance = appearance
         if #available(iOS 15.0, *) { bar.scrollEdgeAppearance = appearance }
 
-        // Añadir a la UIWindow directamente — coordenadas siempre exactas al screen
+        // Añadir a la UIWindow directamente
         let safeBottom = win.safeAreaInsets.bottom
         let barHeight  = CGFloat(49) + safeBottom
         bar.frame = CGRect(x: 0,
@@ -288,11 +324,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
         win.addSubview(bar)
         win.bringSubviewToFront(bar)
-
-        // Registrar en NativeAwareWindow para hit-test prioritario
         (win as? NativeAwareWindow)?.priorityViews.append(bar)
 
-        // Ampliar safe area del WebView para que el contenido CSS se ajuste
         rootVC.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 49, right: 0)
 
         self.tabBar = bar
@@ -300,12 +333,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
     // UITabBarDelegate
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-        let routes = ["/", "/artists", "/playlists", "/search", "/audiorr"]
+        let routes = ["/", "/artists", "/playlists", "/audiorr", "/search"]
         guard item.tag < routes.count else { return }
         UISelectionFeedbackGenerator().selectionChanged()
-        let route = routes[item.tag]
-        // HashRouter escucha cambios en window.location.hash directamente — siempre funciona
-        evalJS("window.location.hash = '#\(route)'")
+        evalJS("window.location.hash = '#\(routes[item.tag])'")
     }
 
     // ── Mini-player nativo ───────────────────────────────────────────────────
@@ -634,7 +665,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
     func applicationWillResignActive(_ application: UIApplication) {}
     func applicationDidEnterBackground(_ application: UIApplication) {}
-    func applicationWillEnterForeground(_ application: UIApplication) {}
+
+    func applicationWillEnterForeground(_ application: UIApplication) {
+        // Re-activar la sesión de audio al volver del background.
+        // iOS puede desactivar la sesión si otra app tomó la prioridad de audio.
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[Audiorr] Failed to reactivate AVAudioSession on foreground: \(error)")
+        }
+    }
+
     func applicationWillTerminate(_ application: UIApplication) {}
 
     func application(_ app: UIApplication, open url: URL,

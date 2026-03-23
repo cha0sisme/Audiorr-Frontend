@@ -9,6 +9,7 @@ export interface NowPlayingInfo {
   album: string
   duration: number
   elapsedTime: number
+  isPlaying?: boolean
   artworkUrl?: string
 }
 

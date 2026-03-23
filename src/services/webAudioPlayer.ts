@@ -416,7 +416,12 @@ export class WebAudioPlayer {
     })
   }
 
-  private _pauseKeepAlive(): void {
+  /**
+   * Detiene el keepalive. Solo llamar al destruir el player o limpiar la cola,
+   * NUNCA al pausar — si se para el WAV silencioso, iOS suspende el WKWebView
+   * y los remote commands del lock screen dejan de llegar a JavaScript.
+   */
+  private _stopKeepAlive(): void {
     if (this.iosKeepAlive && !this.iosKeepAlive.paused) {
       this.iosKeepAlive.pause()
     }
@@ -1133,7 +1138,8 @@ export class WebAudioPlayer {
       this.pauseTime = this.mediaElement.currentTime
       this.mediaElement.pause()
       this.isPlaying = false
-      this._pauseKeepAlive()
+      // NO pausar keepalive aquí — debe seguir activo para que iOS mantenga
+      // el WKWebView vivo y los remote commands del lock screen funcionen.
       this.stopMediaElementTimeUpdates()
       console.log('[WebAudioPlayer] Pausa completada - tiempo guardado:', this.pauseTime)
       return
@@ -1149,7 +1155,8 @@ export class WebAudioPlayer {
     this.currentSource.stop()
     this.currentSource = null
     this.isPlaying = false
-    this._pauseKeepAlive()
+    // NO pausar keepalive aquí — debe seguir activo para que iOS mantenga
+    // el WKWebView vivo y los remote commands del lock screen funcionen.
 
     console.log('[WebAudioPlayer] Pausa completada - tiempo guardado:', this.pauseTime)
     this.stopTimeUpdates()
@@ -1159,6 +1166,7 @@ export class WebAudioPlayer {
     // HTML fallback mode
     if (this.isHtmlFallbackActive && this.htmlFallback) {
       if (this.isPlaying) return
+      this._startKeepAlive() // Asegurar keepalive activo al reanudar
       await this.ensureAudioContextReady()
       await this.htmlFallback.play()
       this.isPlaying = true
@@ -1170,6 +1178,7 @@ export class WebAudioPlayer {
     if (this.useMediaElementMode && this.mediaElement) {
       if (this.isPlaying) return
       console.log('[WebAudioPlayer] Reanudando reproducción (MediaElement) desde tiempo:', this.pauseTime)
+      this._startKeepAlive() // Asegurar keepalive activo al reanudar
       await this.ensureAudioContextReady()
       try {
         await this.mediaElement.play()
@@ -2172,8 +2181,8 @@ export class WebAudioPlayer {
     console.log('[WebAudioPlayer] Liberando recursos')
 
     // Limpiar iOS keepalive
+    this._stopKeepAlive()
     if (this.iosKeepAlive) {
-      this.iosKeepAlive.pause()
       this.iosKeepAlive.src = ''
       this.iosKeepAlive = null
     }

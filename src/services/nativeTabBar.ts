@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core'
 
 export const isNative = Capacitor.isNativePlatform()
 
-export const TAB_ROUTES = ['/', '/artists', '/playlists', '/search', '/audiorr']
+export const TAB_ROUTES = ['/', '/artists', '/playlists', '/audiorr', '/search']
 
 export function routeToTabIndex(pathname: string): number {
   if (pathname === '/') return 0

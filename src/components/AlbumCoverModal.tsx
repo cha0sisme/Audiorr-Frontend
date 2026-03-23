@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { XMarkIcon } from '@heroicons/react/24/outline'
 import { AnimatePresence, motion } from 'framer-motion'
 
 interface AlbumCoverModalProps {
@@ -47,17 +46,6 @@ export default function AlbumCoverModal({
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"
           onClick={onClose}
         >
-          <motion.button
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            transition={{ delay: 0.1, duration: 0.2 }}
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors z-10"
-            aria-label="Cerrar"
-          >
-            <XMarkIcon className="w-6 h-6" />
-          </motion.button>
           <motion.div
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}

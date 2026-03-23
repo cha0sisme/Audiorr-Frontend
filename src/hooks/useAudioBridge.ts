@@ -58,6 +58,7 @@ export function useAudioBridge() {
       album:      song.album   || '',
       duration:   song.duration ?? 0,
       elapsedTime: progressRef.current,
+      isPlaying:  playerState.isPlaying,
       artworkUrl,
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,21 +75,44 @@ export function useAudioBridge() {
   }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
 
   // ── 3. Sync periódico del tiempo (barra de progreso en pantalla de bloqueo) ─
+  // iOS auto-avanza la barra basándose en playbackRate, así que no necesitamos
+  // actualizar cada pocos segundos. Un sync cada 30s corrige posible drift
+  // sin causar saltos visibles en la UI del lock screen.
   useEffect(() => {
     if (!isNative || !playerState.isPlaying || !playerState.currentSong) return
 
     const timer = setInterval(() => {
-      // Calcular elapsedTime con reloj real para que funcione aunque iOS haya
-      // suspendido el AudioContext (y audioContext.currentTime esté congelado)
       const realElapsed = elapsedAtPlayStartRef.current +
         (Date.now() - playbackStartTimestampRef.current) / 1000
       audioBridge.updatePlaybackState({
         isPlaying:   true,
         elapsedTime: realElapsed,
       })
-    }, 5000)
+    }, 30000)
 
     return () => clearInterval(timer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
+
+  // ── 3b. Re-sync al volver al foreground ─────────────────────────────────────
+  // Cuando el usuario desbloquea la pantalla o vuelve a la app, corregir el
+  // elapsed time para que la barra de progreso del lock screen esté en sync.
+  useEffect(() => {
+    if (!isNative || !playerState.currentSong) return
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && playerState.isPlaying) {
+        const realElapsed = elapsedAtPlayStartRef.current +
+          (Date.now() - playbackStartTimestampRef.current) / 1000
+        audioBridge.updatePlaybackState({
+          isPlaying:   true,
+          elapsedTime: realElapsed,
+        })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
 
@@ -140,4 +164,36 @@ export function useAudioBridge() {
     return () => window.removeEventListener('_audioRouteLost', handleRouteLost)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, playerState.isPlaying])
+
+  // ── 6. Manejar interrupciones de sesión de audio (llamada, Siri, otra app) ─
+  // iOS interrumpe la sesión cuando otra app toma el audio. Sin manejar esto,
+  // la sesión queda en un estado inválido y el widget de Now Playing no se recupera.
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleInterrupted = () => {
+      console.log('[useAudioBridge] Audio session interrupted — pausing')
+      if (playerState.isPlaying) {
+        playerActions.togglePlayPause()
+      }
+    }
+
+    const handleResumed = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      console.log('[useAudioBridge] Audio session resumed, shouldResume:', detail?.shouldResume)
+      // Si iOS indica que debemos reanudar (ej: llamada corta terminó) y
+      // estábamos reproduciendo, reanudar automáticamente
+      if (detail?.shouldResume && !playerState.isPlaying && playerState.currentSong) {
+        playerActions.togglePlayPause()
+      }
+    }
+
+    window.addEventListener('_audioSessionInterrupted', handleInterrupted)
+    window.addEventListener('_audioSessionResumed', handleResumed)
+    return () => {
+      window.removeEventListener('_audioSessionInterrupted', handleInterrupted)
+      window.removeEventListener('_audioSessionResumed', handleResumed)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
 }
