@@ -9,7 +9,7 @@ import SongContextMenu from './SongContextMenu'
 import { useDominantColors } from '../hooks/useDominantColors'
 import AlbumCover from './AlbumCover'
 import Canvas from './Canvas'
-import { SpeakerWaveIcon, SpeakerXMarkIcon } from '@heroicons/react/24/solid'
+
 import { DevicePicker } from './DevicePicker'
 
 const QueueIcon = ({ className }: { className?: string }) => (
@@ -296,32 +296,6 @@ export default function NowPlayingViewer({
     setDragPct(null)
   }
 
-  // ── Volume drag ──────────────────────────────────────────────────────────────
-  const volumeBarRef = useRef<HTMLDivElement>(null)
-  const isDraggingVolumeRef = useRef(false)
-
-  const getVolumePctFromPointer = (clientX: number): number => {
-    const el = volumeBarRef.current
-    if (!el) return 0
-    const rect = el.getBoundingClientRect()
-    return Math.round(Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * 100)
-  }
-
-  const handleVolumePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId)
-    isDraggingVolumeRef.current = true
-    playerActions.setVolume(getVolumePctFromPointer(e.clientX))
-  }
-
-  const handleVolumePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingVolumeRef.current) return
-    playerActions.setVolume(getVolumePctFromPointer(e.clientX))
-  }
-
-  const handleVolumePointerUp = () => {
-    isDraggingVolumeRef.current = false
-  }
-
   // ── Derived ──────────────────────────────────────────────────────────────────
   // Progreso: usar estado remoto si controlamos otro dispositivo
   const effectiveProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
@@ -447,17 +421,17 @@ export default function NowPlayingViewer({
                 onPointerCancel={handleHandlePointerUp}
               >
                 {/* Handle pill */}
-                <div className="flex justify-center pt-3 pb-2 select-none">
+                <div className="flex justify-center pt-2 pb-1 select-none">
                   <div className="w-12 h-[5px] bg-white/30 rounded-full pointer-events-none" />
                 </div>
 
                 {/* Album art */}
                 {!hasCanvas && (
-                  <div className="flex-1 flex items-center justify-center px-8 py-2">
+                  <div className="flex-1 flex items-center justify-center px-5 py-1">
                     <motion.div
                       animate={{ scale: isPlaying ? 1 : 0.925 }}
                       transition={{ type: 'spring', stiffness: 260, damping: 26 }}
-                      className="w-full max-w-[340px] aspect-square rounded-[22px] overflow-hidden"
+                      className="w-full max-w-[420px] aspect-square rounded-[22px] overflow-hidden"
                       style={{
                         boxShadow: '0 36px 90px -8px rgba(0,0,0,0.72), 0 12px 32px -4px rgba(0,0,0,0.45)',
                       }}
@@ -482,7 +456,7 @@ export default function NowPlayingViewer({
             data-npv-controls
             className="relative flex-shrink-0 px-6"
             style={{
-              paddingBottom: 'calc(env(safe-area-inset-bottom) + 1.5rem)',
+              paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)',
               transform: 'translateZ(0)',
               WebkitTransform: 'translateZ(0)',
               touchAction: 'manipulation',
@@ -538,17 +512,22 @@ export default function NowPlayingViewer({
                   >
                     <div
                       className="absolute top-0 left-0 h-full rounded-full pointer-events-none"
-                      style={{ width: `${progressPct}%`, background: 'white' }}
+                      style={{
+                        width: `${progressPct}%`,
+                        background: 'white',
+                        transition: dragPct !== null ? 'none' : 'width 500ms linear',
+                      }}
                     />
                   </div>
                   {/* Thumb — se escala un poco al hacer drag para feedback visual */}
                   <div
-                    className="absolute top-1/2 -translate-y-1/2 rounded-full shadow-md pointer-events-none transition-transform duration-100"
+                    className="absolute top-1/2 -translate-y-1/2 rounded-full shadow-md pointer-events-none"
                     style={{
                       left: `calc(${progressPct}% - ${dragPct !== null ? 9 : 7}px)`,
                       width: dragPct !== null ? 18 : 14,
                       height: dragPct !== null ? 18 : 14,
                       background: 'white',
+                      transition: dragPct !== null ? 'width 100ms, height 100ms' : 'left 500ms linear, width 100ms, height 100ms',
                     }}
                   />
                 </div>
@@ -604,7 +583,7 @@ export default function NowPlayingViewer({
               </div>
 
               {/* Playback controls — Apple Music style */}
-              <div className="flex items-center justify-between mt-4 mb-6 px-2">
+              <div className="flex items-center justify-between mt-3 mb-4 px-2">
                 {/* Prev — transparent, large icon */}
                 <motion.button
                   whileTap={{ scale: 0.84 }}
@@ -665,30 +644,6 @@ export default function NowPlayingViewer({
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
                   </svg>
                 </motion.button>
-              </div>
-
-              {/* Volume slider — draggable */}
-              <div className="flex items-center gap-3 mb-5">
-                <SpeakerXMarkIcon className="w-[18px] h-[18px] text-white/40 flex-shrink-0" />
-                <div
-                  ref={volumeBarRef}
-                  className="flex-1 relative h-8 flex items-center cursor-pointer touch-none"
-                  onPointerDown={handleVolumePointerDown}
-                  onPointerMove={handleVolumePointerMove}
-                  onPointerUp={handleVolumePointerUp}
-                  onPointerCancel={handleVolumePointerUp}
-                >
-                  <div
-                    className="absolute inset-x-0 h-1 rounded-full"
-                    style={{ background: 'rgba(255,255,255,0.22)' }}
-                  >
-                    <div
-                      className="absolute top-0 left-0 h-full rounded-full pointer-events-none"
-                      style={{ width: `${playerState.volume}%`, background: 'rgba(255,255,255,0.7)' }}
-                    />
-                  </div>
-                </div>
-                <SpeakerWaveIcon className="w-[18px] h-[18px] text-white/40 flex-shrink-0" />
               </div>
 
               {/* Bottom actions row */}

@@ -324,16 +324,18 @@ export class WebAudioPlayer {
         this._initKeepAlive()
       }
 
-      // Si iOS suspende el contexto (ej. llamada entrante), intentar reanudar
+      // Si iOS suspende el contexto, solo reanudar si estamos reproduciendo activamente.
+      // NO reanudar ciegamente: si Bluetooth/CarPlay se desconectó, el evento _audioRouteLost
+      // pausará la reproducción y no queremos que el AudioContext la reanude por su cuenta.
       this.audioContext.onstatechange = () => {
-        if (this.audioContext?.state === 'suspended') {
+        if (this.audioContext?.state === 'suspended' && this.isPlaying) {
           this.audioContext.resume().catch(() => {})
         }
       }
 
-      // Reanudar AudioContext cuando la app vuelve al primer plano
+      // Reanudar AudioContext cuando la app vuelve al primer plano, solo si reproduciendo
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && this.audioContext?.state === 'suspended') {
+        if (!document.hidden && this.audioContext?.state === 'suspended' && this.isPlaying) {
           this.audioContext.resume().catch(() => {})
         }
       })

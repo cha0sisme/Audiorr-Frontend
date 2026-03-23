@@ -64,7 +64,8 @@ export default function ServerConnection({ onConnected }: Props) {
           // Intentar login en el backend de Audiorr para Connect
           try {
             const connectAuth = await backendApi.login(config)
-            localStorage.setItem('audiorr_session_token', connectAuth.token)
+            const tokenKey = config.username ? `audiorr_session_token_${config.username}` : 'audiorr_session_token'
+            localStorage.setItem(tokenKey, connectAuth.token)
             console.log('[ServerConnection] Audiorr Connect session established')
           } catch (connectErr) {
             console.warn('[ServerConnection] Connect login failed, sync disabled', connectErr)

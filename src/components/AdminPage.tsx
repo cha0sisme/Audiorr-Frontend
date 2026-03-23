@@ -468,7 +468,8 @@ function ConnectHubWidget() {
   }
 
   const handleForceRelogin = () => {
-    localStorage.removeItem('audiorr_session_token')
+    const username = navidromeApi.getConfig()?.username
+    localStorage.removeItem(username ? `audiorr_session_token_${username}` : 'audiorr_session_token')
     window.location.reload()
   }
 

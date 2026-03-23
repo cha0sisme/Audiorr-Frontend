@@ -9,8 +9,15 @@ import { ConnectContext } from './ConnectContextObject';
 
 // --- Utils ---
 
+/** Devuelve una clave de localStorage prefijada con el username para aislar estado entre usuarios */
+function connectUserKey(key: string): string {
+  const username = navidromeApi.getConfig()?.username;
+  return username ? `${key}_${username}` : key;
+}
+
 const generateDeviceId = () => {
-  const existingId = localStorage.getItem('audiorr_device_id');
+  const key = connectUserKey('audiorr_device_id');
+  const existingId = localStorage.getItem(key);
   if (existingId) return existingId;
 
   let newId;
@@ -25,7 +32,7 @@ const generateDeviceId = () => {
     });
   }
 
-  localStorage.setItem('audiorr_device_id', newId);
+  localStorage.setItem(key, newId);
   return newId;
 };
 
@@ -53,7 +60,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [remotePlaybackState, setRemotePlaybackState] = useState<PlaybackState | null>(null);
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>(null);
   const [castSession, setCastSession] = useState<CastSession>({ active: false });
-  const [isReceiverMode, setIsReceiverMode] = useState(() => localStorage.getItem('audiorr_receiver_mode') === 'true');
+  const [isReceiverMode, setIsReceiverMode] = useState(() => localStorage.getItem(connectUserKey('audiorr_receiver_mode')) === 'true');
   const [lastError, setLastError] = useState<string | null>(null);
   const [reconnectKey, setReconnectKey] = useState(0);
 
@@ -67,7 +74,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     catch { return Math.random().toString(36).slice(2); }
   }, []);
   const tabChannel = useMemo(() => {
-    try { return new BroadcastChannel('audiorr-tab-sync'); }
+    try { return new BroadcastChannel(connectUserKey('audiorr-tab-sync')); }
     catch { return null; }
   }, []);
 
@@ -358,7 +365,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     hasDoneInitialSyncRef.current = false;
 
     const setup = async () => {
-      let token = localStorage.getItem('audiorr_session_token');
+      let token = localStorage.getItem(connectUserKey('audiorr_session_token'));
 
       if (!token) {
         const rawNavConfig = localStorage.getItem('navidromeConfig');
@@ -368,7 +375,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const navConfig = JSON.parse(rawNavConfig);
           const auth = await backendApi.login(navConfig);
           token = auth.token;
-          localStorage.setItem('audiorr_session_token', auth.token);
+          localStorage.setItem(connectUserKey('audiorr_session_token'), auth.token);
         } catch (err) {
           if (!cancelled) {
             setIsConnecting(false);
@@ -427,7 +434,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setIsConnected(false);
         setLastError(error.message);
         if (error.message.toLowerCase().includes('auth') || error.message.toLowerCase().includes('token')) {
-          localStorage.removeItem('audiorr_session_token');
+          localStorage.removeItem(connectUserKey('audiorr_session_token'));
         }
       });
 
@@ -521,7 +528,7 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const setReceiverMode = (enabled: boolean) => {
     setIsReceiverMode(enabled);
-    localStorage.setItem('audiorr_receiver_mode', String(enabled));
+    localStorage.setItem(connectUserKey('audiorr_receiver_mode'), String(enabled));
     if (socket) {
       socket.emit('register_device', {
         id: currentDeviceId,

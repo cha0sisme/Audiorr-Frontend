@@ -77,6 +77,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             print("[Audiorr] AVAudioSession setup failed: \(error)")
         }
 
+        // Tell iOS this app is a media player. This enables the "tap album art to open app"
+        // behavior on the Dynamic Island and Lock Screen Now Playing widget.
+        UIApplication.shared.beginReceivingRemoteControlEvents()
+
+        // Detectar desconexión de Bluetooth / CarPlay / auriculares para pausar la reproducción,
+        // igual que hacen Spotify y Apple Music.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
+
         // Reemplazar UIWindow con NativeAwareWindow para que UITabBar y el mini-player
         // reciban los toques antes que WKWebView (fix: "solo funciona tras hacer scroll")
         if let existing = window {
@@ -111,6 +124,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                 self.setupMessageHandlers(webView: webView)
                 self.setupTabBar()
                 self.setupNowPlayingBar()
+                // Notificar al JS que los message handlers están listos.
+                // React probablemente ya envió nativeUpdateNowPlaying antes de
+                // que los handlers existieran (race condition) → JS re-envía el estado.
+                self.evalJS("window.dispatchEvent(new CustomEvent('_nativeReady'))")
             }
         }
     }
@@ -208,6 +225,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
         default:
             break
+        }
+    }
+
+    // ── Audio route change (Bluetooth / CarPlay desconectado) ──────────────
+
+    @objc private func handleRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+        else { return }
+
+        // oldDeviceUnavailable = el dispositivo de salida anterior se desconectó
+        // (ej: se quitan auriculares, se desconecta Bluetooth, se desconecta CarPlay)
+        if reason == .oldDeviceUnavailable {
+            print("[Audiorr] Audio route lost (Bluetooth/CarPlay/headphones disconnected) → pausing")
+            evalJS("window.dispatchEvent(new CustomEvent('_audioRouteLost'))")
         }
     }
 

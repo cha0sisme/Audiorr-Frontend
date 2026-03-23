@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Capacitor } from '@capacitor/core'
 import { Song, navidromeApi, Playlist, isSmartPlaylist, isEditorialPlaylist } from '../services/navidromeApi'
 import { usePlayerActions } from '../contexts/PlayerContext'
 import UpdatePlayCountModal from './UpdatePlayCountModal'
@@ -153,7 +154,14 @@ export default function SongContextMenu({
         <div
           ref={sheetRef}
           className={`fixed bottom-0 left-0 right-0 z-[9999] ctx-sheet${closing ? ' closing' : ''}`}
-          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          style={{
+            // On native iOS, the TabBar (~49px) and NowPlayingBar (~64px) are UIKit views
+            // rendered OUTSIDE the WebView — they overlay the bottom. Add extra padding
+            // so the cancel button is visible above them.
+            paddingBottom: Capacitor.isNativePlatform()
+              ? 'calc(env(safe-area-inset-bottom) + 130px)'
+              : 'env(safe-area-inset-bottom)',
+          }}
         >
           {/* Song info header */}
           <div className="mx-3 mb-2 bg-[#2c2c2e] rounded-2xl overflow-hidden">

@@ -130,6 +130,41 @@ export function useNativeNowPlaying() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, playerState.isCrossfading, activeDeviceId, isDark])
 
+  // Refs para acceder al estado actual desde el listener de _nativeReady
+  const playerStateRef = useRef(playerState)
+  useEffect(() => { playerStateRef.current = playerState }, [playerState])
+
+  const isDarkRef = useRef(isDark)
+  useEffect(() => { isDarkRef.current = isDark }, [isDark])
+
+  // Cuando el lado nativo termina de registrar los message handlers,
+  // re-enviamos el estado actual del player. Esto resuelve el race condition
+  // donde React envía nativeUpdateNowPlaying antes de que los handlers existan.
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleNativeReady = () => {
+      const song = playerStateRef.current.currentSong
+      if (!song) return
+      const { artworkUrl, artistText } = getSongUpdateFields(song)
+      nativeNowPlaying.update({
+        title:      song.title || '',
+        artist:     artistText,
+        artworkUrl,
+        isPlaying:  playerStateRef.current.isPlaying,
+        progress:   progressRef.current,
+        duration:   song.duration ?? 1,
+        isVisible:  true,
+        subtitle:   getSubtitle(),
+        isDark:     isDarkRef.current,
+      })
+    }
+
+    window.addEventListener('_nativeReady', handleNativeReady)
+    return () => window.removeEventListener('_nativeReady', handleNativeReady)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative])
+
   // Escuchar eventos del native mini-player
   useEffect(() => {
     if (!isNative) return

@@ -1,6 +1,5 @@
-import { useState, useEffect, lazy, Suspense, useMemo, useRef, memo } from 'react'
-import { HashRouter as Router, Routes, Route, Navigate, useLocation, useNavigationType } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
+import { useState, useEffect, lazy, Suspense, useMemo, useRef } from 'react'
+import { HashRouter as Router } from 'react-router-dom'
 
 import NowPlayingBar from './components/NowPlayingBar'
 import Sidebar from './components/Sidebar'
@@ -18,7 +17,7 @@ import { navidromeApi } from './services/navidromeApi'
 import { PinnedPlaylistsProvider } from './contexts/PinnedPlaylistsContext'
 import { ConnectProvider } from './contexts/ConnectContext'
 import Spinner from './components/Spinner'
-import PageTransition from './components/PageTransition'
+import NavigationStack from './components/NavigationStack'
 import { useMemoryCleanup } from './hooks/useMemoryCleanup'
 import { useAudioBridge } from './hooks/useAudioBridge'
 import { useNativeTabBar } from './hooks/useNativeTabBar'
@@ -27,113 +26,9 @@ import TabBar from './components/TabBar'
 import OfflineBanner from './components/OfflineBanner'
 import NativeBackButton from './components/NativeBackButton'
 
-const NATIVE_ROOT_TABS = new Set(['/', '/artists', '/playlists', '/search', '/audiorr'])
-const isNativePlatform = Capacitor.isNativePlatform()
-
-// Páginas de tabs raíz: carga eager para evitar flash de Suspense al cambiar de pestaña
-import HomePage from './components/HomePage'
-import ArtistsPage from './components/ArtistsPage'
-import PlaylistsPage from './components/PlaylistsPage'
-import SearchPage from './components/SearchPage'
-import AudiorrPage from './components/AudiorrPage'
-
-// Resto de páginas: lazy load (code splitting)
-const AlbumsPage = lazy(() => import('./components/AlbumsPage'))
-const AlbumDetail = lazy(() => import('./components/AlbumDetail'))
-const ArtistsDetail = lazy(() => import('./components/ArtistsDetail'))
-const PlaylistDetail = lazy(() => import('./components/PlaylistDetail'))
-const SettingsPage = lazy(() => import('./components/SettingsPage'))
-const UserProfile = lazy(() => import('./components/UserProfile'))
+// Overlay pages (not routed — toggled in MainApp)
 const LyricsPage = lazy(() => import('./components/LyricsPage'))
 const CanvasPage = lazy(() => import('./components/CanvasPage'))
-const SongDetail = lazy(() => import('./components/SongDetail'))
-const GenresPage = lazy(() => import('./components/GenresPage'))
-const GenreDetail = lazy(() => import('./components/GenreDetail'))
-const WrappedPage = lazy(() => import('./components/WrappedPage'))
-const AdminPage = lazy(() => import('./components/AdminPage'))
-const ReceiverPage = lazy(() => import('./components/ReceiverPage').then(m => ({ default: m.ReceiverPage })))
-
-// Componente para redirigir /profile al perfil del usuario actual
-function ProfileRedirect() {
-  const config = navidromeApi.getConfig()
-  if (!config?.username) {
-    return <Navigate to="/" replace />
-  }
-  return <Navigate to={`/user/${config.username}`} replace />
-}
-
-// Componente interno que usa useLocation (debe estar dentro del Router)
-function AnimatedRoutes() {
-  const location = useLocation()
-  const previousPathRef = useRef(location.pathname)
-  
-  // Limpieza de memoria al cambiar de página
-  useEffect(() => {
-    if (previousPathRef.current !== location.pathname) {
-      previousPathRef.current = location.pathname
-      
-      // Pequeño delay para que la transición termine antes de limpiar
-      const cleanupTimeout = setTimeout(() => {
-        // Limpiar imágenes que ya no están en el viewport
-        const images = document.querySelectorAll('img[loading="lazy"]')
-        images.forEach(img => {
-          const rect = img.getBoundingClientRect()
-          const isOffscreen = rect.bottom < -500 || rect.top > window.innerHeight + 500
-          if (isOffscreen && (img as HTMLImageElement).src) {
-            // Solo limpiar imágenes muy fuera de pantalla
-            const imgEl = img as HTMLImageElement
-            imgEl.loading = 'lazy'
-          }
-        })
-      }, 200)
-      
-      return () => clearTimeout(cleanupTimeout)
-    }
-  }, [location.pathname])
-  
-  return (
-    <AnimatePresence mode="popLayout" initial={false}>
-      <Routes location={location} key={location.pathname}>
-        <Route path="/" element={<PageTransition><HomePage /></PageTransition>} />
-        <Route path="/albums" element={<PageTransition><AlbumsPage /></PageTransition>} />
-        <Route path="/albums/:id" element={<PageTransition><AlbumDetail /></PageTransition>} />
-        <Route path="/artists" element={<PageTransition><ArtistsPage /></PageTransition>} />
-        <Route path="/artists/:name" element={<PageTransition><ArtistsDetail /></PageTransition>} />
-        <Route path="/playlists" element={<PageTransition><PlaylistsPage /></PageTransition>} />
-        <Route path="/playlists/:id" element={<PageTransition><PlaylistDetail /></PageTransition>} />
-        <Route path="/songs/:id" element={<PageTransition><SongDetail /></PageTransition>} />
-        <Route path="/settings" element={<PageTransition><SettingsPage /></PageTransition>} />
-        <Route path="/profile" element={<ProfileRedirect />} />
-        <Route path="/user/:username" element={<PageTransition><UserProfile /></PageTransition>} />
-        <Route path="/genres" element={<PageTransition><GenresPage /></PageTransition>} />
-        <Route path="/genre/:genreName" element={<PageTransition><GenreDetail /></PageTransition>} />
-        <Route path="/wrapped" element={<PageTransition><WrappedPage /></PageTransition>} />
-        <Route path="/admin" element={<PageTransition><AdminPage /></PageTransition>} />
-        <Route path="/admin/:tab" element={<PageTransition><AdminPage /></PageTransition>} />
-        <Route path="/search" element={<PageTransition><SearchPage /></PageTransition>} />
-        <Route path="/audiorr" element={<PageTransition><AudiorrPage /></PageTransition>} />
-        <Route path="/receiver" element={<ReceiverPage />} />
-      </Routes>
-    </AnimatePresence>
-  )
-}
-
-// Componente memoizado para las rutas - evita re-renders cuando cambia playerState
-const RoutesContainer = memo(function RoutesContainer() {
-  const location = useLocation()
-  const showNativeSpacer = isNativePlatform && !NATIVE_ROOT_TABS.has(location.pathname)
-  return (
-    // Extra bottom padding en móvil para que la barra flotante + tab bar no tapen el contenido
-    <div className="p-4 pb-[200px] md:p-6 md:pb-6 lg:p-8">
-      {/* Spacer en iOS nativo para que el botón de volver atrás no tape el contenido */}
-      {showNativeSpacer && <div style={{ height: '44px' }} aria-hidden="true" />}
-      <Suspense fallback={<div className="flex items-center justify-center h-64"><Spinner size="lg" /></div>}>
-        <AnimatedRoutes />
-      </Suspense>
-    </div>
-  )
-})
-
 
 function App() {
   const [isConnected, setIsConnected] = useState(() => !!navidromeApi.getConfig())
@@ -163,50 +58,12 @@ function App() {
   )
 }
 
-// Cache de posiciones de scroll por ruta — persiste entre navegaciones
-const scrollPositions = new Map<string, number>()
-
 function MainApp() {
   const [showQueue, setShowQueue] = useState(false)
   const [showLyrics, setShowLyrics] = useState(false)
   const [showCanvas, setShowCanvas] = useState(false)
   const playerState = usePlayerState()
   const playerActions = usePlayerActions()
-  const location = useLocation()
-  const navigationType = useNavigationType()
-  const mainContentRef = useRef<HTMLDivElement>(null)
-  const previousPathnameRef = useRef(location.pathname)
-
-  // Guardar scroll de la página anterior y restaurar/resetear en la nueva
-  useEffect(() => {
-    const el = mainContentRef.current
-    if (!el) return
-
-    // Guardar la posición de scroll de la ruta que dejamos
-    const prevPath = previousPathnameRef.current
-    if (prevPath !== location.pathname) {
-      scrollPositions.set(prevPath, el.scrollTop)
-    }
-    previousPathnameRef.current = location.pathname
-
-    if (navigationType === 'POP') {
-      // Volver atrás: restaurar posición guardada
-      const saved = scrollPositions.get(location.pathname)
-      if (saved != null) {
-        // Intentar restaurar varias veces para manejar contenido lazy-loaded
-        const restore = () => el.scrollTo({ top: saved, behavior: 'instant' })
-        // Primer intento inmediato tras el paint
-        requestAnimationFrame(() => {
-          restore()
-          // Segundo intento tras el siguiente frame (contenido lazy puede necesitarlo)
-          requestAnimationFrame(restore)
-        })
-      }
-    } else {
-      // Navegar hacia adelante: scroll al top
-      el.scrollTo(0, 0)
-    }
-  }, [location.pathname, navigationType])
 
   // Bridge nativo: pantalla de bloqueo, auriculares, CarPlay
   useAudioBridge()
@@ -361,15 +218,16 @@ function MainApp() {
 
             {/* Contenido principal - Lyrics o rutas normales (siempre visible en desktop, oculto en móvil si Canvas está abierto) */}
             <div
-              ref={mainContentRef}
-              className={`flex-1 overflow-y-auto overflow-x-hidden overscroll-none transition-all duration-300 min-w-0 ${showCanvas ? 'hidden md:block' : ''}`}
+              className={`flex-1 relative overflow-hidden transition-all duration-300 min-w-0 ${showCanvas ? 'hidden md:block' : ''}`}
             >
               {showLyrics ? (
-                <Suspense fallback={<div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>}>
-                  <LyricsPage onClose={handleToggleLyrics} />
-                </Suspense>
+                <div className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-none">
+                  <Suspense fallback={<div className="flex items-center justify-center h-full"><Spinner size="lg" /></div>}>
+                    <LyricsPage onClose={handleToggleLyrics} />
+                  </Suspense>
+                </div>
               ) : (
-                <RoutesContainer />
+                <NavigationStack />
               )}
             </div>
 

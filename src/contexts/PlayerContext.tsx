@@ -23,6 +23,12 @@ import { streamRetryManager } from '../services/streamRetry'
 // Esto afecta al crossfade basado en volumen: ambas canciones suenan simultáneamente.
 const IS_NATIVE = Capacitor.isNativePlatform()
 
+/** Devuelve una clave de localStorage prefijada con el username para aislar estado entre usuarios */
+function userKey(key: string): string {
+  const username = navidromeApi.getConfig()?.username
+  return username ? `${key}_${username}` : key
+}
+
 // --- NUEVA FUNCIÓN HELPER para generar un ID de caché estable ---
 function generateStableCacheId(song: Song): string {
   return song.id
@@ -187,7 +193,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [currentSong, setCurrentSong] = useState<PlayerStateType['currentSong']>(() => {
     try {
       if (typeof localStorage !== 'undefined') {
-        const savedSong = localStorage.getItem('playerCurrentSong')
+        const savedSong = localStorage.getItem(userKey('playerCurrentSong'))
         return savedSong ? JSON.parse(savedSong) : null
       }
     } catch (e) {
@@ -207,7 +213,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState(() => {
     try {
       if (typeof localStorage !== 'undefined') {
-        const savedProgress = localStorage.getItem('playerProgress')
+        const savedProgress = localStorage.getItem(userKey('playerProgress'))
         return savedProgress ? parseFloat(savedProgress) : 0
       }
       return 0
@@ -219,7 +225,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [duration, setDuration] = useState(() => {
     try {
       if (typeof localStorage !== 'undefined') {
-        const savedSong = localStorage.getItem('playerCurrentSong')
+        const savedSong = localStorage.getItem(userKey('playerCurrentSong'))
         const parsedSong = savedSong ? JSON.parse(savedSong) : null
         return parsedSong?.duration || 0
       }
@@ -228,22 +234,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       return 0
     }
   })
-  const [volume, setVolumeState] = useState(() => {
-    try {
-      const savedVolume = localStorage.getItem('playerVolume')
-      return savedVolume ? JSON.parse(savedVolume) : 75
-    } catch (error) {
-      console.error('Error reading volume from localStorage', error)
-      return 75
-    }
-  })
+  // Volumen fijo al máximo — se controla desde el sistema operativo
+  const [volume] = useState(100)
   const [isCrossfading, setIsCrossfading] = useState(false)
   const [crossfadeDuration, setCrossfadeDuration] = useState(8)
   const [isReconnecting, setIsReconnecting] = useState(false)
   const [currentSource, setCurrentSource] = useState<string | null>(() => {
     try {
       if (typeof localStorage !== 'undefined') {
-        return localStorage.getItem('playerSource')
+        return localStorage.getItem(userKey('playerSource'))
       }
       return null
     } catch (error) {
@@ -254,7 +253,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [queueState, setQueueState] = useState<Song[]>(() => {
     try {
       if (typeof localStorage !== 'undefined') {
-        const savedQueue = localStorage.getItem('playerQueue')
+        const savedQueue = localStorage.getItem(userKey('playerQueue'))
         return savedQueue ? JSON.parse(savedQueue) : []
       }
       return []
@@ -365,13 +364,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
 
       // Establecer duración real de la canción para que WKWebView no use la del
-      // keepalive WAV de 1s en la pantalla de bloqueo
+      // keepalive WAV de 1s en la pantalla de bloqueo.
+      // Usar progressRef.current como posición real — antes estaba hardcodeado a 0,
+      // lo que reseteaba la barra de progreso del lock screen en cada play/pause.
       if (song?.duration && song.duration > 0) {
         try {
+          const pos = Math.min(progressRef.current, song.duration)
           navigator.mediaSession.setPositionState({
             duration: song.duration,
-            playbackRate: 1,
-            position: 0,
+            playbackRate: isPlayingState ? 1 : 0,
+            position: pos,
           })
         } catch {
           // setPositionState no soportado en algunos navegadores
@@ -408,7 +410,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const updateQueue = useCallback((newQueue: Song[]) => {
     queueRef.current = newQueue
     setQueueState([...newQueue])
-    safeSetItem('playerQueue', JSON.stringify(newQueue.map(minimalSong)))
+    safeSetItem(userKey('playerQueue'), JSON.stringify(newQueue.map(minimalSong)))
   }, [])
 
   const updateSource = useCallback((source: string | null) => {
@@ -416,9 +418,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrentSource(source)
     if (typeof localStorage !== 'undefined') {
       if (source) {
-        localStorage.setItem('playerSource', source)
+        localStorage.setItem(userKey('playerSource'), source)
       } else {
-        localStorage.removeItem('playerSource')
+        localStorage.removeItem(userKey('playerSource'))
       }
     }
     console.log(`[PlayerContext] Source actualizado: ${source}`)
@@ -1509,25 +1511,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [currentSong, updateMediaSession, shouldUseWebAudio, playSong])
 
-  const setVolume = useCallback((newVolume: number) => {
-    setVolumeState(newVolume)
-
-    if (shouldUseWebAudio()) {
-      if (webAudioPlayerRef.current) {
-        webAudioPlayerRef.current.setVolume(newVolume)
-      }
-    } else {
-      if (audioRef.current && !isCrossfadingRef.current) {
-        audioRef.current.volume = newVolume / 100
-      }
-    }
-
-    try {
-      localStorage.setItem('playerVolume', JSON.stringify(newVolume))
-    } catch (error) {
-      console.error('Error saving volume to localStorage', error)
-    }
-  }, [shouldUseWebAudio])
+  // Volume is fixed at 100 (system volume controls audio level).
+  // setVolume kept for ConnectContext compatibility (remote device control).
+  const setVolume = useCallback((_newVolume: number) => {
+    // No-op: volume is always max, controlled by OS
+  }, [])
 
   const removeFromQueue = useCallback(
     (songId: string) => {
@@ -3205,42 +3193,37 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // --- PERSISTENCIA DEL ESTADO REPRODUCTOR ---
 
-  // 1. Guardar volumen inmediatamente al cambiar
-  useEffect(() => {
-    localStorage.setItem('playerVolume', JSON.stringify(volume))
-  }, [volume])
-
-  // 2. Guardar canción actual inmediatamente al cambiar
+  // 1. Guardar canción actual inmediatamente al cambiar
   useEffect(() => {
     if (currentSong) {
       console.log(`[PlayerContext] Persistiendo canción actual: ${currentSong.title}`)
-      localStorage.setItem('playerCurrentSong', JSON.stringify(currentSong))
+      localStorage.setItem(userKey('playerCurrentSong'), JSON.stringify(currentSong))
       // Intentar deducir la fuente si no está mapeada pero el objeto song la tiene
       if (!currentSourceRef.current) {
         if (currentSong.playlistId) {
              const newSource = `playlist:${currentSong.playlistId}`
              currentSourceRef.current = newSource
              setCurrentSource(newSource)
-             localStorage.setItem('playerSource', newSource)
+             localStorage.setItem(userKey('playerSource'), newSource)
         } else if (currentSong.albumId) {
              const newSource = `album:${currentSong.albumId}`
              currentSourceRef.current = newSource
              setCurrentSource(newSource)
-             localStorage.setItem('playerSource', newSource)
+             localStorage.setItem(userKey('playerSource'), newSource)
         }
       }
     } else {
-      localStorage.removeItem('playerCurrentSong')
-      localStorage.removeItem('playerSource')
+      localStorage.removeItem(userKey('playerCurrentSong'))
+      localStorage.removeItem(userKey('playerSource'))
     }
   }, [currentSong])
 
   // 2.b Guardar fuente de reproducción
   useEffect(() => {
     if (currentSource) {
-      localStorage.setItem('playerSource', currentSource)
+      localStorage.setItem(userKey('playerSource'), currentSource)
     } else {
-      localStorage.removeItem('playerSource')
+      localStorage.removeItem(userKey('playerSource'))
     }
   }, [currentSource])
 
@@ -3252,8 +3235,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const saveProgress = () => {
       // Guardar en localStorage
       const now = new Date().toISOString()
-      localStorage.setItem('playerProgress', progressRef.current.toString())
-      localStorage.setItem('playerSavedAt', now)
+      localStorage.setItem(userKey('playerProgress'), progressRef.current.toString())
+      localStorage.setItem(userKey('playerSavedAt'), now)
 
       // Guardar en Backend (si hay usuario)
       const config = navidromeApi.getConfig()
@@ -3298,9 +3281,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!currentSongRef.current) return
       // Guardar local
       const now = new Date().toISOString()
-      localStorage.setItem('playerProgress', progressRef.current.toString())
-      localStorage.setItem('playerSavedAt', now)
-      safeSetItem('playerQueue', JSON.stringify(queueRef.current.map(minimalSong)))
+      localStorage.setItem(userKey('playerProgress'), progressRef.current.toString())
+      localStorage.setItem(userKey('playerSavedAt'), now)
+      safeSetItem(userKey('playerQueue'), JSON.stringify(queueRef.current.map(minimalSong)))
 
       const config = navidromeApi.getConfig()
       if (config?.username) {
@@ -3352,7 +3335,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             console.log('[PlayerContext] Estado recuperado del backend:', state)
 
             // Comparar timestamps: ¿el backend es más reciente que lo local?
-            const localSavedAt = localStorage.getItem('playerSavedAt')
+            const localSavedAt = localStorage.getItem(userKey('playerSavedAt'))
             const backendTime = state.savedAt ? new Date(state.savedAt).getTime() : 0
             const localTime = localSavedAt ? new Date(localSavedAt).getTime() : 0
             const backendIsNewer = backendTime > localTime
@@ -3370,7 +3353,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 const restoredQueue = state.queue as Song[]
                 setQueueState(restoredQueue)
                 queueRef.current = restoredQueue
-                safeSetItem('playerQueue', JSON.stringify(restoredQueue.map(minimalSong)))
+                safeSetItem(userKey('playerQueue'), JSON.stringify(restoredQueue.map(minimalSong)))
             }
 
             // 2. Restaurar Canción y Posición
@@ -3399,7 +3382,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                  if (state.duration) setDuration(state.duration)
 
                  // Sincronizar savedAt local
-                 if (state.savedAt) localStorage.setItem('playerSavedAt', state.savedAt)
+                 if (state.savedAt) localStorage.setItem(userKey('playerSavedAt'), state.savedAt)
 
                  // Actualizar MediaSession para que el mini-player / Lock Screen reflejen la canción restaurada
                  updateMediaSession(restoredSong, false)
@@ -3432,7 +3415,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 if (audioRef.current && !isPlaying) {
                     audioRef.current.currentTime = state.position
                 }
-                if (state.savedAt) localStorage.setItem('playerSavedAt', state.savedAt)
+                if (state.savedAt) localStorage.setItem(userKey('playerSavedAt'), state.savedAt)
             }
         } catch (error) {
             console.error('[PlayerContext] Error restaurando desde backend:', error)

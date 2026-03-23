@@ -122,4 +122,22 @@ export function useAudioBridge() {
     return () => { handle?.remove() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative])
+
+  // ── 5. Pausar al desconectar Bluetooth / CarPlay / auriculares ────────────
+  // iOS envía _audioRouteLost cuando el dispositivo de salida se desconecta.
+  // Comportamiento idéntico a Spotify / Apple Music: pausar sin auto-reanudar.
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleRouteLost = () => {
+      console.log('[useAudioBridge] Audio route lost — pausing playback')
+      if (playerState.isPlaying) {
+        playerActions.togglePlayPause()
+      }
+    }
+
+    window.addEventListener('_audioRouteLost', handleRouteLost)
+    return () => window.removeEventListener('_audioRouteLost', handleRouteLost)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, playerState.isPlaying])
 }

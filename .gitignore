@@ -54,7 +54,6 @@ ios/App/App/GoogleService-Info.plist
 
 # Excluded from public repo
 docker-compose.yml
-electron-main/
 scripts/
 docs/
 IMPLEMENTACION-CARPLAY.md

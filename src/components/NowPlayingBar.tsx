@@ -76,105 +76,6 @@ const QueueIcon = ({ className }: { className?: string }) => (
 )
 
 // Iconos de volumen desde assets
-const VolumeIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M7 9H3C2.44772 9 2 9.44772 2 10V14C2 14.5523 2.44772 15 3 15H7"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 9L11 6V18L7 15"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-)
-
-const VolumeMinIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M7 9H3C2.44772 9 2 9.44772 2 10V14C2 14.5523 2.44772 15 3 15H7"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 9L11 6V18L7 15"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M15 15.7652C16.2742 15.1162 17.1469 13.7921 17.1469 12.2641C17.1469 10.7361 16.2742 9.41195 15 8.76294"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-)
-
-const VolumeMaxIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M7 9H3C2.44772 9 2 9.44772 2 10V14C2 14.5523 2.44772 15 3 15H7"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 9L11 6V18L7 15"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M15 15.7652C16.2742 15.1162 17.1469 13.7921 17.1469 12.2641C17.1469 10.7361 16.2742 9.41195 15 8.76294"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M17.3604 6.37402C19.2105 7.67686 20.4192 9.82931 20.4192 12.2641C20.4192 14.6988 19.2105 16.8513 17.3604 18.1541"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-)
-
-const MuteIcon = ({ className }: { className?: string }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M7 9H3C2.44772 9 2 9.44772 2 10V14C2 14.5523 2.44772 15 3 15H7"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M7 9L11 6V18L7 15"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path d="M20 10L16 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    <path d="M16 10L20 14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-)
-
 interface NowPlayingBarProps {
   onShowQueue: () => void
   onToggleLyrics: () => void
@@ -208,9 +109,6 @@ export default function NowPlayingBar({
   const currentProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
   const currentDuration = isRemote ? (remoteSong?.duration || remotePlaybackState?.metadata?.duration || 0) : playerProgress.duration
 
-  const volumeBarRef = useRef<HTMLDivElement>(null)
-  // Guardar el volumen anterior antes de hacer mute
-  const previousVolumeRef = useRef<number>(50)
 
   // Determinar el máximo de artistas a mostrar según el tamaño de pantalla
   const [maxArtists, setMaxArtists] = useState(() => {
@@ -311,33 +209,6 @@ export default function NowPlayingBar({
     }
     
     playerActions.seek(newTime)
-  }
-
-  const handleVolumeSeek = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (volumeBarRef.current) {
-      const volumeBar = volumeBarRef.current
-      const rect = volumeBar.getBoundingClientRect()
-      const offsetX = event.clientX - rect.left
-      const percentage = Math.max(0, Math.min(1, offsetX / rect.width))
-      const newVolume = Math.round(percentage * 100)
-      playerActions.setVolume(newVolume)
-    }
-  }
-
-  const getVolumeIcon = () => {
-    const volume = playerState.volume
-    if (volume === 0) {
-      return <MuteIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
-    } else if (volume < 25) {
-      // Muy bajo, casi al final
-      return <VolumeIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
-    } else if (volume < 50) {
-      // Menos de la mitad
-      return <VolumeMinIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
-    } else {
-      // Más de la mitad
-      return <VolumeMaxIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
-    }
   }
 
   const formatTime = (seconds: number) => {
@@ -656,48 +527,6 @@ export default function NowPlayingBar({
             <QueueIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
           </button>
 
-          <div className="hidden md:flex items-center gap-2">
-            <button
-              onClick={() => {
-                if (playerState.volume === 0) {
-                  // Desmutear: restaurar el volumen anterior
-                  playerActions.setVolume(previousVolumeRef.current)
-                } else {
-                  // Mutear: guardar el volumen actual y ponerlo en 0
-                  previousVolumeRef.current = playerState.volume
-                  playerActions.setVolume(0)
-                }
-              }}
-            >
-              {getVolumeIcon()}
-            </button>
-            <div
-              ref={volumeBarRef}
-              className="w-24 h-2 bg-gray-300 dark:bg-gray-600 rounded-full cursor-pointer group"
-              onClick={handleVolumeSeek}
-            >
-              <div
-                className="h-full bg-blue-500 rounded-full group-hover:bg-blue-400 dark:bg-white dark:group-hover:bg-gray-300 transition-colors"
-                style={{ width: `${playerState.volume}%` }}
-              />
-            </div>
-          </div>
-          {/* Botón de volumen en tablet (sin slider) */}
-          <div className="md:hidden">
-            <button
-              onClick={() => {
-                if (playerState.volume === 0) {
-                  playerActions.setVolume(previousVolumeRef.current)
-                } else {
-                  previousVolumeRef.current = playerState.volume
-                  playerActions.setVolume(0)
-                }
-              }}
-              className="p-2"
-            >
-              {getVolumeIcon()}
-            </button>
-          </div>
         </div>
       </div>
 
