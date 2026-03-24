@@ -53,6 +53,7 @@ ios/App/App/GoogleService-Info.plist
 **/.DS_Store
 
 # Excluded from public repo
+vite.config.ts
 docker-compose.yml
 scripts/
 docs/
