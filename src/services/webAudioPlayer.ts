@@ -12,6 +12,7 @@
 
 import { Capacitor } from '@capacitor/core'
 import { Song } from './navidromeApi'
+import { audioBridge } from './audioBridge'
 import { AudioAnalysisResult } from '../hooks/useAudioAnalysis'
 import { audioCacheService } from './audioCacheService'
 import {
@@ -58,11 +59,11 @@ export class WebAudioPlayer {
   private nextMediaElementGain: GainNode | null = null
   private nextMediaElementHighpass: BiquadFilterNode | null = null // Para intro (entrada)
 
-  // 🔇 iOS KEEPALIVE: HTMLAudioElement con WAV silencioso en loop para mantener
-  // AVAudioSession activa cuando la pantalla se bloquea. Sin esto, iOS suspende
-  // el AudioContext y el audio se detiene. NO está conectado al AudioContext.
-  private iosKeepAlive: HTMLAudioElement | null = null
-  private iosKeepAliveUrl: string | null = null
+  // 🔇 iOS KEEPALIVE: AVAudioPlayer nativo (via AudioBridgePlugin) que reproduce
+  // silencio para mantener AVAudioSession activa cuando la pantalla se bloquea.
+  // Antes era un HTMLAudioElement, pero WKWebView lo detectaba como media activa
+  // y sobreescribía MPNowPlayingInfoCenter con duration=1s, elapsed=0.
+  private iosKeepAliveStarted = false
 
   // ⚡ HTML FALLBACK: reproducción instantánea para canciones no cacheadas
   // Fase 1: HTML audio empieza inmediatamente; Fase 2: decode en background;
@@ -242,9 +243,15 @@ export class WebAudioPlayer {
   private pauseTime = 0
   private timeUpdateInterval: NodeJS.Timeout | null = null
 
+  // Protección contra background/foreground: cuando iOS suspende WKWebView,
+  // los setInterval se acumulan y disparan todos de golpe al volver.
+  // Esto corrompe crossfades (100 steps de golpe), rompe AutoMix, y desincroniza tiempos.
+  private isBackgrounded = false
+  private visibilityHandler: (() => void) | null = null
+
   // Motor de crossfade
   private crossfadeEngine: CrossfadeEngine
-  
+
   // Detectar si estamos en Electron
   private isElectron = typeof window !== 'undefined' &&
     (window.navigator.userAgent.toLowerCase().includes('electron') ||
@@ -293,9 +300,12 @@ export class WebAudioPlayer {
 
   private async initializeAudioContext() {
     try {
+      // latencyHint: 'playback' usa buffers grandes, evitando underruns por latencia
+      // de red (WiFi, Bluetooth, CarPlay inalámbrico). 'interactive' (default) usa
+      // buffers mínimos que causan tirones en conexiones wireless.
       this.audioContext = new (window.AudioContext ||
         (window as Window & typeof globalThis & { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext)()
+          .webkitAudioContext)({ latencyHint: 'playback' })
 
       this.gainNode = this.audioContext.createGain()
       this.gainNode.connect(this.audioContext.destination)
@@ -318,11 +328,8 @@ export class WebAudioPlayer {
       silentSource.connect(this.audioContext.destination)
       silentSource.start(0)
 
-      // En plataforma nativa iOS, preparar además el keepalive de HTMLAudioElement
-      // (mantiene AVAudioSession activa para que iOS no corte el audio en background)
-      if (this.isNative) {
-        this._initKeepAlive()
-      }
+      // El keepalive nativo (AVAudioPlayer) se arranca bajo demanda en _startKeepAlive()
+      // al llamar a play(), no hace falta pre-inicializarlo aquí.
 
       // Si iOS suspende el contexto, solo reanudar si estamos reproduciendo activamente.
       // NO reanudar ciegamente: si Bluetooth/CarPlay se desconectó, el evento _audioRouteLost
@@ -333,12 +340,20 @@ export class WebAudioPlayer {
         }
       }
 
-      // Reanudar AudioContext cuando la app vuelve al primer plano, solo si reproduciendo
-      document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && this.audioContext?.state === 'suspended' && this.isPlaying) {
-          this.audioContext.resume().catch(() => {})
+      // Gestión de background/foreground:
+      // - Al ir a background: marcar estado para que los timers se ignoren
+      // - Al volver: reanudar AudioContext, cancelar crossfade corrupto, resincronizar
+      if (this.visibilityHandler) {
+        document.removeEventListener('visibilitychange', this.visibilityHandler)
+      }
+      this.visibilityHandler = () => {
+        if (document.hidden) {
+          this.isBackgrounded = true
+        } else {
+          this._handleReturnFromBackground()
         }
-      })
+      }
+      document.addEventListener('visibilitychange', this.visibilityHandler)
 
       console.log('[WebAudioPlayer] AudioContext inicializado correctamente, estado:', this.audioContext.state)
     } catch (error) {
@@ -348,82 +363,101 @@ export class WebAudioPlayer {
   }
 
   // ===========================================================================
-  // 🔇 iOS KEEPALIVE — mantiene AVAudioSession activa en background/pantalla bloqueada
+  // 🔇 iOS KEEPALIVE — AVAudioPlayer nativo via AudioBridgePlugin
   // ===========================================================================
+  // Antes usaba un HTMLAudioElement con un WAV de 1s en loop. WKWebView lo
+  // detectaba como media activa y sobreescribía MPNowPlayingInfoCenter con
+  // duration=1s, elapsed=0 → la barra de progreso del lock screen se quedaba
+  // en 0:00-0:01. Ahora el keepalive es un AVAudioPlayer nativo que iOS no
+  // asocia con WKWebView, eliminando el conflicto de raíz.
 
   /**
-   * Genera un Blob con un fichero WAV de 1 segundo de silencio puro (todos ceros).
-   * Se usa como fuente del HTMLAudioElement keepalive en iOS nativo.
-   */
-  private _createSilentWavBlob(): Blob {
-    const sampleRate = 44100
-    const numChannels = 1
-    const bitsPerSample = 16
-    const numSamples = sampleRate // 1 segundo
-    const dataSize = numSamples * numChannels * (bitsPerSample / 8)
-    const buffer = new ArrayBuffer(44 + dataSize)
-    const view = new DataView(buffer)
-
-    const writeStr = (offset: number, str: string) => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i))
-    }
-
-    writeStr(0, 'RIFF')
-    view.setUint32(4, 36 + dataSize, true)
-    writeStr(8, 'WAVE')
-    writeStr(12, 'fmt ')
-    view.setUint32(16, 16, true)
-    view.setUint16(20, 1, true)                                            // PCM
-    view.setUint16(22, numChannels, true)
-    view.setUint32(24, sampleRate, true)
-    view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true)
-    view.setUint16(32, numChannels * (bitsPerSample / 8), true)
-    view.setUint16(34, bitsPerSample, true)
-    writeStr(36, 'data')
-    view.setUint32(40, dataSize, true)
-    // Los bytes del data chunk quedan a 0 por defecto → silencio puro
-
-    return new Blob([buffer], { type: 'audio/wav' })
-  }
-
-  /**
-   * Crea el HTMLAudioElement keepalive para iOS.
-   * Llamar durante initializeAudioContext (antes de cualquier play).
-   */
-  private _initKeepAlive(): void {
-    if (!this.isNative) return
-    try {
-      const blob = this._createSilentWavBlob()
-      this.iosKeepAliveUrl = URL.createObjectURL(blob)
-      this.iosKeepAlive = new Audio(this.iosKeepAliveUrl)
-      this.iosKeepAlive.loop = true
-      // No conectar al AudioContext — debe ser nativo para mantener AVAudioSession activa
-      console.log('[WebAudioPlayer] 🔇 iOS keepalive preparado')
-    } catch (e) {
-      console.warn('[WebAudioPlayer] No se pudo inicializar iOS keepalive:', e)
-    }
-  }
-
-  /**
-   * Arranca el keepalive. Llamar ANTES de cualquier await en play() para que
-   * el gesto de usuario aún esté activo en la cadena de llamadas.
+   * Arranca el keepalive nativo. Llamar ANTES de cualquier await en play()
+   * para que el gesto de usuario aún esté activo.
    */
   private _startKeepAlive(): void {
-    if (!this.iosKeepAlive || !this.isNative) return
-    if (!this.iosKeepAlive.paused) return
-    this.iosKeepAlive.play().catch(e => {
-      console.warn('[WebAudioPlayer] iOS keepalive no pudo arrancar:', e)
-    })
+    if (!this.isNative || this.iosKeepAliveStarted) return
+    this.iosKeepAliveStarted = true
+    audioBridge.startKeepAlive()
+    console.log('[WebAudioPlayer] 🔇 Keepalive nativo solicitado')
   }
 
   /**
-   * Detiene el keepalive. Solo llamar al destruir el player o limpiar la cola,
-   * NUNCA al pausar — si se para el WAV silencioso, iOS suspende el WKWebView
-   * y los remote commands del lock screen dejan de llegar a JavaScript.
+   * Detiene el keepalive nativo. Solo llamar al destruir el player,
+   * NUNCA al pausar — si se para, iOS suspende el WKWebView y los
+   * remote commands del lock screen dejan de llegar a JavaScript.
    */
   private _stopKeepAlive(): void {
-    if (this.iosKeepAlive && !this.iosKeepAlive.paused) {
-      this.iosKeepAlive.pause()
+    if (!this.isNative || !this.iosKeepAliveStarted) return
+    this.iosKeepAliveStarted = false
+    audioBridge.stopKeepAlive()
+  }
+
+  // ===========================================================================
+  // PROTECCIÓN BACKGROUND → FOREGROUND
+  // ===========================================================================
+  // iOS suspende WKWebView al bloquear pantalla. Los setInterval se acumulan y
+  // al volver disparan TODOS de golpe. Esto causa: crossfade corrupto (100 steps
+  // instantáneos), AutoMix se dispara múltiples veces, tiempos desincronizados.
+
+  private _handleReturnFromBackground(): void {
+    if (!this.isBackgrounded) return
+    this.isBackgrounded = false
+
+    console.log('[WebAudioPlayer] 📱 Volviendo del background')
+
+    // 1. Reanudar AudioContext si está suspendido
+    if (this.audioContext?.state === 'suspended' && this.isPlaying) {
+      this.audioContext.resume().catch(() => {})
+    }
+
+    // 2. Si hay un crossfade en curso, finalizarlo inmediatamente.
+    //    Los steps acumulados ya lo corrompieron — mejor terminar limpio.
+    if (this.isCrossfading && this.crossfadeInterval) {
+      console.log('[WebAudioPlayer] ⚠️ Crossfade corrupto tras background — finalizando')
+      clearInterval(this.crossfadeInterval)
+      this.crossfadeInterval = null
+
+      // Completar el crossfade: canción B a volumen completo, canción A a 0
+      if (this.useMediaElementMode) {
+        if (this.nextMediaElementGain) {
+          const gainB = this.getReplayGainMultiplier(this.nextSong) * this.volume
+          this.nextMediaElementGain.gain.value = gainB
+        }
+        if (this.mediaElementGain) {
+          this.mediaElementGain.gain.value = 0
+        }
+        // Limpiar filtros
+        if (this.mediaElementLowpass) this.mediaElementLowpass.frequency.value = 20000
+        if (this.nextMediaElementHighpass) this.nextMediaElementHighpass.frequency.value = 60
+        // Finalizar la transición
+        if (this.nextSong) {
+          this.finalizeCrossfadeMediaElement(0)
+        }
+      } else {
+        // Modo buffer: el CrossfadeEngine gestiona sus propios nodos,
+        // pero debemos asegurar que isCrossfading se resetea
+        this.isCrossfading = false
+      }
+    }
+
+    // 3. Reiniciar los time updates para evitar callbacks acumulados
+    if (this.isPlaying) {
+      if (this.useMediaElementMode && this.mediaElement) {
+        this.startMediaElementTimeUpdates()
+      } else if (this.isHtmlFallbackActive) {
+        this._startHtmlFallbackTimeUpdates()
+      } else if (this.currentSource) {
+        this.startTimeUpdates()
+      }
+    }
+
+    // 4. Emitir un time update fresco para resincronizar la UI
+    if (this.isPlaying && this.duration > 0) {
+      const currentTime = this.getCurrentTime()
+      if (isFinite(currentTime)) {
+        this.callbacks.onTimeUpdate?.(currentTime, this.duration)
+      }
     }
   }
 
@@ -1093,15 +1127,16 @@ export class WebAudioPlayer {
   private startMediaElementTimeUpdates(): void {
     this.stopMediaElementTimeUpdates()
     this.mediaElementTimeUpdateInterval = setInterval(() => {
+      if (this.isBackgrounded) return // Ignorar callbacks acumulados de iOS
       if (this.mediaElement && this.isPlaying) {
         const currentTime = this.mediaElement.currentTime
         const mediaDuration = this.mediaElement.duration
-        
+
         // Usar duración válida: preferir la del MediaElement si es finita, sino usar this.duration
-        const duration = (isFinite(mediaDuration) && mediaDuration > 0) 
-          ? mediaDuration 
+        const duration = (isFinite(mediaDuration) && mediaDuration > 0)
+          ? mediaDuration
           : this.duration
-        
+
         // Solo llamar callback si tenemos valores válidos
         if (isFinite(currentTime) && isFinite(duration) && duration > 0) {
           this.callbacks.onTimeUpdate?.(currentTime, duration)
@@ -1556,6 +1591,10 @@ export class WebAudioPlayer {
       if (this.crossfadeInterval) clearInterval(this.crossfadeInterval)
       
       this.crossfadeInterval = setInterval(() => {
+        // Protección background: si la app estuvo suspendida, los steps acumulados
+        // disparan todos de golpe. _handleReturnFromBackground() limpia esto.
+        if (this.isBackgrounded) return
+
         step++
         const progress = step / fadeSteps
 
@@ -1812,6 +1851,7 @@ export class WebAudioPlayer {
     this.stopTimeUpdates()
 
     this.timeUpdateInterval = setInterval(() => {
+      if (this.isBackgrounded) return // Ignorar callbacks acumulados de iOS
       if (this.isPlaying) {
         const currentTime = this.getCurrentTime()
         this.callbacks.onTimeUpdate?.(currentTime, this.duration)
@@ -2157,6 +2197,7 @@ export class WebAudioPlayer {
   private _startHtmlFallbackTimeUpdates(): void {
     this._stopHtmlFallbackTimeUpdates()
     this.htmlFallbackTimeInterval = setInterval(() => {
+      if (this.isBackgrounded) return // Ignorar callbacks acumulados de iOS
       if (this.htmlFallback && this.isPlaying) {
         const currentTime = this.htmlFallback.currentTime
         if (isFinite(currentTime) && this.duration > 0) {
@@ -2180,16 +2221,14 @@ export class WebAudioPlayer {
   dispose(): void {
     console.log('[WebAudioPlayer] Liberando recursos')
 
-    // Limpiar iOS keepalive
+    // Limpiar listener de visibilitychange
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler)
+      this.visibilityHandler = null
+    }
+
+    // Limpiar keepalive nativo
     this._stopKeepAlive()
-    if (this.iosKeepAlive) {
-      this.iosKeepAlive.src = ''
-      this.iosKeepAlive = null
-    }
-    if (this.iosKeepAliveUrl) {
-      URL.revokeObjectURL(this.iosKeepAliveUrl)
-      this.iosKeepAliveUrl = null
-    }
 
     // Cancelar y limpiar pre-decode cache primero
     this.clearPreDecodeCache()

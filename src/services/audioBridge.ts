@@ -35,6 +35,8 @@ interface AudioBridgePluginInterface {
   updateNowPlaying(options: NowPlayingInfo): Promise<void>
   updatePlaybackState(options: PlaybackStateInfo): Promise<void>
   clearNowPlaying(): Promise<void>
+  startKeepAlive(): Promise<void>
+  stopKeepAlive(): Promise<void>
   addListener(
     eventName: 'remoteCommand',
     listenerFunc: (event: RemoteCommandEvent) => void
@@ -67,6 +69,12 @@ export const audioBridge = {
 
   clearNowPlaying: () =>
     safeCall(() => _plugin.clearNowPlaying()),
+
+  startKeepAlive: () =>
+    safeCall(() => _plugin.startKeepAlive()),
+
+  stopKeepAlive: () =>
+    safeCall(() => _plugin.stopKeepAlive()),
 
   addRemoteCommandListener: (handler: (e: RemoteCommandEvent) => void) => {
     if (!isNative) return Promise.resolve({ remove: async () => {} } as PluginListenerHandle)

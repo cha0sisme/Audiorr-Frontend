@@ -146,6 +146,10 @@ class NavidromeAPI {
     this.loadConfig()
   }
 
+  getUsername(): string | null {
+    return this.config?.username ?? null
+  }
+
   // --- NUEVO SISTEMA DE AUTENTICACIÓN ---
   private getAuthParams(format: 'json' | 'binary' = 'json'): string {
     if (!this.config || !this.config.token) return ''

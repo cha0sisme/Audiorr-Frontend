@@ -15,6 +15,8 @@ public class AudioBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "updateNowPlaying",    returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updatePlaybackState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearNowPlaying",     returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "startKeepAlive",      returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "stopKeepAlive",       returnType: CAPPluginReturnPromise),
     ]
 
     private var commandCenterReady = false
@@ -25,6 +27,14 @@ public class AudioBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     /// NUNCA leer del singleton MPNowPlayingInfoCenter.default().nowPlayingInfo
     /// (devuelve una copia que puede tener valores stale en escenarios async).
     private var localInfo: [String: Any] = [:]
+
+    // MARK: - Native AVAudioPlayer keepalive
+    // Mantiene AVAudioSession activa en background/pantalla bloqueada reproduciendo
+    // silencio a nivel nativo. A diferencia del HTMLAudioElement anterior, un
+    // AVAudioPlayer nativo NO es detectado por WKWebView como media elegible
+    // para NowPlaying, así que no sobreescribe MPNowPlayingInfoCenter.
+    private var keepAlivePlayer: AVAudioPlayer?
+    private var keepAliveUrl: URL?
 
     // MARK: - JS-callable methods
 
@@ -94,6 +104,95 @@ public class AudioBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         localInfo = [:]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         call.resolve()
+    }
+
+    // MARK: - Keepalive (AVAudioPlayer nativo)
+
+    /// Arranca el keepalive nativo. JS debe llamar esto ANTES de cualquier await
+    /// en play() para que el gesto de usuario siga activo.
+    @objc func startKeepAlive(_ call: CAPPluginCall) {
+        if keepAlivePlayer?.isPlaying == true {
+            call.resolve()
+            return
+        }
+
+        do {
+            // Asegurar sesión activa con categoría playback
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default,
+                                    options: [.allowBluetoothA2DP, .allowAirPlay])
+            try session.setActive(true)
+
+            // Generar WAV silencioso de 1 segundo en un fichero temporal
+            if keepAliveUrl == nil {
+                keepAliveUrl = createSilentWavFile()
+            }
+
+            guard let url = keepAliveUrl else {
+                print("[AudioBridge] No se pudo crear fichero WAV silencioso")
+                call.resolve()
+                return
+            }
+
+            let player = try AVAudioPlayer(contentsOf: url)
+            player.numberOfLoops = -1 // loop infinito
+            player.volume = 0.01      // volumen mínimo (0 podría no activar sesión)
+            player.prepareToPlay()
+            player.play()
+            keepAlivePlayer = player
+            print("[AudioBridge] Keepalive nativo arrancado")
+        } catch {
+            print("[AudioBridge] Error arrancando keepalive: \(error)")
+        }
+
+        call.resolve()
+    }
+
+    /// Detiene el keepalive nativo. Solo llamar al destruir el player.
+    @objc func stopKeepAlive(_ call: CAPPluginCall) {
+        keepAlivePlayer?.stop()
+        keepAlivePlayer = nil
+        print("[AudioBridge] Keepalive nativo detenido")
+        call.resolve()
+    }
+
+    /// Genera un fichero WAV de 1 segundo de silencio en el directorio temporal.
+    private func createSilentWavFile() -> URL? {
+        let sampleRate: Int = 44100
+        let numChannels: Int = 1
+        let bitsPerSample: Int = 16
+        let numSamples = sampleRate  // 1 segundo
+        let dataSize = numSamples * numChannels * (bitsPerSample / 8)
+
+        var buffer = Data(count: 44 + dataSize)
+
+        // RIFF header
+        buffer.replaceSubrange(0..<4,   with: "RIFF".data(using: .ascii)!)
+        withUnsafeBytes(of: UInt32(36 + dataSize).littleEndian) { buffer.replaceSubrange(4..<8, with: $0) }
+        buffer.replaceSubrange(8..<12,  with: "WAVE".data(using: .ascii)!)
+
+        // fmt chunk
+        buffer.replaceSubrange(12..<16, with: "fmt ".data(using: .ascii)!)
+        withUnsafeBytes(of: UInt32(16).littleEndian)                                         { buffer.replaceSubrange(16..<20, with: $0) }
+        withUnsafeBytes(of: UInt16(1).littleEndian)                                          { buffer.replaceSubrange(20..<22, with: $0) } // PCM
+        withUnsafeBytes(of: UInt16(numChannels).littleEndian)                                { buffer.replaceSubrange(22..<24, with: $0) }
+        withUnsafeBytes(of: UInt32(sampleRate).littleEndian)                                 { buffer.replaceSubrange(24..<28, with: $0) }
+        withUnsafeBytes(of: UInt32(sampleRate * numChannels * bitsPerSample / 8).littleEndian) { buffer.replaceSubrange(28..<32, with: $0) }
+        withUnsafeBytes(of: UInt16(numChannels * bitsPerSample / 8).littleEndian)            { buffer.replaceSubrange(32..<34, with: $0) }
+        withUnsafeBytes(of: UInt16(bitsPerSample).littleEndian)                              { buffer.replaceSubrange(34..<36, with: $0) }
+
+        // data chunk (bytes a 0 = silencio)
+        buffer.replaceSubrange(36..<40, with: "data".data(using: .ascii)!)
+        withUnsafeBytes(of: UInt32(dataSize).littleEndian) { buffer.replaceSubrange(40..<44, with: $0) }
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audiorr_silence.wav")
+        do {
+            try buffer.write(to: url)
+            return url
+        } catch {
+            print("[AudioBridge] Error escribiendo WAV silencioso: \(error)")
+            return nil
+        }
     }
 
     /// Publica el diccionario local como una escritura atómica al singleton.

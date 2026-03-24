@@ -75,9 +75,10 @@ export function useAudioBridge() {
   }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
 
   // ── 3. Sync periódico del tiempo (barra de progreso en pantalla de bloqueo) ─
-  // iOS auto-avanza la barra basándose en playbackRate, así que no necesitamos
-  // actualizar cada pocos segundos. Un sync cada 30s corrige posible drift
-  // sin causar saltos visibles en la UI del lock screen.
+  // WKWebView sobreescribe MPNowPlayingInfoCenter con los datos del keepalive
+  // HTMLAudioElement (WAV silencioso de 1s en loop). El timer nativo de
+  // AudioBridgePlugin lo contrarresta cada 1s, pero reforzamos desde JS cada 5s
+  // para corregir drift acumulado.
   useEffect(() => {
     if (!isNative || !playerState.isPlaying || !playerState.currentSong) return
 
@@ -88,7 +89,7 @@ export function useAudioBridge() {
         isPlaying:   true,
         elapsedTime: realElapsed,
       })
-    }, 30000)
+    }, 5000)
 
     return () => clearInterval(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps

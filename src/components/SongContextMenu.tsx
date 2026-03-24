@@ -80,8 +80,9 @@ export default function SongContextMenu({
       setLoadingPlaylists(true)
       try {
         const allPlaylists = await navidromeApi.getPlaylists()
+        const currentUser = navidromeApi.getUsername()
         const userPlaylists = allPlaylists.filter(
-          p => !isSmartPlaylist(p) && !isEditorialPlaylist(p)
+          p => !isSmartPlaylist(p) && !isEditorialPlaylist(p) && (!currentUser || p.owner === currentUser)
         )
         setPlaylists(userPlaylists)
       } catch (error) {

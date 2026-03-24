@@ -3191,6 +3191,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     updateMediaSession(currentSong, isPlaying)
   }, [currentSong, isPlaying, updateMediaSession])
 
+  // Efecto: Re-afirmar positionState periódicamente en iOS nativo.
+  // WKWebView sobreescribe el NowPlaying del lock screen con los datos del
+  // keepalive HTMLAudioElement (WAV 1s en loop). Re-publicar setPositionState
+  // cada 3s contrarresta esa sobreescritura desde la capa web.
+  useEffect(() => {
+    if (!IS_NATIVE || !isPlaying || !currentSong?.duration) return
+
+    const timer = setInterval(() => {
+      try {
+        const pos = Math.min(progressRef.current, currentSong.duration!)
+        navigator.mediaSession.setPositionState({
+          duration: currentSong.duration!,
+          playbackRate: 1,
+          position: Math.max(0, pos),
+        })
+      } catch { /* ignore */ }
+    }, 3000)
+
+    return () => clearInterval(timer)
+  }, [isPlaying, currentSong?.id, currentSong?.duration])
+
   // --- PERSISTENCIA DEL ESTADO REPRODUCTOR ---
 
   // 1. Guardar canción actual inmediatamente al cambiar

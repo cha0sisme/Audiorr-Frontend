@@ -28,7 +28,7 @@ export class CrossfadePlayer {
   constructor() {
     this.audioContext = new (window.AudioContext ||
       (window as Window & typeof globalThis & { webkitAudioContext: typeof AudioContext })
-        .webkitAudioContext)()
+        .webkitAudioContext)({ latencyHint: 'playback' })
     this.gainNodeA = this.audioContext.createGain()
     this.gainNodeB = this.audioContext.createGain()
 
