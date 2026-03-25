@@ -669,8 +669,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
     func applicationWillEnterForeground(_ application: UIApplication) {
         // Re-activar la sesión de audio al volver del background.
         // iOS puede desactivar la sesión si otra app tomó la prioridad de audio.
+        // Hacerlo ANTES de que WKWebView despierte para que AudioContext.resume() funcione.
+        let session = AVAudioSession.sharedInstance()
         do {
-            try AVAudioSession.sharedInstance().setActive(true)
+            try session.setCategory(.playback, mode: .default,
+                                    options: [.allowBluetoothA2DP, .allowAirPlay])
+            try session.setActive(true, options: [])
+            print("[Audiorr] AVAudioSession reactivated on foreground (category: \(session.category.rawValue))")
         } catch {
             print("[Audiorr] Failed to reactivate AVAudioSession on foreground: \(error)")
         }

@@ -39,6 +39,8 @@ export interface WebAudioPlayerCallbacks {
   onLoadedMetadata?: (duration: number) => void
   onCanPlay?: () => void
   onAutomixTrigger?: () => void
+  /** Llamado cuando el pipeline de audio necesita recarga tras suspensión profunda de iOS */
+  onRecoveryNeeded?: (song: Song, position: number) => void
 }
 
 // =============================================================================

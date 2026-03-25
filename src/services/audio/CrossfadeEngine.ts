@@ -103,6 +103,14 @@ export class CrossfadeEngine {
   }
 
   /**
+   * Resetea el estado del motor. Usar solo tras reconstrucción de AudioContext
+   * (suspensión profunda de iOS) donde los nodos del crossfade anterior ya no existen.
+   */
+  forceReset(): void {
+    this.isCrossfading = false
+  }
+
+  /**
    * Ejecuta el crossfade completo.
    * 
    * @param resources Recursos necesarios para el crossfade

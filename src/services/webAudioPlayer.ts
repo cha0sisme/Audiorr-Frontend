@@ -248,6 +248,8 @@ export class WebAudioPlayer {
   // Esto corrompe crossfades (100 steps de golpe), rompe AutoMix, y desincroniza tiempos.
   private isBackgrounded = false
   private visibilityHandler: (() => void) | null = null
+  private backgroundTimestamp = 0 // Cuándo entró al background (ms)
+  private suppressOnEnded = false // Suprimir onended falsos al volver del background
 
   // Motor de crossfade
   private crossfadeEngine: CrossfadeEngine
@@ -331,12 +333,18 @@ export class WebAudioPlayer {
       // El keepalive nativo (AVAudioPlayer) se arranca bajo demanda en _startKeepAlive()
       // al llamar a play(), no hace falta pre-inicializarlo aquí.
 
-      // Si iOS suspende el contexto, solo reanudar si estamos reproduciendo activamente.
-      // NO reanudar ciegamente: si Bluetooth/CarPlay se desconectó, el evento _audioRouteLost
-      // pausará la reproducción y no queremos que el AudioContext la reanude por su cuenta.
+      // Si iOS suspende el contexto, reanudar SIEMPRE que estemos reproduciendo.
+      // Esto es CRÍTICO para que los crossfades en background funcionen: las automaciones
+      // de Web Audio (linearRampToValueAtTime etc.) necesitan que el contexto esté "running".
+      // NO filtrar por isBackgrounded — el contexto DEBE estar vivo en background para audio.
+      // La protección contra Bluetooth/CarPlay ya está en _audioRouteLost que pone isPlaying=false.
       this.audioContext.onstatechange = () => {
-        if (this.audioContext?.state === 'suspended' && this.isPlaying) {
-          this.audioContext.resume().catch(() => {})
+        const state = this.audioContext?.state
+        if ((state === 'suspended' || state === ('interrupted' as AudioContextState)) && this.isPlaying) {
+          console.log(`[WebAudioPlayer] AudioContext ${state} mientras reproduciendo — reanudando`)
+          this.audioContext!.resume().catch((err) => {
+            console.warn('[WebAudioPlayer] onstatechange resume() falló:', err)
+          })
         }
       }
 
@@ -349,6 +357,7 @@ export class WebAudioPlayer {
       this.visibilityHandler = () => {
         if (document.hidden) {
           this.isBackgrounded = true
+          this.backgroundTimestamp = Date.now()
         } else {
           this._handleReturnFromBackground()
         }
@@ -404,21 +413,31 @@ export class WebAudioPlayer {
     if (!this.isBackgrounded) return
     this.isBackgrounded = false
 
-    console.log('[WebAudioPlayer] 📱 Volviendo del background')
+    const suspensionDuration = Date.now() - this.backgroundTimestamp
+    const isDeepSuspension = suspensionDuration > 120_000 // >2 minutos
+    const wasPlaying = this.isPlaying
+    const savedPosition = this.getCurrentTime()
+    const savedSong = this.currentSong
+    const savedDuration = this.duration
 
-    // 1. Reanudar AudioContext si está suspendido
-    if (this.audioContext?.state === 'suspended' && this.isPlaying) {
-      this.audioContext.resume().catch(() => {})
+    console.log(`[WebAudioPlayer] 📱 Volviendo del background (suspendido ${(suspensionDuration / 1000).toFixed(0)}s, wasPlaying: ${wasPlaying}, deep: ${isDeepSuspension})`)
+
+    // PROTECCIÓN CRÍTICA: suprimir onended falsos durante la recuperación.
+    // iOS puede disparar onended en el BufferSourceNode al reanudar el AudioContext
+    // después de una suspensión, lo que haría que la app intente next() en lugar de
+    // continuar la canción actual. Suprimimos durante 2 segundos.
+    if (wasPlaying && !this.useMediaElementMode) {
+      this.suppressOnEnded = true
+      setTimeout(() => { this.suppressOnEnded = false }, 2000)
     }
 
-    // 2. Si hay un crossfade en curso, finalizarlo inmediatamente.
+    // 1. Si hay un crossfade en curso, finalizarlo inmediatamente.
     //    Los steps acumulados ya lo corrompieron — mejor terminar limpio.
     if (this.isCrossfading && this.crossfadeInterval) {
       console.log('[WebAudioPlayer] ⚠️ Crossfade corrupto tras background — finalizando')
       clearInterval(this.crossfadeInterval)
       this.crossfadeInterval = null
 
-      // Completar el crossfade: canción B a volumen completo, canción A a 0
       if (this.useMediaElementMode) {
         if (this.nextMediaElementGain) {
           const gainB = this.getReplayGainMultiplier(this.nextSong) * this.volume
@@ -427,22 +446,71 @@ export class WebAudioPlayer {
         if (this.mediaElementGain) {
           this.mediaElementGain.gain.value = 0
         }
-        // Limpiar filtros
         if (this.mediaElementLowpass) this.mediaElementLowpass.frequency.value = 20000
         if (this.nextMediaElementHighpass) this.nextMediaElementHighpass.frequency.value = 60
-        // Finalizar la transición
         if (this.nextSong) {
           this.finalizeCrossfadeMediaElement(0)
         }
       } else {
-        // Modo buffer: el CrossfadeEngine gestiona sus propios nodos,
-        // pero debemos asegurar que isCrossfading se resetea
         this.isCrossfading = false
       }
     }
 
-    // 3. Reiniciar los time updates para evitar callbacks acumulados
-    if (this.isPlaying) {
+    // 2. Reanudar AudioContext — con reintentos y reconstrucción si falla
+    this._resumeAudioContextRobust(wasPlaying, savedPosition, savedSong, savedDuration, isDeepSuspension)
+  }
+
+  /**
+   * Reanuda el AudioContext de forma robusta tras una suspensión de iOS.
+   * Si resume() falla o el contexto queda en estado inválido, reconstruye
+   * todo el pipeline de audio y reanuda la reproducción desde donde estaba.
+   */
+  private async _resumeAudioContextRobust(
+    wasPlaying: boolean,
+    savedPosition: number,
+    savedSong: Song | null,
+    savedDuration: number,
+    isDeepSuspension: boolean
+  ): Promise<void> {
+    if (!this.audioContext) return
+
+    const contextState = this.audioContext.state
+    console.log(`[WebAudioPlayer] 🔧 Estado AudioContext: ${contextState}`)
+
+    // Intentar resume() estándar primero
+    if (contextState === 'suspended' || contextState === ('interrupted' as AudioContextState)) {
+      try {
+        await this.audioContext.resume()
+        console.log(`[WebAudioPlayer] ✅ AudioContext resumido: ${this.audioContext.state}`)
+      } catch (err) {
+        console.warn('[WebAudioPlayer] ⚠️ resume() falló:', err)
+      }
+    }
+
+    // Verificar si el contexto realmente está funcionando
+    const contextOk = this.audioContext.state === 'running'
+
+    // Si fue una suspensión profunda O el contexto no se recuperó,
+    // reconstruir todo el pipeline de audio
+    if (!contextOk || (isDeepSuspension && wasPlaying && !this.useMediaElementMode)) {
+      console.log('[WebAudioPlayer] 🔄 Reconstruyendo pipeline de audio...')
+      await this._reconstructAudioPipeline(wasPlaying, savedPosition, savedSong, savedDuration)
+      return
+    }
+
+    // El contexto se recuperó correctamente — solo resincronizar
+    if (wasPlaying) {
+      // En modo buffer, verificar que el source sigue vivo
+      if (!this.useMediaElementMode && !this.isHtmlFallbackActive) {
+        if (!this.currentSource) {
+          // El source murió durante la suspensión — reconstruir
+          console.log('[WebAudioPlayer] ⚠️ currentSource perdido — reconstruyendo')
+          await this._reconstructAudioPipeline(wasPlaying, savedPosition, savedSong, savedDuration)
+          return
+        }
+      }
+
+      // Reiniciar los time updates para evitar callbacks acumulados
       if (this.useMediaElementMode && this.mediaElement) {
         this.startMediaElementTimeUpdates()
       } else if (this.isHtmlFallbackActive) {
@@ -450,13 +518,111 @@ export class WebAudioPlayer {
       } else if (this.currentSource) {
         this.startTimeUpdates()
       }
+
+      // Emitir un time update fresco para resincronizar la UI
+      if (this.duration > 0) {
+        const currentTime = this.getCurrentTime()
+        if (isFinite(currentTime)) {
+          this.callbacks.onTimeUpdate?.(currentTime, this.duration)
+        }
+      }
+    }
+  }
+
+  /**
+   * Reconstruye completamente el pipeline de audio: cierra el contexto antiguo,
+   * crea uno nuevo, y reanuda la canción desde la posición guardada.
+   * Este es el "nuclear option" para cuando iOS deja el audio en un estado irrecuperable.
+   */
+  private async _reconstructAudioPipeline(
+    wasPlaying: boolean,
+    savedPosition: number,
+    savedSong: Song | null,
+    savedDuration: number
+  ): Promise<void> {
+    // Guardar el estado antes de destruir
+    const position = isFinite(savedPosition) && savedPosition > 0 ? savedPosition : this.pauseTime
+    const song = savedSong || this.currentSong
+    const buffer = this.currentBuffer // Preservar el buffer decodificado
+
+    // Limpiar el source actual sin que dispare onended
+    if (this.currentSource) {
+      this.currentSource.onended = null
+      try { this.currentSource.stop() } catch { /* ya parado */ }
+      this.currentSource = null
+    }
+    this.stopTimeUpdates()
+    this.isPlaying = false
+    this.isCrossfading = false
+    this.crossfadeEngine.forceReset()
+
+    // Cerrar el contexto viejo
+    try {
+      this.audioContext?.close()
+    } catch { /* ignorar */ }
+    this.audioContext = null
+    this.gainNode = null
+
+    // Recrear AudioContext fresco
+    await this.initializeAudioContext()
+
+    // Asignar a variables locales DESPUÉS de initializeAudioContext para que TS
+    // pueda hacer narrowing correctamente (this.audioContext fue reasignado dentro)
+    const freshCtx = this.audioContext as AudioContext | null
+    const freshGain = this.gainNode as GainNode | null
+    if (!freshCtx || !freshGain || !song) {
+      console.error('[WebAudioPlayer] ❌ No se pudo reconstruir el AudioContext')
+      return
     }
 
-    // 4. Emitir un time update fresco para resincronizar la UI
-    if (this.isPlaying && this.duration > 0) {
-      const currentTime = this.getCurrentTime()
-      if (isFinite(currentTime)) {
-        this.callbacks.onTimeUpdate?.(currentTime, this.duration)
+    console.log(`[WebAudioPlayer] 🔄 Pipeline reconstruido. Reanudando "${song.title}" desde ${position.toFixed(1)}s`)
+
+    // Si tenemos el buffer en memoria, reanudar directamente
+    if (buffer && !this.useMediaElementMode) {
+      this.currentBuffer = buffer
+      this.currentSong = song
+      this.duration = savedDuration > 0 ? savedDuration : buffer.duration
+
+      // Crear nuevo source y reanudar desde la posición
+      this.currentSource = freshCtx.createBufferSource()
+      this.currentSource.buffer = buffer
+      this.currentSource.connect(freshGain)
+      this.updateGain()
+
+      this.playStartTime = freshCtx.currentTime
+      this.playOffset = Math.min(position, this.duration - 0.5)
+      this.pauseTime = this.playOffset
+
+      if (wasPlaying) {
+        this.currentSource.start(this.playStartTime, this.playOffset)
+        this.isPlaying = true
+
+        this.currentSource.onended = () => {
+          if (this.suppressOnEnded) {
+            console.log('[WebAudioPlayer] ⚡ onended suprimido (post-reconstrucción)')
+            return
+          }
+          this.isPlaying = false
+          this.callbacks.onEnded?.()
+        }
+
+        this.startTimeUpdates()
+
+        // Notificar a la UI que seguimos reproduciendo
+        this.callbacks.onTimeUpdate?.(this.playOffset, this.duration)
+        console.log('[WebAudioPlayer] ✅ Reproducción reanudada tras reconstrucción')
+      }
+    } else {
+      // No tenemos buffer — forzar que el PlayerContext recargue la canción
+      // Guardar posición para que se restaure
+      this.pauseTime = position
+      this.currentSong = song
+      this.duration = savedDuration
+
+      if (wasPlaying) {
+        // Notificar al PlayerContext vía callback especial que necesitamos recargar
+        console.log('[WebAudioPlayer] ⚠️ Buffer perdido — solicitando recarga al PlayerContext')
+        this.callbacks.onRecoveryNeeded?.(song, position)
       }
     }
   }
@@ -860,8 +1026,12 @@ export class WebAudioPlayer {
       
       this.isPlaying = true
 
-      // Evento de finalización
+      // Evento de finalización — protegido contra disparos falsos post-suspensión iOS
       this.currentSource.onended = () => {
+        if (this.suppressOnEnded) {
+          console.log('[WebAudioPlayer] ⚡ onended suprimido (suspensión iOS detectada)')
+          return
+        }
         this.isPlaying = false
         this.callbacks.onEnded?.()
       }
@@ -1248,6 +1418,10 @@ export class WebAudioPlayer {
     this.isPlaying = true
 
     this.currentSource.onended = () => {
+      if (this.suppressOnEnded) {
+        console.log('[WebAudioPlayer] ⚡ onended suprimido en resume (suspensión iOS)')
+        return
+      }
       this.isPlaying = false
       this.callbacks.onEnded?.()
     }
@@ -1702,9 +1876,13 @@ export class WebAudioPlayer {
         this.currentAnalysis = result.newCurrentAnalysis
         this.duration = result.duration
 
-        // Configurar evento de finalización
+        // Configurar evento de finalización — protegido contra suspensión iOS
         if (this.currentSource) {
           this.currentSource.onended = () => {
+            if (this.suppressOnEnded) {
+              console.log('[WebAudioPlayer] ⚡ onended suprimido en crossfade (suspensión iOS)')
+              return
+            }
             this.isPlaying = false
             this.callbacks.onEnded?.()
           }
@@ -1847,11 +2025,23 @@ export class WebAudioPlayer {
   // UTILIDADES DE TIEMPO
   // ===========================================================================
 
+  private lastTimeUpdateTimestamp = 0
+
   private startTimeUpdates(): void {
     this.stopTimeUpdates()
 
     this.timeUpdateInterval = setInterval(() => {
-      if (this.isBackgrounded) return // Ignorar callbacks acumulados de iOS
+      // En background (pantalla bloqueada), los time updates DEBEN seguir activos
+      // para que AutoMix pueda disparar el crossfade a tiempo. Si los bloqueamos,
+      // la canción A llega al final sin fadeOut y B entra en seco.
+      //
+      // Protección contra timers acumulados: si WKWebView fue suspendido de verdad
+      // (deep background), los setInterval se acumulan y disparan todos de golpe.
+      // Filtramos por intervalo mínimo: si el último update fue hace <200ms, ignorar.
+      const now = Date.now()
+      if (now - this.lastTimeUpdateTimestamp < 200) return
+      this.lastTimeUpdateTimestamp = now
+
       if (this.isPlaying) {
         const currentTime = this.getCurrentTime()
         this.callbacks.onTimeUpdate?.(currentTime, this.duration)
@@ -2159,6 +2349,10 @@ export class WebAudioPlayer {
     this.isSwitchingToWebAudio = false
 
     source.onended = () => {
+      if (this.suppressOnEnded) {
+        console.log('[WebAudioPlayer] ⚡ onended suprimido en switch (suspensión iOS)')
+        return
+      }
       this.isPlaying = false
       this.callbacks.onEnded?.()
     }
@@ -2197,7 +2391,12 @@ export class WebAudioPlayer {
   private _startHtmlFallbackTimeUpdates(): void {
     this._stopHtmlFallbackTimeUpdates()
     this.htmlFallbackTimeInterval = setInterval(() => {
-      if (this.isBackgrounded) return // Ignorar callbacks acumulados de iOS
+      // Misma protección que startTimeUpdates: permitir en background para AutoMix,
+      // pero filtrar ráfagas acumuladas de deep suspension
+      const now = Date.now()
+      if (now - this.lastTimeUpdateTimestamp < 200) return
+      this.lastTimeUpdateTimestamp = now
+
       if (this.htmlFallback && this.isPlaying) {
         const currentTime = this.htmlFallback.currentTime
         if (isFinite(currentTime) && this.duration > 0) {

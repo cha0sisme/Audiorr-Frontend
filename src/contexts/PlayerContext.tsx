@@ -1474,13 +1474,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         // resume() ahora es async para manejar AudioContext suspended en Electron
+        // Si resume falla, intentar recargar la canción completa (recovery post-suspensión iOS)
         webAudioPlayerRef.current.resume()
           .then(() => {
             setIsPlaying(true)
             updateMediaSession(currentSong, true)
           })
           .catch(error => {
-            console.error('[PlayerContext] Error al reanudar WebAudio:', error)
+            console.error('[PlayerContext] Error al reanudar WebAudio, intentando recarga completa:', error)
+            if (currentSong) {
+              playSong(currentSong, true).catch(err =>
+                console.error('[PlayerContext] Error en recarga completa:', err)
+              )
+            }
           })
       }
     } else {
@@ -2716,6 +2722,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // Usar la referencia segura para evitar stale closures
         console.log('[WebAudioPlayer] Canción terminó, llamando next()')
         nextCallbackRef.current?.(true) // true = usar crossfade para transición suave
+      },
+      onRecoveryNeeded: (song, position) => {
+        // El pipeline de audio se reconstruyó tras una suspensión profunda de iOS
+        // pero el buffer se perdió — necesitamos recargar la canción
+        console.log(`[WebAudioPlayer] 🔄 Recovery needed: recargando "${song.title}" desde ${position.toFixed(1)}s`)
+        const streamUrl = navidromeApi.getStreamUrl(song.id, song.path)
+        webAudioPlayerRef.current?.play(song, streamUrl, true).then(() => {
+          if (position > 0) {
+            webAudioPlayerRef.current?.seek(position)
+          }
+          setIsPlaying(true)
+          updateMediaSession(song, true)
+        }).catch(err => {
+          console.error('[WebAudioPlayer] ❌ Error en recovery:', err)
+          setIsPlaying(false)
+        })
       },
       onError: (error) => {
         console.error('[WebAudioPlayer] Error:', error)
