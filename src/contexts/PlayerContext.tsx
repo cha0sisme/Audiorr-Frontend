@@ -3430,25 +3430,45 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                  // Actualizar MediaSession para que el mini-player / Lock Screen reflejen la canción restaurada
                  updateMediaSession(restoredSong, false)
 
-                 // Restaurar audio source
-                 const streamUrl = navidromeApi.getStreamUrl(restoredSong.id, restoredSong.path)
+                 // Restaurar audio source: priorizar caché local (no necesita red ni timeOffset),
+                 // si no, usar timeOffset para evitar Range requests que colapsan el transcodificador.
+                 const cachedBlobUrl = await queuePrefetcher.getCachedBlobUrl(restoredSong.id)
+                 let streamUrl: string
+                 let restoreOffset: number
+
+                 if (cachedBlobUrl) {
+                   // Blob local: archivo completo en memoria, seek directo sin problemas
+                   streamUrl = cachedBlobUrl
+                   restoreOffset = 0
+                   streamOffsetRef.current = 0
+                   console.log(`[PlayerContext] 🚀 Restaurando desde caché local: "${restoredSong.title}"`)
+                 } else {
+                   restoreOffset = state.position > 2 ? Math.floor(state.position) : 0
+                   streamUrl = navidromeApi.getStreamUrl(restoredSong.id, restoredSong.path, restoreOffset > 0 ? restoreOffset : undefined)
+                   streamOffsetRef.current = restoreOffset
+                 }
+
                  if (audioRef.current && (!audioRef.current.src || audioRef.current.src === window.location.href)) {
                      audioRef.current.src = streamUrl
 
                      const onRestoreMetadata = () => {
                        if (audioRef.current) {
-                           audioRef.current.currentTime = state.position
-                           console.log('[PlayerContext] Posición de inicio restaurada:', state.position)
+                           if (cachedBlobUrl) {
+                             // Blob local: seek directo a la posición guardada
+                             audioRef.current.currentTime = state.position
+                           } else if (restoreOffset > 0) {
+                             // Stream recortado con timeOffset: solo ajustar fracción sub-segundo
+                             const subSecondRemainder = state.position - restoreOffset
+                             audioRef.current.currentTime = subSecondRemainder > 0.5 ? subSecondRemainder : 0
+                           } else if (state.position > 0) {
+                             // Posición <= 2s: seek estándar (dato cercano al inicio, sin Range issues)
+                             audioRef.current.currentTime = state.position
+                           }
+                           console.log('[PlayerContext] Posición restaurada:', state.position, cachedBlobUrl ? '(caché local)' : `(timeOffset: ${restoreOffset})`)
                        }
                        audioRef.current?.removeEventListener('loadedmetadata', onRestoreMetadata)
                      }
                      audioRef.current.addEventListener('loadedmetadata', onRestoreMetadata)
-
-                     setTimeout(() => {
-                       if (audioRef.current && Math.abs(audioRef.current.currentTime - state.position) > 1) {
-                           audioRef.current.currentTime = state.position
-                       }
-                     }, 1500)
                  }
             } else if (hasLocalSong && backendIsNewer && !localSongDiffers) {
                 // Misma canción pero posición más reciente del backend → actualizar posición
@@ -3456,7 +3476,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 setProgress(state.position)
                 progressRef.current = state.position
                 if (audioRef.current && !isPlaying) {
-                    audioRef.current.currentTime = state.position
+                    // Ajustar seek relativo al streamOffset actual para evitar Range requests
+                    // en streams transcodificados que ya arrancaron con timeOffset.
+                    const streamTime = state.position - streamOffsetRef.current
+                    if (streamTime >= 0) {
+                      audioRef.current.currentTime = streamTime
+                    } else {
+                      // La nueva posición está antes del inicio del stream actual:
+                      // no hacemos seek (se corregirá al pulsar play, que recarga con timeOffset)
+                      console.log('[PlayerContext] Posición backend antes del stream offset, se corregirá al reanudar')
+                    }
                 }
                 if (state.savedAt) localStorage.setItem(userKey('playerSavedAt'), state.savedAt)
             }
