@@ -77,6 +77,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             print("[Audiorr] AVAudioSession setup failed: \(error)")
         }
 
+        // Configurar buffer del sistema según la ruta actual (por si ya está
+        // conectado a CarPlay al arrancar la app)
+        configureIOBufferForRoute()
+
         // Tell iOS this app is a media player. This enables the "tap album art to open app"
         // behavior on the Dynamic Island and Lock Screen Now Playing widget.
         UIApplication.shared.beginReceivingRemoteControlEvents()
@@ -244,6 +248,39 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         if reason == .oldDeviceUnavailable {
             print("[Audiorr] Audio route lost (Bluetooth/CarPlay/headphones disconnected) → pausing")
             evalJS("window.dispatchEvent(new CustomEvent('_audioRouteLost'))")
+        }
+
+        // Ajustar buffer del sistema según la ruta de audio.
+        // CarPlay wireless (WiFi) introduce jitter que causa buffer underruns con el
+        // ioBufferDuration por defecto (~5-10ms). Aumentar a 40ms absorbe el jitter.
+        // Apps nativas (AVPlayer/AVAudioEngine) hacen esto automáticamente, pero
+        // WebAudio en WKWebView no — necesita ayuda a nivel de AVAudioSession.
+        configureIOBufferForRoute()
+    }
+
+    /// Ajusta `preferredIOBufferDuration` según si la salida actual es CarPlay.
+    /// CarPlay wireless usa WiFi, que introduce jitter variable. Un buffer de 40ms
+    /// (~1920 samples a 48kHz) absorbe ese jitter sin latencia perceptible en música.
+    /// Sin esto, WebAudio en WKWebView sufre underruns constantes → audio entrecortado.
+    private func configureIOBufferForRoute() {
+        let session = AVAudioSession.sharedInstance()
+        let isCarPlay = session.currentRoute.outputs.contains { $0.portType == .carAudio }
+
+        do {
+            if isCarPlay {
+                // Buffer grande para absorber jitter WiFi de CarPlay wireless.
+                // 0.04s es suficiente para WiFi con interferencias moderadas.
+                // No afecta la latencia percibida (es música, no audio interactivo).
+                try session.setPreferredIOBufferDuration(0.04)
+                print("[Audiorr] CarPlay detected — IO buffer set to 0.04s (actual: \(session.ioBufferDuration)s)")
+            } else {
+                // Volver al buffer estándar para altavoz/auriculares.
+                // 0.02s (20ms) es un buen balance latencia/estabilidad.
+                try session.setPreferredIOBufferDuration(0.02)
+                print("[Audiorr] Standard output — IO buffer set to 0.02s (actual: \(session.ioBufferDuration)s)")
+            }
+        } catch {
+            print("[Audiorr] Failed to set IO buffer duration: \(error)")
         }
     }
 
@@ -679,6 +716,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         } catch {
             print("[Audiorr] Failed to reactivate AVAudioSession on foreground: \(error)")
         }
+
+        // Re-aplicar buffer óptimo (iOS puede resetear preferencias tras background)
+        configureIOBufferForRoute()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {}
