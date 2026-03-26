@@ -133,17 +133,26 @@ export default function NowPlayingViewer({
 
 
   // ── Drag-to-dismiss (iOS style) ──────────────────────────────────────────────
-  // Usamos manipulación directa del DOM en lugar de useMotionValue para que
-  // Framer Motion NO mantenga will-change:transform activo permanentemente.
-  // WebKit congela el mapa de hit-testing del layer compuesto cuando hay un
-  // will-change:transform persistente — esto era lo que impedía los taps.
+  // Manipulación directa del DOM para evitar que Framer Motion mantenga
+  // will-change:transform activo (congela hit-testing en WebKit).
+  // La animación de salida es 100% manual; FM exit es instantáneo (solo unmount).
   const motionDivRef = useRef<HTMLDivElement>(null)
   const dragOffsetRef = useRef(0)
   const pointerStartY = useRef(0)
   const pointerStartTime = useRef(0)
   const hasDraggedRef = useRef(false)
+  const isDismissingRef = useRef(false)
+
+  // Helper: limpiar estilos inline del drag
+  const cleanupDragStyles = (el: HTMLElement) => {
+    el.style.transition = ''
+    el.style.transform = ''
+    el.style.willChange = 'auto'
+    el.style.opacity = ''
+  }
 
   const handleHandlePointerDown = (e: React.PointerEvent) => {
+    if (isDismissingRef.current) return
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     pointerStartY.current = e.clientY
@@ -158,7 +167,7 @@ export default function NowPlayingViewer({
   }
 
   const handleHandlePointerMove = (e: React.PointerEvent) => {
-    if (!(e.buttons & 1)) return
+    if (isDismissingRef.current || !(e.buttons & 1)) return
     const delta = Math.max(0, e.clientY - pointerStartY.current)
     if (delta > 4) hasDraggedRef.current = true
     dragOffsetRef.current = delta
@@ -167,43 +176,87 @@ export default function NowPlayingViewer({
   }
 
   const handleHandlePointerUp = () => {
-    const current = dragOffsetRef.current
+    if (isDismissingRef.current) return
+    const offset = dragOffsetRef.current
     const elapsed = Math.max(1, Date.now() - pointerStartTime.current)
-    const velocity = (current / elapsed) * 1000
+    const velocity = (offset / elapsed) * 1000 // px/s
     const el = motionDivRef.current
     dragOffsetRef.current = 0
 
-    if (current > 120 || (velocity > 500 && current > 20)) {
-      // Dismiss: volar fuera de pantalla, luego cerrar
-      if (el) {
-        el.style.transition = 'transform 0.22s cubic-bezier(0.32,0,0.67,0)'
-        el.style.transform = `translateY(${window.innerHeight}px)`
-        setTimeout(() => {
-          // Ocultar antes de limpiar el transform para que Framer Motion
-          // no cause un flash al arrancar el exit desde y=0
-          el.style.opacity = '0'
-          el.style.transition = ''
-          el.style.transform = ''
-          el.style.willChange = 'auto'
-          onClose()
-        }, 220)
-      } else {
+    if (!el) {
+      if (offset > 100) onClose()
+      return
+    }
+
+    const screenH = window.innerHeight
+    // Dismiss si arrastra > 20% de pantalla, o velocidad alta con mínimo recorrido
+    const shouldDismiss = offset > screenH * 0.2 || (velocity > 800 && offset > 30)
+
+    if (shouldDismiss) {
+      isDismissingRef.current = true
+      // Duración proporcional a distancia restante, acotada entre 0.18s–0.38s.
+      // Curva iOS de desaceleración natural (ease-out).
+      const remaining = screenH - offset
+      const speed = Math.max(velocity, 1200)
+      const duration = Math.max(0.18, Math.min(0.38, remaining / speed))
+
+      el.style.transition = `transform ${duration}s cubic-bezier(0.32, 0.72, 0, 1)`
+      el.style.transform = `translateY(${screenH}px)`
+
+      let fired = false
+      const finish = () => {
+        if (fired) return
+        fired = true
+        // Ocultar antes de que FM intente su exit (que es instantáneo)
+        el.style.opacity = '0'
+        cleanupDragStyles(el)
+        isDismissingRef.current = false
         onClose()
       }
+      el.addEventListener('transitionend', finish, { once: true })
+      // Safety: si transitionend no dispara (edge case iOS), cerrar igualmente
+      setTimeout(finish, duration * 1000 + 60)
     } else {
-      // Snap back: rebotar hacia 0, luego limpiar transform
-      if (el) {
-        el.style.transition = 'transform 0.45s cubic-bezier(0.34,1.56,0.64,1)'
-        el.style.transform = 'translateY(0)'
-        setTimeout(() => {
-          el.style.transition = ''
-          el.style.transform = ''
-          el.style.willChange = 'auto'
-        }, 450)
+      // Snap back — curva iOS decelerate-ease sin overshoot
+      const snapDuration = Math.max(0.22, Math.min(0.38, offset / 600))
+      el.style.transition = `transform ${snapDuration}s cubic-bezier(0.25, 1, 0.5, 1)`
+      el.style.transform = 'translateY(0)'
+
+      let fired = false
+      const finish = () => {
+        if (fired) return
+        fired = true
+        cleanupDragStyles(el)
       }
+      el.addEventListener('transitionend', finish, { once: true })
+      setTimeout(finish, snapDuration * 1000 + 60)
     }
   }
 
+  // Pointer cancel (gesto del sistema, notificación, etc.) → siempre snap back
+  const handleHandlePointerCancel = () => {
+    if (isDismissingRef.current) return
+    const el = motionDivRef.current
+    dragOffsetRef.current = 0
+    if (el) {
+      el.style.transition = 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)'
+      el.style.transform = 'translateY(0)'
+      let fired = false
+      const finish = () => {
+        if (fired) return
+        fired = true
+        cleanupDragStyles(el)
+      }
+      el.addEventListener('transitionend', finish, { once: true })
+      setTimeout(finish, 360)
+    }
+  }
+
+
+  // Reset dismiss state cuando se abre el viewer
+  useEffect(() => {
+    if (isOpen) isDismissingRef.current = false
+  }, [isOpen])
 
   // ── Fetch lyrics ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -336,7 +389,7 @@ export default function NowPlayingViewer({
           ref={motionDivRef}
           initial={{ y: '100%' }}
           animate={{ y: 0 }}
-          exit={{ y: '100%' }}
+          exit={{ y: '100%', opacity: 0, transition: { duration: 0 } }}
           transition={{ type: 'spring', damping: 36, stiffness: 420 }}
           style={{ backgroundColor: '#0a0a0a' }}
           className="fixed inset-0 z-[9995]"
@@ -418,7 +471,7 @@ export default function NowPlayingViewer({
                 onPointerDown={handleHandlePointerDown}
                 onPointerMove={handleHandlePointerMove}
                 onPointerUp={handleHandlePointerUp}
-                onPointerCancel={handleHandlePointerUp}
+                onPointerCancel={handleHandlePointerCancel}
               >
                 {/* Handle pill */}
                 <div className="flex justify-center pt-2 pb-1 select-none">
@@ -761,7 +814,25 @@ export default function NowPlayingViewer({
               y={0}
               song={currentSong}
               onClose={() => setShowMenu(false)}
-              onBeforeNavigate={onClose}
+              onBeforeNavigate={() => {
+                const el = motionDivRef.current
+                if (el) {
+                  el.style.transition = 'transform 0.32s cubic-bezier(0.32, 0.72, 0, 1)'
+                  el.style.transform = `translateY(${window.innerHeight}px)`
+                  let fired = false
+                  const finish = () => {
+                    if (fired) return
+                    fired = true
+                    el.style.opacity = '0'
+                    cleanupDragStyles(el)
+                    onClose()
+                  }
+                  el.addEventListener('transitionend', finish, { once: true })
+                  setTimeout(finish, 380)
+                } else {
+                  onClose()
+                }
+              }}
               showGoToArtist={!!currentSong.artist}
               showGoToAlbum={!!currentSong.albumId}
               showGoToSong={true}
