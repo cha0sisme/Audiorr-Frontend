@@ -3137,8 +3137,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     nextCallbackRef.current = next
   })
 
-  // Efecto: Escuchar acciones de medios del sistema operativo
+  // Efecto: Escuchar acciones de medios del sistema operativo.
+  // En iOS nativo, NO registrar action handlers aquí: WKWebView internamente
+  // reemplaza los targets de MPRemoteCommandCenter registrados por AudioBridgePlugin,
+  // causando que los controles del lock screen / Dynamic Island dejen de funcionar.
+  // Los comandos remotos en iOS nativo se manejan exclusivamente por el plugin nativo
+  // (MPRemoteCommandCenter → notifyListeners → useAudioBridge).
   useEffect(() => {
+    if (IS_NATIVE) return
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
       return
     }
