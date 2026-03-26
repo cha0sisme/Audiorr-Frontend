@@ -1551,26 +1551,27 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-full px-4 py-4 md:px-8 md:py-8 max-w-6xl mx-auto">
-      {/* Tab bar */}
-      <div className="mb-8 border-b border-gray-200 dark:border-gray-700 overflow-x-auto scrollbar-hide">
-        <nav className="-mb-px flex gap-4 md:gap-6 min-w-max pb-1" aria-label="Tabs">
+      {/* Tab bar — iOS segmented control style */}
+      <div className="mb-8">
+        <div className="bg-gray-100 dark:bg-gray-800/80 rounded-xl p-1 grid grid-cols-5 gap-0.5">
           {(['stats', 'media', 'editorial', 'users', 'playlists'] as const).map(t => {
-            const labels: Record<string, string> = { stats: 'General', media: 'Contenido', editorial: 'Editorial', users: 'Usuarios', playlists: 'Playlists de Audiorr' }
+            const labels: Record<string, string> = { stats: 'General', media: 'Contenido', editorial: 'Editorial', users: 'Usuarios', playlists: 'Playlists' }
+            const isActive = activeTab === t
             return (
               <button
                 key={t}
                 onClick={() => navigate(`/admin/${t}`)}
-                className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-                  activeTab === t
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300 dark:hover:border-gray-600'
+                className={`relative rounded-lg py-2 px-1 text-[13px] font-semibold transition-all duration-200 text-center truncate ${
+                  isActive
+                    ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                    : 'text-gray-500 dark:text-gray-400 active:bg-gray-200 dark:active:bg-gray-700/50'
                 }`}
               >
                 {labels[t]}
               </button>
             )
           })}
-        </nav>
+        </div>
       </div>
 
       {activeTab === 'media' ? (

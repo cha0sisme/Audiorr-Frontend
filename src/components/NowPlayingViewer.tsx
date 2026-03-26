@@ -741,11 +741,7 @@ export default function NowPlayingViewer({
                   background: 'linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.45) 100px)',
                 }}
               >
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="flex-1 h-px bg-white/10" />
-                  <span className="text-white/25 text-[10px] font-semibold uppercase tracking-[0.18em]">Letras</span>
-                  <div className="flex-1 h-px bg-white/10" />
-                </div>
+                <div className="mb-4" />
                 {loadingLyrics ? (
                   <p className="text-white/35 text-sm text-center py-8">Cargando letras…</p>
                 ) : (
@@ -758,9 +754,18 @@ export default function NowPlayingViewer({
                         clearTimeout(lyricsScrollTimer.current)
                         lyricsScrollTimer.current = setTimeout(() => {
                           userScrollingLyricsRef.current = false
+                          // Scroll back to the current active line
+                          const box = lyricsBoxRef.current
+                          const lineEl = lineRefs.current[currentIndexRef.current]
+                          if (box && lineEl) {
+                            const boxRect = box.getBoundingClientRect()
+                            const lineRect = lineEl.getBoundingClientRect()
+                            const offset = lineRect.top - boxRect.top + box.scrollTop - box.clientHeight / 2 + lineEl.clientHeight / 2
+                            box.scrollTo({ top: offset, behavior: 'smooth' })
+                          }
                           // Give a small extra window before allowing seek again
                           setTimeout(() => { lyricsJustScrolledRef.current = false }, 400)
-                        }, 1500)
+                        }, 4000)
                       }}
                       style={{
                         height: '100%',
