@@ -219,54 +219,53 @@ public class AudioBridgePlugin: CAPPlugin, CAPBridgedPlugin {
 
         let cc = MPRemoteCommandCenter.shared()
 
+        // Los comandos remotos llegan a JS por DOS caminos:
+        //   A) Estos targets nativos de MPRemoteCommandCenter
+        //   B) WebKit intercepta el mismo MPRemoteCommandCenter y enruta a
+        //      navigator.mediaSession action handlers (setActionHandler)
+        //
+        // Si notificamos a JS desde ambos, se produce un double-toggle:
+        // handler nativo → togglePlayPause (pausa) + handler WebKit →
+        // togglePlayPause (resume) = la pausa dura 1ms.
+        //
+        // Solución: estos handlers nativos solo hacen trabajo nativo
+        // (ensureAudioSessionActive, playbackState inmediato). La acción JS
+        // llega exclusivamente por navigator.mediaSession en PlayerContext.tsx.
+
         cc.playCommand.isEnabled = true
         cc.playCommand.addTarget { [weak self] _ in
             self?.ensureAudioSessionActive()
-            // Marcar como .playing inmediatamente para que iOS no retire el widget
-            // mientras JS procesa el comando (WKWebView puede tener latencia)
             MPNowPlayingInfoCenter.default().playbackState = .playing
-            self?.notifyListeners("remoteCommand", data: ["command": "play"])
             return .success
         }
 
         cc.pauseCommand.isEnabled = true
-        cc.pauseCommand.addTarget { [weak self] _ in
+        cc.pauseCommand.addTarget { _ in
             MPNowPlayingInfoCenter.default().playbackState = .paused
-            self?.notifyListeners("remoteCommand", data: ["command": "pause"])
             return .success
         }
 
         cc.togglePlayPauseCommand.isEnabled = true
         cc.togglePlayPauseCommand.addTarget { [weak self] _ in
             self?.ensureAudioSessionActive()
-            // No cambiar playbackState aquí (no sabemos si va a play o pause).
-            // JS lo actualizará via updatePlaybackState una vez procese el toggle.
-            self?.notifyListeners("remoteCommand", data: ["command": "togglePlayPause"])
             return .success
         }
 
         cc.nextTrackCommand.isEnabled = true
         cc.nextTrackCommand.addTarget { [weak self] _ in
             self?.ensureAudioSessionActive()
-            self?.notifyListeners("remoteCommand", data: ["command": "next"])
             return .success
         }
 
         cc.previousTrackCommand.isEnabled = true
         cc.previousTrackCommand.addTarget { [weak self] _ in
             self?.ensureAudioSessionActive()
-            self?.notifyListeners("remoteCommand", data: ["command": "previous"])
             return .success
         }
 
         cc.changePlaybackPositionCommand.isEnabled = true
-        cc.changePlaybackPositionCommand.addTarget { [weak self] event in
-            if let e = event as? MPChangePlaybackPositionCommandEvent {
-                self?.notifyListeners("remoteCommand", data: [
-                    "command":  "seek",
-                    "position": e.positionTime,
-                ])
-            }
+        cc.changePlaybackPositionCommand.addTarget { _ in
+            // Seek llega por navigator.mediaSession.setActionHandler('seekto')
             return .success
         }
     }
