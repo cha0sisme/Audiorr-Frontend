@@ -213,7 +213,9 @@ export default function NowPlayingViewer({
         // estilos antes de onClose(). FM unmount se encarga del resto.
         // Si limpiáramos aquí, habría un frame con el viewer visible → flash.
         el.style.opacity = '0'
-        isDismissingRef.current = false
+        // NO resetear isDismissingRef aquí — se resetea en el useEffect
+        // cuando isOpen vuelve a true. Mantenerlo true evita que
+        // onAnimationComplete limpie estilos durante el exit (causaría flash).
         onClose()
       }
       el.addEventListener('transitionend', finish, { once: true })
@@ -399,7 +401,10 @@ export default function NowPlayingViewer({
           onAnimationComplete={() => {
             // Framer Motion deja transform:translateY(0px) + will-change:transform
             // al terminar la animación de apertura. Esto congela el hit-testing de
-            // WebKit. Limpiamos todo (incluyendo residuos del dismiss anterior).
+            // WebKit. Limpiamos todo — pero solo en la animación de ENTRADA.
+            // En la de salida (dismiss), limpiar estilos haría visible el elemento
+            // por un frame antes del unmount → flash.
+            if (isDismissingRef.current) return
             const el = motionDivRef.current
             if (el) cleanupDragStyles(el)
           }}
