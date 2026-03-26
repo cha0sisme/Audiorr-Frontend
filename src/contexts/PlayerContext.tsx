@@ -3137,14 +3137,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     nextCallbackRef.current = next
   })
 
-  // Efecto: Escuchar acciones de medios del sistema operativo.
-  // En iOS nativo, NO registrar action handlers aquí: WKWebView internamente
-  // reemplaza los targets de MPRemoteCommandCenter registrados por AudioBridgePlugin,
-  // causando que los controles del lock screen / Dynamic Island dejen de funcionar.
-  // Los comandos remotos en iOS nativo se manejan exclusivamente por el plugin nativo
-  // (MPRemoteCommandCenter → notifyListeners → useAudioBridge).
+  // Efecto: Escuchar acciones de medios del sistema operativo (lock screen,
+  // Dynamic Island, Control Center, auriculares).
+  // En iOS nativo (WKWebView), setActionHandler DEBE estar registrado para que
+  // WebKit mantenga la media session activa y setPositionState funcione (barra
+  // de progreso en lock screen). WebKit internamente toma control de
+  // MPRemoteCommandCenter cuando hay action handlers registrados, así que estos
+  // handlers son el camino principal para recibir comandos remotos.
+  //
+  // Importante: usamos refs en los handlers para evitar tener progress/duration
+  // en las dependencias del efecto, lo que causaba churn constante (re-registro
+  // de handlers cada frame) y ventanas donde los handlers estaban en null.
   useEffect(() => {
-    if (IS_NATIVE) return
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
       return
     }
@@ -3153,43 +3157,46 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       [
         'play',
         () => {
-          if (audioRef.current?.paused) {
-            togglePlayPause()
-          }
+          console.log('[MediaSession] play action received')
+          togglePlayPause()
         },
       ],
       [
         'pause',
         () => {
-          if (!audioRef.current?.paused) {
-            togglePlayPause()
-          }
+          console.log('[MediaSession] pause action received')
+          togglePlayPause()
         },
       ],
-      ['previoustrack', () => previous()],
-      ['nexttrack', () => next()],
+      ['previoustrack', () => {
+        console.log('[MediaSession] previoustrack action received')
+        previous()
+      }],
+      ['nexttrack', () => {
+        console.log('[MediaSession] nexttrack action received')
+        nextCallbackRef.current?.()
+      }],
       [
         'seekbackward',
         details => {
-          if (!audioRef.current) return
           const offset = details?.seekOffset ?? 10
-          seek(Math.max(0, progress - offset))
+          seek(Math.max(0, progressRef.current - offset))
         },
       ],
       [
         'seekforward',
         details => {
-          if (!audioRef.current) return
           const offset = details?.seekOffset ?? 10
-          seek(Math.min(duration, progress + offset))
+          const dur = currentSong?.duration ?? Infinity
+          seek(Math.min(dur, progressRef.current + offset))
         },
       ],
       [
         'seekto',
         details => {
-          if (!audioRef.current) return
           if (details?.seekTime != null) {
-            seek(Math.min(duration, Math.max(0, details.seekTime)))
+            const dur = currentSong?.duration ?? Infinity
+            seek(Math.min(dur, Math.max(0, details.seekTime)))
           }
         },
       ],
@@ -3212,7 +3219,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [togglePlayPause, previous, next, seek, progress, duration])
+  // Dependencias estables: togglePlayPause, previous, seek son useCallback con
+  // deps estables. nextCallbackRef y progressRef son refs (nunca cambian).
+  // currentSong?.duration cambia solo al cambiar de canción.
+  // NO incluir progress ni duration como valores directos — usar refs.
+  }, [togglePlayPause, previous, seek, currentSong?.duration])
 
   // Efecto: Actualizar Media Session cuando cambie la canción o el estado de reproducción
   useEffect(() => {
