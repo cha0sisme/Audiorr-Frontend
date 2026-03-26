@@ -9,13 +9,31 @@ export function useNativeNowPlaying() {
   const playerState    = usePlayerState()
   const playerProgress = usePlayerProgress()
   const playerActions  = usePlayerActions()
-  const { isConnected, activeDeviceId, currentDeviceId, devices } = useConnect()
+  const { isConnected, activeDeviceId, currentDeviceId, devices, remotePlaybackState } = useConnect()
   const { isDark } = useTheme()
+
+  // --- Estado efectivo: remoto vs local (misma lógica que NowPlayingBar) ---
+  const isRemote = isConnected && !!activeDeviceId && activeDeviceId !== currentDeviceId
+
+  // Buscar la Song completa en el queue remoto para tener coverArt, etc.
+  const remoteSong = isRemote && remotePlaybackState
+    ? remotePlaybackState.queue?.find(s => s.id === remotePlaybackState.trackId) ?? null
+    : null
+  const effectiveSong = isRemote
+    ? (remoteSong ?? remotePlaybackState?.metadata ?? null)
+    : playerState.currentSong
+  const effectiveProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
+  const effectiveDuration = isRemote
+    ? (remoteSong?.duration || remotePlaybackState?.metadata?.duration || 0)
+    : playerProgress.duration
+  const effectivePlaying = isRemote ? (remotePlaybackState?.playing ?? false) : playerState.isPlaying
+
+  // ID estable para detectar cambio de canción
+  const effectiveSongId = isRemote ? (remotePlaybackState?.trackId || null) : (playerState.currentSong?.id || null)
 
   // AutoMix tiene prioridad sobre el indicador de dispositivo remoto
   const getSubtitle = (): string | undefined => {
     if (playerState.isCrossfading) return 'AutoMix'
-    const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
     if (isRemote) {
       const activeDevice = devices.find(d => d.id === activeDeviceId)
       if (activeDevice) return `Reproduciendo en ${activeDevice.name}`
@@ -24,115 +42,92 @@ export function useNativeNowPlaying() {
   }
 
   // Ref para acceder siempre a las últimas acciones del player desde los listeners nativos.
-  // Sin esto, los listeners capturan una closure vieja y togglePlayPause usa
-  // shouldUseWebAudio() con el valor del mount inicial (HTMLAudio), no el actual.
   const playerActionsRef = useRef(playerActions)
   useEffect(() => { playerActionsRef.current = playerActions }, [playerActions])
 
-  const progressRef = useRef(playerProgress.progress)
-  useEffect(() => { progressRef.current = playerProgress.progress }, [playerProgress.progress])
+  const progressRef = useRef(effectiveProgress)
+  useEffect(() => { progressRef.current = effectiveProgress }, [effectiveProgress])
 
-  // Actualizar cuando cambia la canción
-  useEffect(() => {
-    if (!isNative) return
-
-    const song = playerState.currentSong
-    if (!song) {
-      nativeNowPlaying.hide()
-      return
-    }
-
-    const artistText = Array.isArray(song.artist)
-      ? (song.artist as unknown as { name: string }[]).map(a => a.name).join(', ')
-      : String(song.artist || '')
-
-    const rawCoverUrl = song.coverArt ? navidromeApi.getCoverUrl(song.coverArt, 300) : ''
-    nativeNowPlaying.update({
-      title:      song.title  || '',
-      artist:     artistText,
-      artworkUrl: rawCoverUrl || undefined,
-      isPlaying:  playerState.isPlaying,
-      progress:   progressRef.current,
-      duration:   song.duration ?? 1,
-      isVisible:  true,
-      subtitle:   getSubtitle(),
-      isDark,
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNative, playerState.currentSong?.id])
-
-  // Helper para obtener artworkUrl y artistText de la canción actual
-  const getSongUpdateFields = (song: typeof playerState.currentSong) => {
+  // Helper para extraer artworkUrl y artistText de cualquier canción/metadata
+  const getUpdateFields = (song: typeof effectiveSong) => {
     if (!song) return { artworkUrl: undefined, artistText: '' }
     const artistText = Array.isArray(song.artist)
       ? (song.artist as unknown as { name: string }[]).map(a => a.name).join(', ')
       : String(song.artist || '')
-    const rawUrl = song.coverArt ? navidromeApi.getCoverUrl(song.coverArt, 300) : ''
-    const artworkUrl = rawUrl || undefined  // evitar string vacío si config aún no cargó
+    const coverArt = 'coverArt' in song ? (song as { coverArt?: string }).coverArt : undefined
+    const rawUrl = coverArt ? navidromeApi.getCoverUrl(coverArt, 300) : ''
+    const artworkUrl = rawUrl || undefined
     return { artworkUrl, artistText }
   }
 
-  // Actualizar play/pause
-  useEffect(() => {
-    if (!isNative || !playerState.currentSong) return
-    const { artworkUrl, artistText } = getSongUpdateFields(playerState.currentSong)
+  // Helper centralizado para enviar update al mini-player nativo
+  const sendUpdate = (overrides?: { isDark?: boolean }) => {
+    if (!effectiveSong) return
+    const { artworkUrl, artistText } = getUpdateFields(effectiveSong)
     nativeNowPlaying.update({
-      title:      playerState.currentSong.title || '',
+      title:      effectiveSong.title || '',
       artist:     artistText,
       artworkUrl,
-      isPlaying:  playerState.isPlaying,
+      isPlaying:  effectivePlaying,
       progress:   progressRef.current,
-      duration:   playerState.currentSong.duration ?? 1,
+      duration:   effectiveDuration || 1,
       isVisible:  true,
       subtitle:   getSubtitle(),
-      isDark,
+      isDark:     overrides?.isDark ?? isDark,
     })
+  }
+
+  // Actualizar cuando cambia la canción (local o remota)
+  useEffect(() => {
+    if (!isNative) return
+    if (!effectiveSong) {
+      nativeNowPlaying.hide()
+      return
+    }
+    sendUpdate()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
+  }, [isNative, effectiveSongId])
+
+  // Actualizar play/pause
+  useEffect(() => {
+    if (!isNative || !effectiveSong) return
+    sendUpdate()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, effectivePlaying, effectiveSongId])
 
   // Sync progreso periódico
   useEffect(() => {
-    if (!isNative || !playerState.isPlaying || !playerState.currentSong) return
+    if (!isNative || !effectivePlaying || !effectiveSong) return
     const timer = setInterval(() => {
-      if (!playerState.currentSong) return
-      const { artworkUrl, artistText } = getSongUpdateFields(playerState.currentSong)
-      nativeNowPlaying.update({
-        title:      playerState.currentSong.title || '',
-        artist:     artistText,
-        artworkUrl,
-        isPlaying:  true,
-        progress:   progressRef.current,
-        duration:   playerState.currentSong.duration ?? 1,
-        isVisible:  true,
-        subtitle:   getSubtitle(),
-        isDark,
-      })
+      sendUpdate()
     }, 2000)
     return () => clearInterval(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
+  }, [isNative, effectivePlaying, effectiveSongId])
 
   // Actualizar subtitle cuando cambia AutoMix o dispositivo activo
   useEffect(() => {
-    if (!isNative || !playerState.currentSong) return
-    const { artworkUrl, artistText } = getSongUpdateFields(playerState.currentSong)
-    nativeNowPlaying.update({
-      title:      playerState.currentSong.title || '',
-      artist:     artistText,
-      artworkUrl,
-      isPlaying:  playerState.isPlaying,
-      progress:   progressRef.current,
-      duration:   playerState.currentSong.duration ?? 1,
-      isVisible:  true,
-      subtitle:   getSubtitle(),
-      isDark,
-    })
+    if (!isNative || !effectiveSong) return
+    sendUpdate()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, playerState.isCrossfading, activeDeviceId, isDark])
 
+  // Actualizar cuando cambia el estado remoto (posición, metadata, etc.)
+  useEffect(() => {
+    if (!isNative || !isRemote || !effectiveSong) return
+    sendUpdate()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative, isRemote, remotePlaybackState?.position, remotePlaybackState?.trackId])
+
   // Refs para acceder al estado actual desde el listener de _nativeReady
-  const playerStateRef = useRef(playerState)
-  useEffect(() => { playerStateRef.current = playerState }, [playerState])
+  const effectiveSongRef = useRef(effectiveSong)
+  useEffect(() => { effectiveSongRef.current = effectiveSong }, [effectiveSong])
+
+  const effectivePlayingRef = useRef(effectivePlaying)
+  useEffect(() => { effectivePlayingRef.current = effectivePlaying }, [effectivePlaying])
+
+  const effectiveDurationRef = useRef(effectiveDuration)
+  useEffect(() => { effectiveDurationRef.current = effectiveDuration }, [effectiveDuration])
 
   const isDarkRef = useRef(isDark)
   useEffect(() => { isDarkRef.current = isDark }, [isDark])
@@ -144,16 +139,16 @@ export function useNativeNowPlaying() {
     if (!isNative) return
 
     const handleNativeReady = () => {
-      const song = playerStateRef.current.currentSong
+      const song = effectiveSongRef.current
       if (!song) return
-      const { artworkUrl, artistText } = getSongUpdateFields(song)
+      const { artworkUrl, artistText } = getUpdateFields(song)
       nativeNowPlaying.update({
         title:      song.title || '',
         artist:     artistText,
         artworkUrl,
-        isPlaying:  playerStateRef.current.isPlaying,
+        isPlaying:  effectivePlayingRef.current,
         progress:   progressRef.current,
-        duration:   song.duration ?? 1,
+        duration:   effectiveDurationRef.current || 1,
         isVisible:  true,
         subtitle:   getSubtitle(),
         isDark:     isDarkRef.current,
