@@ -16,6 +16,7 @@ import ServerConnection from './components/ServerConnection'
 import { navidromeApi } from './services/navidromeApi'
 import { PinnedPlaylistsProvider } from './contexts/PinnedPlaylistsContext'
 import { ConnectProvider } from './contexts/ConnectContext'
+import { BackendAvailableProvider } from './contexts/BackendAvailableContext'
 import Spinner from './components/Spinner'
 import NavigationStack from './components/NavigationStack'
 import { useMemoryCleanup } from './hooks/useMemoryCleanup'
@@ -41,17 +42,19 @@ function App() {
     <ThemeProvider>
       <HeroPresenceProvider>
         <Router>
-          <SettingsProvider>
-            <PlayerProvider>
-              <ConnectProvider>
-                <PinnedPlaylistsProvider>
-                  <SidebarProvider>
-                    <MainApp />
-                  </SidebarProvider>
-                </PinnedPlaylistsProvider>
-              </ConnectProvider>
-            </PlayerProvider>
-          </SettingsProvider>
+          <BackendAvailableProvider>
+            <SettingsProvider>
+              <PlayerProvider>
+                <ConnectProvider>
+                  <PinnedPlaylistsProvider>
+                    <SidebarProvider>
+                      <MainApp />
+                    </SidebarProvider>
+                  </PinnedPlaylistsProvider>
+                </ConnectProvider>
+              </PlayerProvider>
+            </SettingsProvider>
+          </BackendAvailableProvider>
         </Router>
       </HeroPresenceProvider>
     </ThemeProvider>

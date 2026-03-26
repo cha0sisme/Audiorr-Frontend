@@ -11,6 +11,7 @@ import AlbumCover from './AlbumCover'
 import Canvas from './Canvas'
 
 import { DevicePicker } from './DevicePicker'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 const QueueIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -93,6 +94,7 @@ export default function NowPlayingViewer({
   const [showMenu, setShowMenu] = useState(false)
 
   const { isConnected, activeDeviceId, currentDeviceId, sendRemoteCommand, remotePlaybackState, devices } = useConnect()
+  const backendAvailable = useBackendAvailable()
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
   const activeDevice = devices.find(d => d.id === activeDeviceId)
 
@@ -207,9 +209,10 @@ export default function NowPlayingViewer({
       const finish = () => {
         if (fired) return
         fired = true
-        // Ocultar antes de que FM intente su exit (que es instantáneo)
+        // Mantener el elemento oculto (offscreen + invisible) — NO limpiar
+        // estilos antes de onClose(). FM unmount se encarga del resto.
+        // Si limpiáramos aquí, habría un frame con el viewer visible → flash.
         el.style.opacity = '0'
-        cleanupDragStyles(el)
         isDismissingRef.current = false
         onClose()
       }
@@ -396,12 +399,9 @@ export default function NowPlayingViewer({
           onAnimationComplete={() => {
             // Framer Motion deja transform:translateY(0px) + will-change:transform
             // al terminar la animación de apertura. Esto congela el hit-testing de
-            // WebKit. Limpiamos ambos para que los taps funcionen inmediatamente.
+            // WebKit. Limpiamos todo (incluyendo residuos del dismiss anterior).
             const el = motionDivRef.current
-            if (el) {
-              el.style.transform = ''
-              el.style.willChange = 'auto'
-            }
+            if (el) cleanupDragStyles(el)
           }}
         >
           {/* ── Fondos visuales — FUERA del scroll container para evitar stacking
@@ -724,7 +724,7 @@ export default function NowPlayingViewer({
                   </button>
                 ) : <div className="w-9" />}
 
-                <DevicePicker align="up" theme="player" buttonClassName="p-2 text-white/40 hover:text-white/65" iconClassName="w-5 h-5" />
+                {backendAvailable && <DevicePicker align="up" theme="player" buttonClassName="p-2 text-white/40 hover:text-white/65" iconClassName="w-5 h-5" />}
               </div>
             </div>
             {/* ── fin Section 1 ── */}

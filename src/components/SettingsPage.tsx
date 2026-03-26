@@ -7,6 +7,7 @@ import { PaintBrushIcon } from '@heroicons/react/24/outline'
 import { CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline'
 import { SpeakerWaveIcon } from '@heroicons/react/24/outline'
 import { useAudioCache } from '../hooks/useAudioCache'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 const LastFmIcon = ({ className }: { className?: string }) => (
   <svg
@@ -158,6 +159,7 @@ const OfflineIcon = ({ className }: { className?: string }) => (
 export default function SettingsPage() {
   const { settings } = useSettings()
   const audioCache = useAudioCache()
+  const backendAvailable = useBackendAvailable()
   const [lastfmApiKey, setLastfmApiKey] = useState('')
   const [lastfmHasSecret, setLastfmHasSecret] = useState(false)
   
@@ -173,6 +175,7 @@ export default function SettingsPage() {
   const [scrobbleStatus, setScrobbleStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
 
   useEffect(() => {
+    if (!backendAvailable) return
     const loadLastFmConfig = async () => {
       try {
         const config = await backendApi.getLastFmConfig()
@@ -194,7 +197,7 @@ export default function SettingsPage() {
     }
 
     loadLastFmConfig()
-  }, [])
+  }, [backendAvailable])
 
   const handleLastFmApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLastfmApiKey(e.target.value)
@@ -275,8 +278,8 @@ export default function SettingsPage() {
         </div>
       </SettingCard>
 
-      {/* Automix */}
-      <SettingCard
+      {/* Automix (requiere backend) */}
+      {backendAvailable && <SettingCard
         icon={<DjIcon className="w-8 h-8" />}
         title="Automix"
         description="Controla cómo se mezclan las canciones"
@@ -290,9 +293,10 @@ export default function SettingsPage() {
           </div>
           <AutomixModeSelector />
         </div>
-      </SettingCard>
+      </SettingCard>}
 
-      {/* Motor de Audio */}
+      {/* Motor de Audio (requiere backend para análisis) */}
+      {backendAvailable &&
       <SettingCard
         icon={<SpeakerWaveIcon className="w-8 h-8" />}
         title="Motor de Audio"
@@ -362,10 +366,10 @@ export default function SettingsPage() {
             </div>
           </div>
         )}
-      </SettingCard>
+      </SettingCard>}
 
-      {/* Last.fm - API & Scrobbling */}
-      <SettingCard
+      {/* Last.fm - API & Scrobbling (requiere backend) */}
+      {backendAvailable && <SettingCard
         icon={<LastFmIcon className="w-8 h-8" />}
         title="Last.fm"
         description="Integración con Last.fm para recomendaciones y scrobbling"
@@ -494,7 +498,7 @@ export default function SettingsPage() {
             )}
           </div>
         </div>
-      </SettingCard>
+      </SettingCard>}
 
       {/* Caché Offline */}
       {audioCache.isAvailable && (

@@ -20,6 +20,7 @@ import { useDominantColors } from '../hooks/useDominantColors'
 import { SongTable } from './SongTable'
 import { API_BASE_URL } from '../services/backendApi'
 import { useConnect } from '../hooks/useConnect'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 type PlaylistDetails = {
   id: string
@@ -46,6 +47,7 @@ export default function PlaylistDetail() {
   const playerState = usePlayerState()
   const playerActions = usePlayerActions()
   const { isConnected, activeDeviceId, currentDeviceId, remotePlaybackState, sendRemoteCommand } = useConnect()
+  const backendAvailable = useBackendAvailable()
   
   // Utilizar metadata pasada por el router para carga instantánea
   const initialPlaylist = useMemo(() => {
@@ -124,7 +126,7 @@ export default function PlaylistDetail() {
 
 
   const timeQuery = useMemo(() => Math.floor(Date.now() / 300000), [])
-  const generatedCoverUrl = id ? `${API_BASE_URL}/api/playlists/${id}/cover.png?_t=${timeQuery}` : null
+  const generatedCoverUrl = id && backendAvailable ? `${API_BASE_URL}/api/playlists/${id}/cover.png?_t=${timeQuery}` : null
   const isGeneratingCover = false
 
   const coverImageUrl =
@@ -308,12 +310,12 @@ export default function PlaylistDetail() {
   //   2. Si no está, consulta la DB del backend
   //   Si todas las canciones están analizadas → botón "Reproducir SmartMix" aparece solo
   useEffect(() => {
-    if (!id || songs.length === 0) return
+    if (!backendAvailable || !id || songs.length === 0) return
     const key = `${id}_${songs.length}`
     if (autoCheckCalledRef.current === key) return
     autoCheckCalledRef.current = key
     playerActions.autoCheckSmartMix?.(id, songs)
-  }, [id, songs, playerActions])
+  }, [id, songs, playerActions, backendAvailable])
 
 
 
@@ -499,7 +501,8 @@ export default function PlaylistDetail() {
           )}
         </button>
 
-        {/* Botón SmartMix — ocupa el espacio restante */}
+        {/* Botón SmartMix — ocupa el espacio restante (requiere backend) */}
+        {backendAvailable && (
         <button
           onClick={handleSmartMixClick}
           disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
@@ -547,6 +550,7 @@ export default function PlaylistDetail() {
             {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && 'Reintentar'}
           </span>
         </button>
+        )}
 
         {/* Botón anclar */}
         {id && (

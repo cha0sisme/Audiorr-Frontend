@@ -13,6 +13,7 @@ import CreatePlaylistModal from './CreatePlaylistModal'
 import { PlusIcon } from '@heroicons/react/24/solid'
 import DailyMixSection from './DailyMixSection'
 import HorizontalScrollSection from './HorizontalScrollSection'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 type PlaylistSection = {
   id: string
@@ -152,17 +153,20 @@ export default function PlaylistsPage() {
   const { pinnedPlaylists, togglePinnedPlaylist, isPinned } = usePinnedPlaylists()
   const navidromeConfig = navidromeApi.getConfig()
   const navigate = useNavigate()
+  const backendAvailable = useBackendAvailable()
 
   const isPlaying = playerState.isPlaying
   const currentSource = playerState.currentSource
 
   const fetchData = useCallback(async () => {
     try {
-      const [fetchedPlaylists, fetchedSyncs, fetchedSections] = await Promise.all([
-        navidromeApi.getPlaylists(),
-        backendApi.listSyncs().catch(() => [] as SyncedPlaylist[]),
-        backendApi.getGlobalSetting<PlaylistSection[]>('homepage_layout').catch(() => null)
-      ])
+      const fetchedPlaylists = await navidromeApi.getPlaylists()
+      const [fetchedSyncs, fetchedSections] = backendAvailable
+        ? await Promise.all([
+            backendApi.listSyncs().catch(() => [] as SyncedPlaylist[]),
+            backendApi.getGlobalSetting<PlaylistSection[]>('homepage_layout').catch(() => null)
+          ])
+        : [[] as SyncedPlaylist[], null]
       setPlaylists(fetchedPlaylists)
       setSyncs(fetchedSyncs)
       let newSections = fetchedSections && fetchedSections.length > 0 ? fetchedSections : DEFAULT_LAYOUT
@@ -193,7 +197,7 @@ export default function PlaylistsPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [backendAvailable])
 
   useEffect(() => {
     fetchData()
@@ -327,7 +331,26 @@ export default function PlaylistsPage() {
         </button>
       </div>
       
-      {sections.map(section => {
+      {!backendAvailable && sortedPlaylists.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+          {sortedPlaylists.map(playlist => {
+            const isPlayingFromThisPlaylist =
+              isPlaying && currentSource === `playlist:${playlist.id}`
+            return (
+              <PlaylistItem
+                key={playlist.id}
+                playlist={playlist}
+                isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
+                handlePlayPlaylist={handlePlayPlaylist}
+                isPinned={isPinned(playlist.id)}
+                onTogglePin={handleTogglePinned}
+              />
+            )
+          })}
+        </div>
+      )}
+
+      {backendAvailable && sections.map(section => {
         if (section.type === 'fixed_daily') {
           return <DailyMixSection key={section.id} format="playlists" />
         }
@@ -411,7 +434,11 @@ export default function PlaylistsPage() {
         return null
       })}
 
-      {playlists.length === 0 && !loading && (
+      {!backendAvailable && sortedPlaylists.length === 0 && !loading && (
+        <div className="text-center mt-8 text-gray-500">No se encontraron playlists.</div>
+      )}
+
+      {backendAvailable && playlists.length === 0 && !loading && (
         <div className="text-center mt-8 text-gray-500">No se encontraron playlists.</div>
       )}
 

@@ -19,6 +19,7 @@ import {
   HashtagIcon,
   TagIcon,
 } from '@heroicons/react/24/solid'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 const VinylIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -51,6 +52,8 @@ export default function SongContextMenu({
 }: Props) {
   const navigate = useNavigate()
   const playerActions = usePlayerActions()
+  const backendAvailable = useBackendAvailable()
+  const showAdminActions = isAdmin && backendAvailable
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [loadingPlaylists, setLoadingPlaylists] = useState(false)
   const [showPlaylistSubmenu, setShowPlaylistSubmenu] = useState(false)
@@ -209,7 +212,7 @@ export default function SongContextMenu({
                     <span className="text-white text-[15px]">Ir a la canción</span>
                   </button>
                 )}
-                {isAdmin && (
+                {showAdminActions && (
                   <>
                     <button className="w-full flex items-center gap-4 px-4 py-3.5 border-t border-white/[0.06] hover:bg-white/5 active:bg-white/10 transition-colors text-left" onClick={(e) => { e.stopPropagation(); setShowUpdatePlayCountModal(true) }}>
                       <HashtagIcon className="w-5 h-5 text-white/70 flex-shrink-0" />
@@ -354,7 +357,7 @@ export default function SongContextMenu({
             </li>
           )}
 
-          {isAdmin && (
+          {showAdminActions && (
             <>
               <div className="border-t border-gray-200/80 dark:border-white/[0.08] my-1 mx-1" />
               <li onClick={e => { e.stopPropagation(); setShowUpdatePlayCountModal(true) }} className="flex items-center gap-3 px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-xl cursor-pointer transition-colors">

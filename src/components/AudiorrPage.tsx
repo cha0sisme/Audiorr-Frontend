@@ -14,6 +14,7 @@ import { AboutModal } from './AboutModal'
 import ThemeSwitcher from './ThemeSwitcher'
 import { PlaylistCover } from './PlaylistCover'
 import { getColorForUsername, getInitial } from '../utils/userUtils'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 const libraryItems = [
   {
@@ -40,6 +41,7 @@ function RowArrow() {
 
 export default function AudiorrPage() {
   const [username, setUsername] = useState<string | null>(null)
+  const backendAvailable = useBackendAvailable()
   const [isAdmin, setIsAdmin] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const { pinnedPlaylists } = usePinnedPlaylists()
@@ -163,7 +165,7 @@ export default function AudiorrPage() {
             <span className="flex-1 font-semibold text-gray-900 dark:text-white">Acerca de Audiorr</span>
           </button>
 
-          {isAdmin && (
+          {isAdmin && backendAvailable && (
             <Link
               to="/admin"
               className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"

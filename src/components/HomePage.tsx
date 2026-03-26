@@ -11,6 +11,7 @@ import DailyMixSection from './DailyMixSection'
 import HorizontalScrollSection from './HorizontalScrollSection'
 import { useContextMenu } from '../hooks/useContextMenu'
 import SongContextMenu from './SongContextMenu'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 
 interface TopWeeklySong {
   song_id: string
@@ -66,6 +67,7 @@ export default function HomePage() {
   const [loadingRecent, setLoadingRecent] = useState(true)
   const [showWrapped, setShowWrapped] = useState(false)
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
+  const backendAvailable = useBackendAvailable()
 
   useEffect(() => {
     const now = new Date()
@@ -92,6 +94,7 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
+    if (!backendAvailable) return
     fetch(`${API_BASE_URL}/api/stats/top-weekly`)
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -102,7 +105,7 @@ export default function HomePage() {
         else console.error('[TopWeekly] Unexpected response:', data)
       })
       .catch(err => console.error('[TopWeekly] Fetch failed:', err))
-  }, [])
+  }, [backendAvailable])
 
   useEffect(() => {
     const fetchRecentReleases = async () => {
@@ -232,8 +235,8 @@ export default function HomePage() {
         </HorizontalScrollSection>
       )}
 
-      {/* 3. Tus mixes diarios */}
-      <DailyMixSection />
+      {/* 3. Tus mixes diarios (solo con backend) */}
+      {backendAvailable && <DailyMixSection />}
 
       {/* 4. Últimos álbumes añadidos */}
       {albums.length > 0 && (
