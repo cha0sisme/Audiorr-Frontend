@@ -48,7 +48,7 @@ function ArtistCard({ name, albumCount }: ArtistCardProps) {
       try {
         const songs = await navidromeApi.getArtistSongs(name)
         if (songs.length > 0) {
-          playerActions.playPlaylist(songs)
+          playerActions.playPlaylist(songs, `artist:${name}`)
         }
       } catch (error) {
         console.error('Error fetching artist songs for quick play:', error)

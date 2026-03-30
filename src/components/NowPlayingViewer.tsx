@@ -209,13 +209,8 @@ export default function NowPlayingViewer({
       const finish = () => {
         if (fired) return
         fired = true
-        // Mantener el elemento oculto (offscreen + invisible) — NO limpiar
-        // estilos antes de onClose(). FM unmount se encarga del resto.
-        // Si limpiáramos aquí, habría un frame con el viewer visible → flash.
-        el.style.opacity = '0'
-        // NO resetear isDismissingRef aquí — se resetea en el useEffect
-        // cuando isOpen vuelve a true. Mantenerlo true evita que
-        // onAnimationComplete limpie estilos durante el exit (causaría flash).
+        // Ocultar y desmontar. Sin FM no hay riesgo de flash.
+        setRenderVisible(false)
         onClose()
       }
       el.addEventListener('transitionend', finish, { once: true })
@@ -258,9 +253,16 @@ export default function NowPlayingViewer({
   }
 
 
-  // Reset dismiss state cuando se abre el viewer
+  // Reset dismiss state cuando se abre el viewer.
+  // Track a render-visible state: cuando drag-to-close dispara onClose(),
+  // ocultamos el componente inmediatamente (sin esperar a AnimatePresence)
+  // para evitar el flash de 1 frame que FM causa al resetear estilos.
+  const [renderVisible, setRenderVisible] = useState(isOpen)
   useEffect(() => {
-    if (isOpen) isDismissingRef.current = false
+    if (isOpen) {
+      isDismissingRef.current = false
+      setRenderVisible(true)
+    }
   }, [isOpen])
 
   // ── Fetch lyrics ────────────────────────────────────────────────────────────
@@ -386,28 +388,46 @@ export default function NowPlayingViewer({
   const hasLyrics = lyrics.length > 0 || loadingLyrics
 
 
+  // Efecto de entrada: tras montar el div, quitamos translateY(100%) para animarlo hacia arriba.
+  // Usamos un ref + rAF para que el cambio de estilo ocurra en el frame siguiente al mount.
+  const hasEnteredRef = useRef(false)
+  useEffect(() => {
+    if (isOpen && renderVisible) {
+      hasEnteredRef.current = false
+      // Doble-rAF: primer rAF para que el browser pinte translateY(100%),
+      // segundo rAF para aplicar translateY(0) y disparar la transición CSS.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const el = motionDivRef.current
+          if (el) {
+            el.style.transition = 'transform 0.42s cubic-bezier(0.32, 0.72, 0, 1)'
+            el.style.transform = 'translateY(0)'
+            const onDone = () => {
+              hasEnteredRef.current = true
+              el.style.transition = ''
+              el.style.willChange = 'auto'
+              el.removeEventListener('transitionend', onDone)
+            }
+            el.addEventListener('transitionend', onDone, { once: true })
+            // Safety timeout
+            setTimeout(onDone, 460)
+          }
+        })
+      })
+    }
+  }, [isOpen, renderVisible])
+
+  if (!isOpen && !renderVisible) return createPortal(null, document.body)
+
   return createPortal(
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          key="now-playing-viewer"
+        <div
           ref={motionDivRef}
-          initial={{ y: '100%' }}
-          animate={{ y: 0 }}
-          exit={{ y: '100%', opacity: 0, transition: { duration: 0 } }}
-          transition={{ type: 'spring', damping: 36, stiffness: 420 }}
-          style={{ backgroundColor: '#0a0a0a' }}
-          className="fixed inset-0 z-[9995]"
-          onAnimationComplete={() => {
-            // Framer Motion deja transform:translateY(0px) + will-change:transform
-            // al terminar la animación de apertura. Esto congela el hit-testing de
-            // WebKit. Limpiamos todo — pero solo en la animación de ENTRADA.
-            // En la de salida (dismiss), limpiar estilos haría visible el elemento
-            // por un frame antes del unmount → flash.
-            if (isDismissingRef.current) return
-            const el = motionDivRef.current
-            if (el) cleanupDragStyles(el)
+          style={{
+            backgroundColor: '#0a0a0a',
+            transform: hasEnteredRef.current ? undefined : 'translateY(100%)',
+            willChange: 'transform',
           }}
+          className="fixed inset-0 z-[9995]"
         >
           {/* ── Fondos visuales — FUERA del scroll container para evitar stacking
               context interference en iOS WKWebView. Todos pointer-events-none. ── */}
@@ -573,7 +593,7 @@ export default function NowPlayingViewer({
                       style={{
                         width: `${progressPct}%`,
                         background: 'white',
-                        transition: dragPct !== null ? 'none' : 'width 500ms linear',
+                        transition: dragPct !== null || !isPlaying ? 'none' : 'width 500ms linear',
                       }}
                     />
                   </div>
@@ -585,7 +605,7 @@ export default function NowPlayingViewer({
                       width: dragPct !== null ? 18 : 14,
                       height: dragPct !== null ? 18 : 14,
                       background: 'white',
-                      transition: dragPct !== null ? 'width 100ms, height 100ms' : 'left 500ms linear, width 100ms, height 100ms',
+                      transition: dragPct !== null ? 'width 100ms, height 100ms' : !isPlaying ? 'width 100ms, height 100ms' : 'left 500ms linear, width 100ms, height 100ms',
                     }}
                   />
                 </div>
@@ -833,8 +853,7 @@ export default function NowPlayingViewer({
                   const finish = () => {
                     if (fired) return
                     fired = true
-                    el.style.opacity = '0'
-                    cleanupDragStyles(el)
+                    setRenderVisible(false)
                     onClose()
                   }
                   el.addEventListener('transitionend', finish, { once: true })
@@ -848,9 +867,7 @@ export default function NowPlayingViewer({
               showGoToSong={true}
             />
           )}
-        </motion.div>
-      )}
-    </AnimatePresence>,
+        </div>,
     document.body
   )
 }

@@ -337,6 +337,7 @@ export const backendApi = {
     energy?: number
     alpha?: number
     beta?: number
+    contextUri?: string | null
   }) {
     const response = await fetch(`${API_BASE_URL}/api/scrobble/scrobble`, {
       method: 'POST',

@@ -101,9 +101,10 @@ export default function ArtistsDetail() {
         playerActions.togglePlayPause()
       }
     } else {
-      playerActions.playPlaylist(songs)
+      const decodedArtist = name ? decodeURIComponent(name) : ''
+      playerActions.playPlaylist(songs, `artist:${decodedArtist}`)
     }
-  }, [isThisArtistPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, songs])
+  }, [isThisArtistPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, songs, name])
 
   const biographyBgStyle = useMemo(() => {
     if (!dominantColors) return {}
@@ -201,7 +202,8 @@ export default function ArtistsDetail() {
   }
 
   const handlePlaySong = (song: Song) => {
-    playerActions.playPlaylistFromSong(songs, song)
+    const decodedArtist = name ? decodeURIComponent(name) : ''
+    playerActions.playPlaylistFromSong(songs, song, `artist:${decodedArtist}`)
   }
 
   const totalSongs = albums.reduce((sum, album) => sum + album.songCount, 0)

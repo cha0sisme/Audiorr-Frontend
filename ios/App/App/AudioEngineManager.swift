@@ -1,0 +1,947 @@
+import AVFoundation
+import MediaPlayer
+import Capacitor
+
+/// Motor de audio nativo basado en AVAudioEngine.
+/// Grafo: playerA → eqA → mixerA → mainMixer → output
+///        playerB → eqB → mixerB → mainMixer → output
+///
+/// Gestiona reproducción, NowPlaying, remote commands e interrupciones.
+class AudioEngineManager {
+
+    // MARK: - Engine y nodos
+
+    private let engine = AVAudioEngine()
+    // playerA es siempre el "activo" — tras crossfade se swapean con playerB
+    private var playerA: AVAudioPlayerNode
+    private var playerB: AVAudioPlayerNode
+    private var eqA: AVAudioUnitEQ
+    private var eqB: AVAudioUnitEQ
+    private var mixerA: AVAudioMixerNode
+    private var mixerB: AVAudioMixerNode
+
+    // MARK: - Estado
+
+    private(set) var isPlaying = false
+    private var volume: Float = 0.75
+    private var currentSongDuration: Double = 0
+    private var currentSongTitle: String = ""
+    private var currentSongArtist: String = ""
+    private var currentSongAlbum: String = ""
+
+    private var currentFile: AVAudioFile?
+    private var nextFile: AVAudioFile?
+    private var replayGainMultiplierA: Float = 1.0
+    private var replayGainMultiplierB: Float = 1.0
+
+    // Tracking de tiempo para playerA
+    private var playStartOffset: Double = 0 // offset en segundos dentro del archivo
+    private var pauseSampleTime: AVAudioFramePosition = 0 // sampleTime al momento de pausar (evita double-counting)
+    private var lastSeekTime: CFAbsoluteTime = 0 // para bloquear automix tras seek manual
+
+    // Interrupciones
+    private var wasPlayingBeforeInterruption = false
+    private var commandCenterReady = false
+
+    // MARK: - Crossfade
+
+    var crossfadeExecutor: CrossfadeExecutor?
+    private(set) var isCrossfading = false
+
+    // MARK: - Native Automix (background-safe)
+    // Cuando JS está congelado (pantalla bloqueada), este timer nativo
+    // verifica la posición y dispara el crossfade autónomamente.
+
+    private var automixTimer: DispatchSourceTimer?
+    /// Tiempo en la canción actual donde debe dispararse el crossfade.
+    /// nil = no hay automix programado (JS lo gestiona en foreground).
+    private var automixTriggerTime: Double?
+    /// Config de crossfade calculada por JS — almacenada para ejecutar en background.
+    private var pendingCrossfadeConfig: CrossfadeExecutor.Config?
+    /// Metadata de la siguiente canción (para NowPlaying tras crossfade en background)
+    private var nextSongTitle: String = ""
+    private var nextSongArtist: String = ""
+    private var nextSongAlbum: String = ""
+    private var nextSongDuration: Double = 0
+    /// Indica si hay una siguiente canción preparada para playback directo (next desde lock screen)
+    var hasNextFilePrepared: Bool { nextFile != nil }
+
+    // MARK: - Progress timer
+
+    private var progressTimer: Timer?
+    private let progressInterval: TimeInterval = 0.25 // 4Hz
+
+    // MARK: - Plugin reference (para enviar eventos a JS)
+
+    weak var plugin: CAPPlugin?
+
+    // MARK: - Init
+
+    init() {
+        // Crear nodos
+        playerA = AVAudioPlayerNode()
+        playerB = AVAudioPlayerNode()
+        mixerA = AVAudioMixerNode()
+        mixerB = AVAudioMixerNode()
+
+        // Ambos EQ con 2 bandas (highpass + lowshelf) para que sean intercambiables
+        // tras el swap de crossfade. La banda extra queda bypassed cuando no se usa.
+        eqA = AVAudioUnitEQ(numberOfBands: 2)
+        eqA.bands[0].filterType = .highPass
+        eqA.bands[0].frequency = 20 // bypass efectivo
+        eqA.bands[0].bandwidth = 2.0 // Q ≈ 0.7
+        eqA.bands[0].bypass = true
+        eqA.bands[1].filterType = .lowShelf
+        eqA.bands[1].frequency = 200
+        eqA.bands[1].gain = 0
+        eqA.bands[1].bypass = true
+
+        eqB = AVAudioUnitEQ(numberOfBands: 2)
+        eqB.bands[0].filterType = .highPass
+        eqB.bands[0].frequency = 20
+        eqB.bands[0].bandwidth = 2.0
+        eqB.bands[0].bypass = true
+        eqB.bands[1].filterType = .lowShelf
+        eqB.bands[1].frequency = 200
+        eqB.bands[1].gain = 0
+        eqB.bands[1].bypass = true
+
+        setupAudioGraph()
+        setupObservers()
+        setupCommandCenter()
+    }
+
+    deinit {
+        stopProgressTimer()
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: - Audio Graph
+
+    private func setupAudioGraph() {
+        // Attach nodos
+        engine.attach(playerA)
+        engine.attach(playerB)
+        engine.attach(eqA)
+        engine.attach(eqB)
+        engine.attach(mixerA)
+        engine.attach(mixerB)
+
+        let mainMixer = engine.mainMixerNode
+
+        // Conectar grafo A: playerA → eqA → mixerA → mainMixer
+        // Usamos el formato del mainMixer para todas las conexiones intermedias.
+        // AVAudioMixerNode convierte formatos automáticamente si hay mismatch.
+        let format = mainMixer.outputFormat(forBus: 0)
+
+        engine.connect(playerA, to: eqA, format: nil)
+        engine.connect(eqA, to: mixerA, format: nil)
+        engine.connect(mixerA, to: mainMixer, format: format)
+
+        // Conectar grafo B: playerB → eqB → mixerB → mainMixer
+        engine.connect(playerB, to: eqB, format: nil)
+        engine.connect(eqB, to: mixerB, format: nil)
+        engine.connect(mixerB, to: mainMixer, format: format)
+
+        // Volumen inicial
+        mainMixer.outputVolume = volume
+        mixerA.outputVolume = 1.0
+        mixerB.outputVolume = 0.0 // B silenciado hasta crossfade
+
+        engine.prepare()
+        print("[AudioEngineManager] Audio graph configurado")
+    }
+
+    private func ensureEngineRunning() {
+        guard !engine.isRunning else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            try engine.start()
+            print("[AudioEngineManager] Engine arrancado")
+        } catch {
+            print("[AudioEngineManager] Error arrancando engine: \(error)")
+        }
+    }
+
+    // MARK: - Reproducción
+
+    func play(fileURL: URL, startAt: Double, replayGainMultiplier: Float, duration: Double) {
+        ensureEngineRunning()
+        cancelNativeNextFallback() // JS respondió
+        clearAutomixTrigger()
+
+        // Detener reproducción anterior
+        playerA.stop()
+
+        do {
+            let file = try AVAudioFile(forReading: fileURL)
+            currentFile = file
+            currentSongDuration = duration > 0 ? duration : Double(file.length) / file.processingFormat.sampleRate
+            replayGainMultiplierA = replayGainMultiplier
+            playStartOffset = startAt
+            pauseSampleTime = 0
+
+            // Aplicar ReplayGain via mixerA
+            mixerA.outputVolume = replayGainMultiplier
+
+            // Asegurar EQ A en bypass (no estamos en crossfade)
+            eqA.bands[0].bypass = true
+
+            // Calcular frame de inicio
+            let sampleRate = file.processingFormat.sampleRate
+            let startFrame = AVAudioFramePosition(startAt * sampleRate)
+            let totalFrames = file.length
+            let framesToPlay = AVAudioFrameCount(totalFrames - startFrame)
+
+            guard framesToPlay > 0 else {
+                print("[AudioEngineManager] No hay frames para reproducir")
+                return
+            }
+
+            // Programar segmento
+            // Capturar referencia al player actual para verificar que sigue siendo
+            // el activo cuando el completion handler se ejecute (tras un crossfade
+            // playerA/B se intercambian y el handler del player viejo no debe disparar onTrackEnd).
+            let activePlayer = playerA
+            playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
+                // Completado en el render thread — dispatch al main para notificar
+                DispatchQueue.main.async {
+                    guard let self = self,
+                          self.isPlaying,
+                          !self.isCrossfading,
+                          self.playerA === activePlayer // Solo si sigue siendo el player activo
+                    else { return }
+                    self.isPlaying = false
+                    self.stopProgressTimer()
+                    self.updateNowPlayingPlaybackState()
+                    self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                    print("[AudioEngineManager] Track terminado")
+                }
+            }
+
+            playerA.play()
+            isPlaying = true
+
+            startProgressTimer()
+
+            // Establecer NowPlaying info mínima inmediatamente para que Dynamic Island aparezca.
+            // JS enviará metadata completa (title, artist, artwork) justo después.
+            var info: [String: Any] = [
+                MPMediaItemPropertyPlaybackDuration: currentSongDuration,
+                MPNowPlayingInfoPropertyElapsedPlaybackTime: startAt,
+                MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+            ]
+            // Preservar metadata existente si la hay (reutilizar en caso de seek/resume)
+            if !currentSongTitle.isEmpty {
+                info[MPMediaItemPropertyTitle] = currentSongTitle
+                info[MPMediaItemPropertyArtist] = currentSongArtist
+                info[MPMediaItemPropertyAlbumTitle] = currentSongAlbum
+            }
+            if let existingArtwork = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] {
+                info[MPMediaItemPropertyArtwork] = existingArtwork
+            }
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            MPNowPlayingInfoCenter.default().playbackState = .playing
+
+            print("[AudioEngineManager] Play: \(fileURL.lastPathComponent) desde \(String(format: "%.1f", startAt))s (RG: \(String(format: "%.3f", replayGainMultiplier)))")
+
+        } catch {
+            print("[AudioEngineManager] Error abriendo archivo: \(error)")
+            plugin?.notifyListeners("onError", data: ["message": error.localizedDescription, "code": "FILE_ERROR"])
+        }
+    }
+
+    func pause() {
+        guard isPlaying else { return }
+        // Capturar posición y sampleTime antes de pausar
+        let time = currentTime()
+        playStartOffset = time
+        // Guardar sampleTime actual para que currentTime() no haga double-counting tras resume
+        if let nodeTime = playerA.lastRenderTime,
+           nodeTime.isSampleTimeValid,
+           let playerTime = playerA.playerTime(forNodeTime: nodeTime) {
+            pauseSampleTime = playerTime.sampleTime
+        }
+
+        playerA.pause()
+        if isCrossfading { playerB.pause() }
+        isPlaying = false
+
+        stopProgressTimer()
+        updateNowPlayingPlaybackState()
+        notifyPlaybackStateChanged()
+
+        print("[AudioEngineManager] Pause en \(String(format: "%.1f", time))s")
+    }
+
+    func resume() {
+        guard !isPlaying else { return }
+        ensureEngineRunning()
+
+        playerA.play()
+        if isCrossfading { playerB.play() }
+        isPlaying = true
+
+        startProgressTimer()
+        updateNowPlayingPlaybackState()
+        notifyPlaybackStateChanged()
+
+        print("[AudioEngineManager] Resume")
+    }
+
+    func togglePlayPause() {
+        if isPlaying { pause() } else { resume() }
+    }
+
+    func seek(to time: Double) {
+        guard let file = currentFile else { return }
+
+        let wasPlaying = isPlaying
+        playerA.stop()
+
+        // Marcar timestamp de seek para bloquear automix nativo durante 5s
+        lastSeekTime = CFAbsoluteTimeGetCurrent()
+
+        let sampleRate = file.processingFormat.sampleRate
+        let startFrame = AVAudioFramePosition(max(0, time) * sampleRate)
+        let totalFrames = file.length
+        let framesToPlay = AVAudioFrameCount(max(0, totalFrames - startFrame))
+
+        guard framesToPlay > 0 else { return }
+
+        playStartOffset = time
+        pauseSampleTime = 0 // Reset: nuevo segmento, sampleTime empieza desde 0
+
+        let activePlayer = playerA
+        playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self, self.isPlaying, !self.isCrossfading, self.playerA === activePlayer else { return }
+                self.isPlaying = false
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+            }
+        }
+
+        if wasPlaying {
+            playerA.play()
+            isPlaying = true
+        }
+
+        // Actualizar NowPlaying inmediatamente con la nueva posición
+        updateNowPlayingProgress()
+        notifyTimeUpdate()
+
+        print("[AudioEngineManager] Seek a \(String(format: "%.1f", time))s")
+    }
+
+    func stop() {
+        playerA.stop()
+        playerB.stop()
+        isPlaying = false
+        isCrossfading = false
+        currentFile = nil
+        nextFile = nil
+        playStartOffset = 0
+
+        crossfadeExecutor?.cancel()
+        crossfadeExecutor = nil
+
+        stopProgressTimer()
+        clearNowPlaying()
+
+        print("[AudioEngineManager] Stop")
+    }
+
+    func setVolume(_ vol: Float) {
+        volume = max(0, min(1, vol))
+        engine.mainMixerNode.outputVolume = volume
+    }
+
+    // MARK: - Tiempo actual
+
+    func currentTime() -> Double {
+        guard isPlaying,
+              let nodeTime = playerA.lastRenderTime,
+              nodeTime.isSampleTimeValid,
+              let playerTime = playerA.playerTime(forNodeTime: nodeTime)
+        else {
+            return playStartOffset
+        }
+        // Restar pauseSampleTime para evitar double-counting tras pause/resume.
+        // Después de resume, sampleTime continúa desde donde estaba al pausar,
+        // pero playStartOffset ya incluye ese tiempo. Solo contar samples nuevos.
+        let deltaSamples = playerTime.sampleTime - pauseSampleTime
+        return playStartOffset + Double(deltaSamples) / playerTime.sampleRate
+    }
+
+    // MARK: - Preparar siguiente canción
+
+    func prepareNext(fileURL: URL, replayGainMultiplier: Float) {
+        do {
+            nextFile = try AVAudioFile(forReading: fileURL)
+            replayGainMultiplierB = replayGainMultiplier
+            print("[AudioEngineManager] Next preparado: \(fileURL.lastPathComponent) (RG: \(String(format: "%.3f", replayGainMultiplier)))")
+        } catch {
+            print("[AudioEngineManager] Error preparando next: \(error)")
+            plugin?.notifyListeners("onError", data: ["message": error.localizedDescription, "code": "FILE_ERROR"])
+        }
+    }
+
+    // MARK: - Crossfade
+
+    /// Resultado de ejecutar crossfade — el plugin lo usa para resolver/rechazar la Promise de JS.
+    enum CrossfadeResult {
+        case started
+        case noNextFile
+        case alreadyCrossfading
+    }
+
+    @discardableResult
+    func executeCrossfade(config: CrossfadeExecutor.Config) -> CrossfadeResult {
+        guard let nextFile = nextFile else {
+            print("[AudioEngineManager] No hay next file para crossfade")
+            return .noNextFile
+        }
+        guard !isCrossfading else {
+            print("[AudioEngineManager] Crossfade ya en curso")
+            return .alreadyCrossfading
+        }
+
+        isCrossfading = true
+        plugin?.notifyListeners("onCrossfadeStart", data: [:])
+
+        let executor = CrossfadeExecutor(
+            config: config,
+            engine: engine,
+            playerA: playerA,
+            playerB: playerB,
+            eqA: eqA,
+            eqB: eqB,
+            mixerA: mixerA,
+            mixerB: mixerB,
+            currentFile: currentFile,
+            nextFile: nextFile,
+            maxVolumeA: replayGainMultiplierA,
+            maxVolumeB: replayGainMultiplierB,
+            currentTitle: currentSongTitle,
+            nextTitle: "" // Se establece desde JS al llamar executeCrossfade
+        )
+
+        executor.onComplete = { [weak self] startOffset in
+            guard let self = self else { return }
+
+            // Parar playerA (canción saliente, ya silenciado)
+            self.playerA.stop()
+
+            // ═══ SWAP: playerB (que está sonando) pasa a ser playerA ═══
+            // Intercambiamos las referencias para que pause/resume/seek/currentTime
+            // siempre operen sobre el player activo (playerA).
+            swap(&self.playerA, &self.playerB)
+            swap(&self.eqA, &self.eqB)
+            swap(&self.mixerA, &self.mixerB)
+
+            self.currentFile = nextFile
+            self.nextFile = nil
+            self.replayGainMultiplierA = self.replayGainMultiplierB
+            self.playStartOffset = startOffset
+            self.pauseSampleTime = 0
+
+            // Resetear EQ a bypass (ambos, tras el swap)
+            self.eqA.bands[0].bypass = true
+            self.eqA.bands[1].bypass = true
+            self.eqB.bands[0].bypass = true
+            self.eqB.bands[1].bypass = true
+
+            // Resetear mixer volumes
+            self.mixerA.outputVolume = self.replayGainMultiplierA
+            self.mixerB.outputVolume = 0
+
+            self.isCrossfading = false
+            self.crossfadeExecutor = nil
+
+            self.updateNowPlayingPlaybackState()
+            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": startOffset])
+
+            print("[AudioEngineManager] Crossfade completado (swap A↔B), offset: \(String(format: "%.1f", startOffset))s")
+        }
+
+        crossfadeExecutor = executor
+        executor.start()
+        return .started
+    }
+
+    func cancelCrossfade() {
+        crossfadeExecutor?.cancel()
+        crossfadeExecutor = nil
+        isCrossfading = false
+    }
+
+    // MARK: - ReplayGain
+
+    static func computeReplayGainMultiplier(gainDb: Double, trackPeak: Double) -> Float {
+        let defaultDb = -8.0
+        let db = gainDb.isNaN ? defaultDb : gainDb
+        var multiplier = pow(10.0, db / 20.0)
+        if trackPeak > 0 {
+            let maxMult = 0.99 / trackPeak
+            multiplier = min(multiplier, maxMult)
+        }
+        return Float(multiplier)
+    }
+
+    // MARK: - Progress Timer
+
+    private func startProgressTimer() {
+        // Timer.scheduledTimer se añade al RunLoop del hilo actual.
+        // Capacitor llama resume/play desde hilos de trabajo cuyo RunLoop
+        // no procesa timers → forzar siempre al main RunLoop.
+        let start = { [weak self] in
+            guard let self = self else { return }
+            self.stopProgressTimer()
+            self.progressTimer = Timer.scheduledTimer(withTimeInterval: self.progressInterval, repeats: true) { [weak self] _ in
+                guard let self = self, self.isPlaying else { return }
+                self.updateNowPlayingProgress()
+                self.notifyTimeUpdate()
+            }
+        }
+        if Thread.isMainThread { start() } else { DispatchQueue.main.async(execute: start) }
+    }
+
+    private func stopProgressTimer() {
+        // invalidate() debe llamarse desde el mismo hilo donde se creó el timer (main)
+        let stop = { [weak self] in
+            self?.progressTimer?.invalidate()
+            self?.progressTimer = nil
+        }
+        if Thread.isMainThread { stop() } else { DispatchQueue.main.async(execute: stop) }
+    }
+
+    private func notifyTimeUpdate() {
+        let time = currentTime()
+        plugin?.notifyListeners("onTimeUpdate", data: [
+            "currentTime": time,
+            "duration": currentSongDuration,
+            "isPlaying": isPlaying,
+        ])
+    }
+
+    // MARK: - Native Automix Timer (background-safe)
+
+    /// JS llama esto con el trigger time calculado por DJMixingAlgorithms.
+    /// Si JS se congela (background), el timer nativo dispara el crossfade autónomamente.
+    func setAutomixTrigger(triggerTime: Double, config: CrossfadeExecutor.Config) {
+        automixTriggerTime = triggerTime
+        pendingCrossfadeConfig = config
+        startAutomixTimer()
+    }
+
+    /// Almacena metadata de la siguiente canción para NowPlaying en background.
+    func setNextSongMetadata(title: String, artist: String, album: String, duration: Double) {
+        nextSongTitle = title
+        nextSongArtist = artist
+        nextSongAlbum = album
+        nextSongDuration = duration
+    }
+
+    func clearAutomixTrigger() {
+        automixTriggerTime = nil
+        pendingCrossfadeConfig = nil
+        stopAutomixTimer()
+    }
+
+    private func startAutomixTimer() {
+        stopAutomixTimer()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        // Verificar cada 500ms — suficiente precisión para trigger, el crossfade real es sample-accurate
+        timer.schedule(deadline: .now() + 0.5, repeating: .milliseconds(500), leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            self?.checkAutomixTrigger()
+        }
+        automixTimer = timer
+        timer.resume()
+    }
+
+    private func stopAutomixTimer() {
+        automixTimer?.cancel()
+        automixTimer = nil
+    }
+
+    private func checkAutomixTrigger() {
+        guard isPlaying,
+              !isCrossfading,
+              let triggerTime = automixTriggerTime,
+              let config = pendingCrossfadeConfig,
+              nextFile != nil
+        else { return }
+
+        // Bloquear automix durante 5s después de un seek manual
+        let timeSinceSeek = CFAbsoluteTimeGetCurrent() - lastSeekTime
+        guard timeSinceSeek > 5.0 else { return }
+
+        let time = currentTime()
+        if time >= triggerTime {
+            print("[AudioEngineManager] Native automix trigger at \(String(format: "%.1f", time))s (trigger was \(String(format: "%.1f", triggerTime))s)")
+            automixTriggerTime = nil
+            pendingCrossfadeConfig = nil
+            stopAutomixTimer()
+
+            // Ejecutar crossfade de forma autónoma
+            let result = executeCrossfade(config: config)
+            if result == .started {
+                // Actualizar NowPlaying con metadata de la siguiente canción
+                if !nextSongTitle.isEmpty {
+                    updateNowPlayingMetadata(
+                        title: nextSongTitle,
+                        artist: nextSongArtist,
+                        album: nextSongAlbum,
+                        duration: nextSongDuration,
+                        artworkUrl: nil
+                    )
+                }
+                // Notificar a JS (si está vivo, actualizará state; si está congelado, lo verá al despertar)
+                plugin?.notifyListeners("onCrossfadeStart", data: [:])
+            }
+        }
+    }
+
+    // MARK: - Native Next Fallback (when JS is frozen)
+
+    /// Reproduce el nextFile directamente como hard cut (sin crossfade).
+    /// Usado cuando el usuario toca "next" en lock screen y JS no puede responder.
+    func playNextDirectly() {
+        guard let nextFile = nextFile else { return }
+
+        // Parar canción actual
+        playerA.stop()
+
+        // Transferir nextFile como currentFile
+        currentFile = nextFile
+        self.nextFile = nil
+        currentSongDuration = nextSongDuration > 0 ? nextSongDuration : Double(nextFile.length) / nextFile.processingFormat.sampleRate
+        currentSongTitle = nextSongTitle
+        currentSongArtist = nextSongArtist
+        currentSongAlbum = nextSongAlbum
+        replayGainMultiplierA = replayGainMultiplierB
+        playStartOffset = 0
+        pauseSampleTime = 0
+
+        mixerA.outputVolume = replayGainMultiplierA
+
+        let totalFrames = nextFile.length
+        guard totalFrames > 0 else { return }
+
+        let activePlayer = playerA
+        playerA.scheduleSegment(nextFile, startingFrame: 0, frameCount: AVAudioFrameCount(totalFrames), at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self, self.isPlaying, !self.isCrossfading, self.playerA === activePlayer else { return }
+                self.isPlaying = false
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+            }
+        }
+
+        playerA.play()
+        isPlaying = true
+
+        // Limpiar automix trigger del track anterior
+        clearAutomixTrigger()
+
+        startProgressTimer()
+        updateNowPlayingMetadata(title: nextSongTitle, artist: nextSongArtist, album: nextSongAlbum, duration: currentSongDuration, artworkUrl: nil)
+        updateNowPlayingPlaybackState()
+
+        // Notificar a JS que cambió de canción (lo procesará al despertar)
+        plugin?.notifyListeners("onNativeNext", data: [
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "album": currentSongAlbum,
+            "duration": currentSongDuration,
+        ])
+
+        print("[AudioEngineManager] Native next: \(currentSongTitle)")
+    }
+
+    /// Devuelve el estado actual completo para reconciliación tras background
+    func getFullState() -> [String: Any] {
+        return [
+            "isPlaying": isPlaying,
+            "currentTime": currentTime(),
+            "duration": currentSongDuration,
+            "isCrossfading": isCrossfading,
+            "title": currentSongTitle,
+            "artist": currentSongArtist,
+            "album": currentSongAlbum,
+        ]
+    }
+
+    private func notifyPlaybackStateChanged(reason: String? = nil) {
+        var data: [String: Any] = [
+            "isPlaying": isPlaying,
+            "currentTime": currentTime(),
+        ]
+        if let reason = reason { data["reason"] = reason }
+        plugin?.notifyListeners("onPlaybackStateChanged", data: data)
+    }
+
+    // MARK: - NowPlaying (directo, sin JS)
+
+    func updateNowPlayingMetadata(title: String, artist: String, album: String, duration: Double, artworkUrl: String?) {
+        currentSongTitle = title
+        currentSongArtist = artist
+        currentSongAlbum = album
+        currentSongDuration = duration
+
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: title,
+            MPMediaItemPropertyArtist: artist,
+            MPMediaItemPropertyAlbumTitle: album,
+            MPMediaItemPropertyPlaybackDuration: duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime(),
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+        ]
+
+        // Preservar artwork existente
+        if let existingArtwork = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] {
+            info[MPMediaItemPropertyArtwork] = existingArtwork
+        }
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+
+        // Descargar artwork en background
+        if let urlStr = artworkUrl, let url = URL(string: urlStr) {
+            URLSession.shared.dataTask(with: url) { data, _, _ in
+                guard let data = data, let image = UIImage(data: data) else { return }
+                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                DispatchQueue.main.async {
+                    guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+                    info[MPMediaItemPropertyArtwork] = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+                }
+            }.resume()
+        }
+    }
+
+    private func updateNowPlayingProgress() {
+        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime()
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func updateNowPlayingPlaybackState() {
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+        updateNowPlayingProgress()
+    }
+
+    private func clearNowPlaying() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
+    // MARK: - Remote Command Center
+
+    private func setupCommandCenter() {
+        guard !commandCenterReady else { return }
+        commandCenterReady = true
+
+        let cc = MPRemoteCommandCenter.shared()
+
+        cc.playCommand.isEnabled = true
+        cc.playCommand.addTarget { [weak self] _ in
+            self?.resume()
+            return .success
+        }
+
+        cc.pauseCommand.isEnabled = true
+        cc.pauseCommand.addTarget { [weak self] _ in
+            self?.pause()
+            return .success
+        }
+
+        cc.togglePlayPauseCommand.isEnabled = true
+        cc.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.togglePlayPause()
+            return .success
+        }
+
+        // Next/previous: enviar a JS primero. Si JS no responde en 2s
+        // (congelado en background), ejecutar nativamente como fallback.
+        cc.nextTrackCommand.isEnabled = true
+        cc.nextTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.ensureAudioSessionActive()
+            // Enviar a JS
+            self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "next"])
+            // Programar fallback nativo si JS no responde en 2s
+            if self.hasNextFilePrepared {
+                self.scheduleNativeNextFallback()
+            }
+            return .success
+        }
+
+        cc.previousTrackCommand.isEnabled = true
+        cc.previousTrackCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .commandFailed }
+            self.ensureAudioSessionActive()
+            // Previous = seek to 0 (nativo, siempre funciona)
+            self.seek(to: 0)
+            self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "previous"])
+            return .success
+        }
+
+        cc.changePlaybackPositionCommand.isEnabled = true
+        cc.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            self?.seek(to: event.positionTime)
+            return .success
+        }
+
+        print("[AudioEngineManager] Command Center configurado")
+    }
+
+    private func ensureAudioSessionActive() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[AudioEngineManager] Error reactivando AVAudioSession: \(error)")
+        }
+    }
+
+    /// Fallback timer para "next" desde lock screen cuando JS está congelado.
+    /// Si JS responde (llama play/stop/executeCrossfade), el fallback se cancela.
+    private var nativeNextFallbackItem: DispatchWorkItem?
+
+    func scheduleNativeNextFallback() {
+        // Cancelar cualquier fallback anterior
+        nativeNextFallbackItem?.cancel()
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            // Si seguimos reproduciendo la misma canción (JS no respondió), hacer next nativo
+            if self.isPlaying && self.hasNextFilePrepared && !self.isCrossfading {
+                print("[AudioEngineManager] JS no respondió a next en 2s — ejecutando next nativo")
+                self.playNextDirectly()
+            }
+        }
+        nativeNextFallbackItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
+    }
+
+    /// JS llama esto para cancelar el fallback (indica que respondió al comando)
+    func cancelNativeNextFallback() {
+        nativeNextFallbackItem?.cancel()
+        nativeNextFallbackItem = nil
+    }
+
+    // MARK: - Observers (interrupciones y route changes)
+
+    private func setupObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleInterruption),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+        else { return }
+
+        switch type {
+        case .began:
+            wasPlayingBeforeInterruption = isPlaying
+            if isPlaying {
+                pause()
+                notifyPlaybackStateChanged(reason: "interruption")
+            }
+            print("[AudioEngineManager] Interrupción comenzada")
+
+        case .ended:
+            guard let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            if options.contains(.shouldResume) && wasPlayingBeforeInterruption {
+                ensureAudioSessionActive()
+                // Pequeño delay para que iOS termine de restaurar la sesión
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.resume()
+                }
+                print("[AudioEngineManager] Interrupción terminada — reanudando")
+            } else {
+                print("[AudioEngineManager] Interrupción terminada — sin reanudar (shouldResume: \(options.contains(.shouldResume)))")
+            }
+
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func handleRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+        else { return }
+
+        switch reason {
+        case .oldDeviceUnavailable:
+            // Bluetooth/auriculares desconectados → pausar
+            if isPlaying {
+                pause()
+                notifyPlaybackStateChanged(reason: "routeLost")
+            }
+            print("[AudioEngineManager] Ruta perdida — pausado")
+
+        case .newDeviceAvailable:
+            reconfigureIOBuffer()
+            print("[AudioEngineManager] Nueva ruta de audio detectada")
+
+        default:
+            break
+        }
+    }
+
+    /// Configura IO buffer óptimo según la ruta de audio.
+    /// Replica la lógica de AppDelegate.configureIOBufferForRoute().
+    private func reconfigureIOBuffer() {
+        let session = AVAudioSession.sharedInstance()
+        let outputs = session.currentRoute.outputs
+
+        var preferredBuffer: TimeInterval = 0.02 // 20ms default
+
+        for output in outputs {
+            if output.portType.rawValue == "CarPlay" {
+                preferredBuffer = 0.04 // 40ms para CarPlay wireless
+                break
+            }
+        }
+
+        do {
+            try session.setPreferredIOBufferDuration(preferredBuffer)
+            let actual = session.ioBufferDuration
+            print("[AudioEngineManager] IO buffer: \(String(format: "%.1f", actual * 1000))ms (pedido: \(String(format: "%.1f", preferredBuffer * 1000))ms)")
+        } catch {
+            print("[AudioEngineManager] Error configurando IO buffer: \(error)")
+        }
+    }
+
+    // MARK: - Acceso a nodos (para CrossfadeExecutor)
+
+    var engineRef: AVAudioEngine { engine }
+    var playerARef: AVAudioPlayerNode { playerA }
+    var playerBRef: AVAudioPlayerNode { playerB }
+    var eqARef: AVAudioUnitEQ { eqA }
+    var eqBRef: AVAudioUnitEQ { eqB }
+    var mixerARef: AVAudioMixerNode { mixerA }
+    var mixerBRef: AVAudioMixerNode { mixerB }
+}

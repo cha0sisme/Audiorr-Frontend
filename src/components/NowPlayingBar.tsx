@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { Link } from 'react-router-dom'
 import AlbumCover from './AlbumCover'
@@ -164,15 +164,10 @@ export default function NowPlayingBar({
   }, [])
 
   // Sincronizar estado del viewer con el native tab bar y mini-player.
-  // Usamos un ref para saltar el primer render: no queremos enviar hideViewer()
-  // en el mount inicial porque el mini-player aún no ha recibido la canción restaurada.
-  const viewerMountedRef = useRef(false)
+  // Siempre enviar el estado actual — si el viewer está abierto al montar
+  // (ej. componente re-montado), el tab bar debe ocultarse inmediatamente.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return
-    if (!viewerMountedRef.current) {
-      viewerMountedRef.current = true
-      return
-    }
     if (isViewerOpen) {
       nativeNowPlaying.showViewer()
     } else {
@@ -283,8 +278,8 @@ export default function NowPlayingBar({
           onClick={handleSeek}
         >
           <div
-            className={`absolute top-0 left-0 h-full ${isRemote ? 'bg-green-500/60' : 'bg-black/20 dark:bg-white/35'} transition-[width] duration-300 ease-linear`}
-            style={{ width: `${progressPercentage}%` }}
+            className={`absolute top-0 left-0 h-full ${isRemote ? 'bg-green-500/60' : 'bg-black/20 dark:bg-white/35'}`}
+            style={{ width: `${progressPercentage}%`, transition: playerState.isPlaying ? 'width 300ms linear' : 'none' }}
           />
         </div>
 
@@ -432,10 +427,11 @@ export default function NowPlayingBar({
               style={{ minHeight: '8px', position: 'relative', overflow: 'hidden' }}
             >
               <div
-                className={`h-full ${isRemote ? 'bg-green-500' : 'bg-blue-500 dark:bg-white'} rounded-full group-hover:bg-blue-400 dark:group-hover:bg-gray-300 transition-[width] duration-500 ease-linear`}
-                style={{ 
+                className={`h-full ${isRemote ? 'bg-green-500' : 'bg-blue-500 dark:bg-white'} rounded-full group-hover:bg-blue-400 dark:group-hover:bg-gray-300`}
+                style={{
                   width: `${progressPercentage}%`,
                   minHeight: '8px',
+                  transition: playerState.isPlaying ? 'width 500ms linear' : 'none',
                 }}
               ></div>
             </div>

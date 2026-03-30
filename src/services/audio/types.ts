@@ -41,6 +41,12 @@ export interface WebAudioPlayerCallbacks {
   onAutomixTrigger?: () => void
   /** Llamado cuando el pipeline de audio necesita recarga tras suspensión profunda de iOS */
   onRecoveryNeeded?: (song: Song, position: number) => void
+  /** Llamado cuando el estado de reproducción cambia por causa externa (interrupción, route change, etc.) */
+  onPlaybackStateChanged?: (isPlaying: boolean, currentTime: number, reason?: string) => void
+  /** Llamado cuando el crossfade no puede ejecutarse (ej: archivo siguiente no preparado) */
+  onCrossfadeFailed?: () => void
+  /** Llamado cuando nativo cambió de canción autónomamente (JS estaba congelado en background) */
+  onNativeNext?: (data: { title: string; artist: string; album: string; duration: number }) => void
 }
 
 // =============================================================================

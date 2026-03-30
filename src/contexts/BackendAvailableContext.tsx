@@ -41,12 +41,24 @@ export function BackendAvailableProvider({ children }: { children: ReactNode }) 
 
     check()
 
-    // Re-check every 5 minutes in case backend comes back
+    // Re-check every 5 minutes as a fallback
     const interval = setInterval(check, 5 * 60 * 1000)
+
+    // Re-check immediately when network comes back (e.g. VPN connected)
+    const onOnline = () => { check() }
+    window.addEventListener('online', onOnline)
+
+    // Re-check when user returns to the app (tab/app focus)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    document.addEventListener('visibilitychange', onVisible)
 
     return () => {
       mounted = false
       clearInterval(interval)
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])
 

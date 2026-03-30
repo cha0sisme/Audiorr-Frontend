@@ -15,6 +15,11 @@
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
+		AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */; };
+		AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */; };
+		AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */; };
+		AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */; };
+		AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */; };
 		AB01CD02EF03AB04CD05EF06 /* AudioBridgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */; };
 		AB01CD02EF03AB04CD05EF08 /* NativeTabBarPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */; };
 		AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */; };
@@ -31,6 +36,11 @@
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineManager.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileLoader.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAudioPlugin.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfadeExecutor.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudiorrBridgeViewController.swift; sourceTree = "<group>"; };
 		AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBridgePlugin.swift; sourceTree = "<group>"; };
 		AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabBarPlugin.swift; sourceTree = "<group>"; };
 		AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNowPlayingPlugin.swift; sourceTree = "<group>"; };
@@ -73,6 +83,11 @@
 				AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */,
 				AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */,
 				AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */,
+				AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */,
+				AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */,
+				AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */,
+				AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */,
+				AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -169,6 +184,11 @@
 				AB01CD02EF03AB04CD05EF06 /* AudioBridgePlugin.swift in Sources */,
 				AB01CD02EF03AB04CD05EF08 /* NativeTabBarPlugin.swift in Sources */,
 				AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */,
+				AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */,
+				AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */,
+				AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */,
+				AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */,
+				AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -322,7 +342,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -332,7 +352,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 5.0;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.leandro.audiorr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -348,7 +368,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -358,7 +378,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.0;
+				MARKETING_VERSION = 5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.leandro.audiorr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

@@ -47,9 +47,10 @@ export default function SongDetail() {
         playerActions.togglePlayPause()
       }
     } else if (song) {
+      playerActions.setCurrentContextUri(`song:${id}`)
       playerActions.playSong(song)
     }
-  }, [isThisSongPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, song])
+  }, [isThisSongPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, song, id])
 
   // Carga de la información principal de la canción
   useEffect(() => {
@@ -137,6 +138,7 @@ export default function SongDetail() {
   }
 
   const handlePlaySong = (songToPlay: Song) => {
+    playerActions.setCurrentContextUri(`song:${songToPlay.id}`)
     playerActions.playSong(songToPlay)
   }
 
@@ -335,7 +337,7 @@ export default function SongDetail() {
             songs={similarSongs}
             currentSongId={playerState.currentSong?.id}
             isPlaying={playerState.isPlaying}
-            onSongDoubleClick={(s) => playerActions.playSong(s)}
+            onSongDoubleClick={(s) => { playerActions.setCurrentContextUri(`song:${s.id}`); playerActions.playSong(s) }}
             onSongContextMenu={() => {}} // Context menu not implemented for similar songs yet
             showAlbum={false}
             showCover={true}

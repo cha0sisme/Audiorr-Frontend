@@ -198,7 +198,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             DispatchQueue.main.async {
                 self.viewerIsOpen = true
                 let tabBarH = self.tabBar?.frame.height ?? 80
+                // Desactivar interacción INMEDIATAMENTE — no esperar a la animación.
+                // NativeAwareWindow.hitTest comprueba isUserInteractionEnabled,
+                // así que esto previene que el tab bar / mini-player roben toques
+                // al WKWebView (donde vive el NowPlayingViewer).
                 self.miniPlayerShadow?.isUserInteractionEnabled = false
+                self.tabBar?.isUserInteractionEnabled           = false
                 UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseIn) {
                     self.nowPlayingContainer?.alpha     = 0
                     self.nowPlayingContainer?.transform = CGAffineTransform(translationX: 0, y: 16)
@@ -207,7 +212,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                     self.nowPlayingContainer?.isHidden = true
                     self.miniPlayerShadow?.isHidden    = true
                     self.tabBar?.isHidden              = true
-                    self.nowPlayingContainer?.transform = CGAffineTransform(translationX: 0, y: 16)
                 }
             }
 
@@ -215,10 +219,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             DispatchQueue.main.async {
                 self.viewerIsOpen = false
                 let tabBarH = self.tabBar?.frame.height ?? 80
+                // Restaurar interacción y visibilidad
                 self.miniPlayerShadow?.isHidden                = false
                 self.miniPlayerShadow?.isUserInteractionEnabled = true
-                self.tabBar?.transform = CGAffineTransform(translationX: 0, y: tabBarH)
                 self.tabBar?.isHidden  = false
+                self.tabBar?.isUserInteractionEnabled           = true
+                self.tabBar?.transform = CGAffineTransform(translationX: 0, y: tabBarH)
                 if self.miniPlayerShouldShow {
                     self.nowPlayingContainer?.isHidden = false
                 }

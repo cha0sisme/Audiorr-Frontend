@@ -8,6 +8,7 @@ import Spinner from './Spinner'
 import AlbumCard from './AlbumCard'
 import AlbumCover from './AlbumCover'
 import DailyMixSection from './DailyMixSection'
+import JumpBackInSection from './JumpBackInSection'
 import HorizontalScrollSection from './HorizontalScrollSection'
 import { useContextMenu } from '../hooks/useContextMenu'
 import SongContextMenu from './SongContextMenu'
@@ -189,7 +190,7 @@ export default function HomePage() {
                 className="flex items-center gap-2.5 py-2 px-2 rounded-xl cursor-pointer select-none active:bg-black/5 dark:active:bg-white/5 transition-colors"
                 onClick={() => {
                   const allSongs = topWeekly.slice(0, 10).map(toSong)
-                  playerActions.playPlaylistFromSong(allSongs, allSongs[idx])
+                  playerActions.playPlaylistFromSong(allSongs, allSongs[idx], `album:${entry.album_id}`)
                 }}
               >
                 <span className="w-5 text-center font-bold tabular-nums text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">
@@ -224,7 +225,10 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* 2. Lanzamientos recientes */}
+      {/* 2. Volver a escuchar */}
+      {backendAvailable && <JumpBackInSection />}
+
+      {/* 3. Lanzamientos recientes */}
       {!loadingRecent && recentReleases.length > 0 && (
         <HorizontalScrollSection title="Lanzamientos recientes">
           {recentReleases.slice(0, 18).map(album => (
@@ -235,10 +239,10 @@ export default function HomePage() {
         </HorizontalScrollSection>
       )}
 
-      {/* 3. Tus mixes diarios (solo con backend) */}
+      {/* 4. Tus mixes diarios (solo con backend) */}
       {backendAvailable && <DailyMixSection />}
 
-      {/* 4. Últimos álbumes añadidos */}
+      {/* 5. Últimos álbumes añadidos */}
       {albums.length > 0 && (
         <HorizontalScrollSection title="Últimos álbumes añadidos">
           {albums.map(album => (

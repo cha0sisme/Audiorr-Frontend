@@ -53,9 +53,9 @@ export default function AlbumDetail() {
         playerActions.togglePlayPause()
       }
     } else {
-      playerActions.playPlaylist(songs)
+      playerActions.playPlaylist(songs, `album:${id}`)
     }
-  }, [isThisAlbumPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, songs])
+  }, [isThisAlbumPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, songs, id])
 
   useEffect(() => {
     const fetchAlbumSongs = async () => {
@@ -129,7 +129,7 @@ export default function AlbumDetail() {
   }
 
   const handlePlaySong = (song: Song) => {
-    playerActions.playPlaylistFromSong(songs, song)
+    playerActions.playPlaylistFromSong(songs, song, `album:${id}`)
   }
 
   const formatDate = (date?: { year: number; month?: number; day?: number }) => {

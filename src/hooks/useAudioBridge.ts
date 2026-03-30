@@ -18,6 +18,14 @@ export function useAudioBridge() {
   const playerProgress = usePlayerProgress()
   const playerActions  = usePlayerActions()
 
+  // Con NativeAudioPlayer, AudioEngineManager maneja todo directamente en Swift:
+  // - NowPlaying (MPNowPlayingInfoCenter) a 4Hz
+  // - Remote commands (MPRemoteCommandCenter) → play/pause/seek nativos, next/prev via evento
+  // - Interrupciones y route changes
+  // - Keepalive no necesario (AVAudioEngine mantiene la sesión)
+  // Este hook solo se necesita para el modo WebAudio/HTMLAudio (no nativo).
+  const useNativeEngine = isNative // NativeAudioPlayer está activo en nativo
+
   // Ref para el progreso actual sin crear closures stale en el timer
   const progressRef = useRef(playerProgress.progress)
   useEffect(() => { progressRef.current = playerProgress.progress }, [playerProgress.progress])
@@ -36,7 +44,7 @@ export function useAudioBridge() {
 
   // ── 1. Actualizar Now Playing cuando cambia la canción ─────────────────────
   useEffect(() => {
-    if (!isNative) return
+    if (!isNative || useNativeEngine) return
 
     const song = playerState.currentSong
     if (!song) {
@@ -66,7 +74,7 @@ export function useAudioBridge() {
 
   // ── 2. Actualizar estado play/pause ────────────────────────────────────────
   useEffect(() => {
-    if (!isNative || !playerState.currentSong) return
+    if (!isNative || useNativeEngine || !playerState.currentSong) return
     audioBridge.updatePlaybackState({
       isPlaying:   playerState.isPlaying,
       elapsedTime: progressRef.current,
@@ -80,7 +88,7 @@ export function useAudioBridge() {
   // AudioBridgePlugin lo contrarresta cada 1s, pero reforzamos desde JS cada 5s
   // para corregir drift acumulado.
   useEffect(() => {
-    if (!isNative || !playerState.isPlaying || !playerState.currentSong) return
+    if (!isNative || useNativeEngine || !playerState.isPlaying || !playerState.currentSong) return
 
     const timer = setInterval(() => {
       const realElapsed = elapsedAtPlayStartRef.current +
@@ -99,7 +107,7 @@ export function useAudioBridge() {
   // Cuando el usuario desbloquea la pantalla o vuelve a la app, corregir el
   // elapsed time para que la barra de progreso del lock screen esté en sync.
   useEffect(() => {
-    if (!isNative || !playerState.currentSong) return
+    if (!isNative || useNativeEngine || !playerState.currentSong) return
 
     const handleVisibility = () => {
       if (document.visibilityState === 'visible' && playerState.isPlaying) {
@@ -118,8 +126,9 @@ export function useAudioBridge() {
   }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
 
   // ── 4. Escuchar comandos remotos (auriculares, lock screen, CarPlay) ────────
+  // Con NativeAudioPlayer, los comandos remotos van directos a AudioEngineManager.
   useEffect(() => {
-    if (!isNative) return
+    if (!isNative || useNativeEngine) return
 
     let handle: PluginListenerHandle | null = null
 
@@ -149,10 +158,9 @@ export function useAudioBridge() {
   }, [isNative])
 
   // ── 5. Pausar al desconectar Bluetooth / CarPlay / auriculares ────────────
-  // iOS envía _audioRouteLost cuando el dispositivo de salida se desconecta.
-  // Comportamiento idéntico a Spotify / Apple Music: pausar sin auto-reanudar.
+  // Con NativeAudioPlayer, AudioEngineManager maneja route changes directamente.
   useEffect(() => {
-    if (!isNative) return
+    if (!isNative || useNativeEngine) return
 
     const handleRouteLost = () => {
       console.log('[useAudioBridge] Audio route lost — pausing playback')
@@ -167,10 +175,9 @@ export function useAudioBridge() {
   }, [isNative, playerState.isPlaying])
 
   // ── 6. Manejar interrupciones de sesión de audio (llamada, Siri, otra app) ─
-  // iOS interrumpe la sesión cuando otra app toma el audio. Sin manejar esto,
-  // la sesión queda en un estado inválido y el widget de Now Playing no se recupera.
+  // Con NativeAudioPlayer, AudioEngineManager maneja interrupciones directamente.
   useEffect(() => {
-    if (!isNative) return
+    if (!isNative || useNativeEngine) return
 
     const handleInterrupted = () => {
       console.log('[useAudioBridge] Audio session interrupted — pausing')

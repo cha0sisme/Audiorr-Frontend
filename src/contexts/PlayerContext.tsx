@@ -16,6 +16,9 @@ import { AnalyzedSong, sortSongs } from '../utils/smartMixUtils'
 import { analysisQueue, AnalysisPriority } from '../services/analysisQueue'
 import { backendApi } from '../services/backendApi'
 import { WebAudioPlayer } from '../services/webAudioPlayer'
+import { NativeAudioPlayer } from '../services/nativeAudioPlayer'
+import { nativeAudio } from '../services/nativeAudio'
+import { calculateCrossfadeConfig } from '../services/audio/DJMixingAlgorithms'
 import { queuePrefetcher } from '../services/queuePrefetcher'
 import { streamRetryManager } from '../services/streamRetry'
 
@@ -81,8 +84,8 @@ interface PlayerActionsType {
   setVolume: (volume: number) => void
   playSong: (song: Song, keepPosition?: boolean) => void
   playAlbum: (albumId: string) => void
-  playPlaylist: (songs: Song[]) => void
-  playPlaylistFromSong: (songs: Song[], startSong: Song) => void
+  playPlaylist: (songs: Song[], contextUri?: string | null) => void
+  playPlaylistFromSong: (songs: Song[], startSong: Song, contextUri?: string | null) => void
   playSongAtPosition: (songs: Song[], startSong: Song, position: number, autoPlay?: boolean) => void
   removeFromQueue: (songId: string) => void
   clearQueue: () => void
@@ -102,6 +105,7 @@ interface PlayerActionsType {
   registerRemoteHandlers: (handlers: RemoteHandlers | null) => void
   setScrobblingSuppressed: (disabled: boolean) => void
   setScrobbleCallback: (fn: ((data: ScrobbleEventData) => void) | null) => void
+  setCurrentContextUri: (uri: string | null) => void
 }
 
 export interface ScrobbleEventData {
@@ -114,6 +118,7 @@ export interface ScrobbleEventData {
   playedAt: string
   year?: number
   genre?: string
+  contextUri?: string | null
 }
 
 export interface RemoteHandlers {
@@ -285,7 +290,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // --- Refs ---
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const nextAudioRef = useRef<HTMLAudioElement | null>(null)
-  const webAudioPlayerRef = useRef<WebAudioPlayer | null>(null)
+  const webAudioPlayerRef = useRef<WebAudioPlayer | NativeAudioPlayer | null>(null)
   const currentSongRef = useRef<Song | null>(currentSong)
   const queueRef = useRef<Song[]>(queueState)
   const currentSourceRef = useRef<string | null>(currentSource)
@@ -295,6 +300,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const volumeRef = useRef(volume)
   const analysisCacheRef = useRef<Map<string, AudioAnalysisResult | { error: string }>>(new Map())
   const outroRefinedForCurrentSongRef = useRef(false)
+  const automixTriggerSentRef = useRef(false) // true cuando ya enviamos trigger a nativo para esta canción
   const nextCallbackRef = useRef<(forAutomix?: boolean) => void>()
   const timeUpdateHandlerRef = useRef<() => void>()
   const endedHandlerRef = useRef<() => void>()
@@ -314,17 +320,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
   const scrobblingDisabledRef = useRef(false)
   const scrobbleCallbackRef = useRef<((data: ScrobbleEventData) => void) | null>(null)
+  const currentContextUriRef = useRef<string | null>(null)
 
   // --- Hooks ---
   const { settings } = useSettings()
   const { analyze } = useAudioAnalysis()
 
   // --- Helper: determinar qué sistema de audio usar ---
-  const shouldUseWebAudio = useCallback(() => settings.useWebAudio, [settings.useWebAudio])
+  // En iOS nativo, siempre usamos NativeAudioPlayer (que comparte interfaz con WebAudioPlayer)
+  const shouldUseWebAudio = useCallback(() => IS_NATIVE || settings.useWebAudio, [settings.useWebAudio])
 
   // --- Helper para actualizar Media Session ---
   const updateMediaSession = useCallback(
     (song: PlayerStateType['currentSong'], isPlayingState: boolean) => {
+      // En nativo, Swift controla MPNowPlayingInfoCenter directamente.
+      // Tocar navigator.mediaSession desde WKWebView causa que WebKit registre
+      // sus propios handlers en MPRemoteCommandCenter, conflictuando con los nativos.
+      if (IS_NATIVE) return
+
       if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
         return
       }
@@ -363,10 +376,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         console.warn('[MediaSession] Playback state not supported:', error)
       }
 
-      // Establecer duración real de la canción para que WKWebView no use la del
-      // keepalive WAV de 1s en la pantalla de bloqueo.
-      // Usar progressRef.current como posición real — antes estaba hardcodeado a 0,
-      // lo que reseteaba la barra de progreso del lock screen en cada play/pause.
       if (song?.duration && song.duration > 0) {
         try {
           const pos = Math.min(progressRef.current, song.duration)
@@ -716,6 +725,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
 
       outroRefinedForCurrentSongRef.current = false
+      automixTriggerSentRef.current = false
 
       // Repriorizar análisis cuando se cambia de canción
       if (currentSongRef.current?.id !== song.id) {
@@ -787,6 +797,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // === SISTEMA CONDICIONAL: Web Audio vs HTML Audio ===
         if (shouldUseWebAudio()) {
           console.log('[Player] Usando Web Audio API para reproducir:', song.title)
+
+          // En nativo, limpiar cualquier HTML Audio residual que pudiera haber
+          // quedado de un fallback anterior (evita reproducción paralela fantasma).
+          if (IS_NATIVE && audioRef.current) {
+            audioRef.current.pause()
+            audioRef.current.src = ''
+            audioRef.current = null
+          }
           
           // 🚀 ACTUALIZAR UI INMEDIATAMENTE (antes de cargar el audio)
           // Esto hace que la respuesta se sienta instantánea
@@ -839,19 +857,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               return // No hacer nada más, la nueva canción se está cargando
             }
             
+            // En nativo, el NativeAudioPlayer maneja todo — no crear fallback HTML Audio
+            // que podría seguir reproduciéndose en paralelo y actualizando progress.
+            if (IS_NATIVE) {
+              console.error('[Player] NativeAudioPlayer.play() falló:', loadError)
+              return
+            }
+
             // 🔄 FALLBACK A HTML AUDIO para formatos no soportados (M4A, etc.)
             // decodeAudioData puede fallar con ciertos codecs dependiendo del navegador
             console.warn('[Player] Web Audio falló, usando fallback a HTML Audio:', loadError)
-            
+
             // Usar HTML Audio como fallback para esta canción
             const fallbackAudio = audioRef.current || new Audio()
             if (!audioRef.current) {
               audioRef.current = fallbackAudio
             }
-            
+
             fallbackAudio.src = streamUrl
             fallbackAudio.volume = volumeRef.current / 100 // Usar ref para valor más actualizado
-            
+
             // Aplicar listeners básicos para el fallback
             fallbackAudio.oncanplay = () => {
               fallbackAudio.play()
@@ -864,7 +889,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                   console.error('[Player] Error en fallback HTML Audio:', playError)
                 })
             }
-            
+
             fallbackAudio.ontimeupdate = () => {
               progressRef.current = fallbackAudio.currentTime
               const now = Date.now()
@@ -873,7 +898,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 lastProgressUpdateRef.current = now
               }
             }
-            
+
             fallbackAudio.onended = () => {
               // Avanzar a la siguiente canción
               const currentIndex = queueRef.current.findIndex(s => s.id === song.id)
@@ -884,7 +909,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                 setIsPlaying(false)
               }
             }
-            
+
             fallbackAudio.load()
             return // No continuar con el resto del código de Web Audio
           }
@@ -1219,6 +1244,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             }
             updateQueue(songsWithAlbumId)
             updateSource(`album:${albumId}`)
+            currentContextUriRef.current = `album:${albumId}`
             playSong(songsWithAlbumId[0]).catch(error => {
               console.error('Error al reproducir canción del álbum:', error)
             })
@@ -1232,15 +1258,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
 
   const playPlaylist = useCallback(
-    (songs: Song[]) => {
+    (songs: Song[], contextUri?: string | null) => {
       if (songs.length === 0) return
       if (remoteHandlersRef.current?.playPlaylist) {
         remoteHandlersRef.current.playPlaylist(songs)
         return
       }
       updateQueue(songs)
-      if (songs[0]?.playlistId) {
+      if (contextUri !== undefined) {
+        if (contextUri) updateSource(contextUri)
+        currentContextUriRef.current = contextUri
+      } else if (songs[0]?.playlistId) {
         updateSource(`playlist:${songs[0].playlistId}`)
+        currentContextUriRef.current = `playlist:${songs[0].playlistId}`
+      } else {
+        currentContextUriRef.current = null
       }
       // No usar await - playSong ya actualiza la UI inmediatamente
       playSong(songs[0]).catch(error => {
@@ -1253,10 +1285,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const playGeneratedSmartMix = useCallback(() => {
     if (generatedSmartMix.length > 0) {
       playPlaylist(generatedSmartMix)
+      if (smartMixPlaylistId) {
+        currentContextUriRef.current = `smartmix:${smartMixPlaylistId}`
+      }
       // Ya no limpiamos inmediatamente para que el botón pueda mostrar "Mezcla activa"
       // Se limpiará cuando cambie la firma o expire por tiempo (30m)
     }
-  }, [generatedSmartMix, playPlaylist])
+  }, [generatedSmartMix, playPlaylist, smartMixPlaylistId])
 
   const seek = useCallback((time: number) => {
     if (remoteHandlersRef.current?.seek) {
@@ -1273,6 +1308,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         lastProgressUpdateRef.current = now
         // Bloquear automix unos segundos después de un seek manual
         lastPauseTimeRef.current = now
+        // Resetear automix trigger para que se recalcule con la nueva posición.
+        // El nativo también tiene su propio cooldown de 5s tras seek.
+        automixTriggerSentRef.current = false
       }
     } else {
       if (audioRef.current) {
@@ -1354,7 +1392,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
 
   const playPlaylistFromSong = useCallback(
-    (songs: Song[], startSong: Song) => {
+    (songs: Song[], startSong: Song, contextUri?: string | null) => {
       if (remoteHandlersRef.current?.playSong) {
         remoteHandlersRef.current.playSong(startSong, songs)
         return
@@ -1368,10 +1406,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // 🔥 FIX: No cortar la cola, mantener la lista completa para contexto (Premium)
         updateQueue(songs)
 
-        // Determinar ID de playlist de los metadatos de la canción
-        const pId = startSong.playlistId || songs[0]?.playlistId
-        if (pId) {
-          updateSource(`playlist:${pId}`)
+        if (contextUri !== undefined) {
+          if (contextUri) updateSource(contextUri)
+          currentContextUriRef.current = contextUri
+        } else {
+          // Determinar ID de playlist de los metadatos de la canción
+          const pId = startSong.playlistId || songs[0]?.playlistId
+          if (pId) {
+            updateSource(`playlist:${pId}`)
+            currentContextUriRef.current = `playlist:${pId}`
+          } else {
+            currentContextUriRef.current = null
+          }
         }
 
         // No usar await - playSong ya actualiza la UI inmediatamente
@@ -1428,13 +1474,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       remoteHandlersRef.current.previous()
       return
     }
-    if (audioRef.current && audioRef.current.currentTime > 3) {
+    // Limpiar automix nativo inmediatamente (evitar race condition con timer nativo)
+    if (IS_NATIVE && webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+      webAudioPlayerRef.current.clearAutomixTrigger()
+      nativeAudio.cancelCrossfade().catch(() => {})
+    }
+    isCrossfadingRef.current = false
+    setIsCrossfading(false)
+    automixTriggerSentRef.current = false
+
+    // Si llevamos más de 3s reproducidos, reiniciar la canción actual.
+    // En nativo, audioRef no existe — usar progressRef que siempre está sincronizado.
+    const currentTime = IS_NATIVE ? progressRef.current : (audioRef.current?.currentTime ?? 0)
+    if (currentTime > 3) {
       seek(0)
       return
     }
     const currentIndex = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
     if (currentIndex > 0) {
-      // No usar await - playSong ya actualiza la UI inmediatamente
       playSong(queueRef.current[currentIndex - 1]).catch(error => {
         console.error('Error al ir a canción anterior:', error)
       })
@@ -1455,7 +1512,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
 
       const isPlaying = webAudioPlayerRef.current.isCurrentlyPlaying()
-      console.log('[PlayerContext] WebAudio isCurrentlyPlaying:', isPlaying)
+      const hasSource = webAudioPlayerRef.current.hasSource()
+      console.log(`[PlayerContext] togglePlayPause: isPlaying=${isPlaying}, hasSource=${hasSource}, currentSong=${currentSong?.title ?? 'null'}`)
 
       if (isPlaying) {
         console.log('[PlayerContext] Pausando WebAudio')
@@ -1464,10 +1522,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setIsPlaying(false)
         updateMediaSession(currentSong, false)
       } else {
-        console.log('[PlayerContext] Reanudando WebAudio')
-        
+        console.log(`[PlayerContext] Reanudando WebAudio (hasSource=${hasSource})`)
+
         // FIX: Si WebAudio no tiene canción cargada (ej. refresh), cargarla
-        if (!webAudioPlayerRef.current.hasSource() && currentSong) {
+        if (!hasSource && currentSong) {
              console.log('[PlayerContext] WebAudio sin fuente, cargando canción actual...')
              playSong(currentSong, true).catch(err => console.error('[PlayerContext] Error al reanudar WebAudio:', err))
              return
@@ -1677,6 +1735,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                           playedAt: new Date(songData.startTime).toISOString(),
                           year: currentSong.year,
                           genre: currentSong.genre,
+                          contextUri: currentContextUriRef.current,
                         })
                       } else {
                         // Si falla, permitir intentar de nuevo
@@ -1797,6 +1856,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
 
         if (triggerTime && currentTime >= triggerTime) {
+          // Si queda muy poco tiempo, dejar que onEnded haga transición directa
+          const remaining = duration - currentTime
+          if (remaining < 3) {
+            console.log(`[AUTOMIX-A] Omitiendo crossfade: solo quedan ${remaining.toFixed(1)}s`)
+            return
+          }
           console.log(
             `[AUTOMIX-A] Lanzando siguiente. Razón: ${reason}. (tiempoActual: ${currentTime.toFixed(
               2
@@ -2404,6 +2469,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       // Si NO es para automix (botón manual), usar playSong directo para un cambio instantáneo
       if (!forAutomix) {
         console.log(`[PlayerContext] next() manual - saltando a: ${nextSong?.title}`)
+        // CRÍTICO: Limpiar automix nativo ANTES de playSong (que es async y tarda en descargar).
+        // Si no, el timer nativo puede disparar crossfade mientras descargamos la siguiente canción.
+        if (IS_NATIVE && webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+          webAudioPlayerRef.current.clearAutomixTrigger()
+          nativeAudio.cancelCrossfade().catch(() => {})
+        }
+        isCrossfadingRef.current = false
+        setIsCrossfading(false)
+        automixTriggerSentRef.current = false
         playSong(nextSong).catch(error => {
           console.error('Error al ir a siguiente canción:', error)
         })
@@ -2461,9 +2535,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               webAudioPlayerRef.current?.startCrossfade()
             })
             .catch(error => {
-              console.error('Error preparando siguiente canción:', error)
+              console.error('Error preparando siguiente canción para crossfade:', error)
+              console.log('[PlayerContext] Fallback: reproduciendo siguiente canción directamente')
               isCrossfadingRef.current = false
               setIsCrossfading(false)
+              playSong(nextSong).catch(e => console.error('Error en fallback playSong:', e))
             })
         }
       } else {
@@ -2523,7 +2599,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // =================================================================================
 
   // --- Helper: configurar callbacks de WebAudioPlayer (progreso + automix) ---
-  const configureWebAudioCallbacks = (player: WebAudioPlayer) => {
+  const configureWebAudioCallbacks = (player: WebAudioPlayer | NativeAudioPlayer) => {
     player.setCallbacks({
       onTimeUpdate: (currentTime, duration) => {
         setDuration(duration)
@@ -2591,6 +2667,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                           playedAt: new Date(songData.startTime).toISOString(),
                           year: currentSong.year,
                           genre: currentSong.genre,
+                          contextUri: currentContextUriRef.current,
                         })
                       } else {
                         // Si falla, permitir intentar de nuevo
@@ -2618,7 +2695,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // =================================================================================
         
         // Lógica de automix para Web Audio (similar a HTML Audio)
-        // Solo ejecutar si está reproduciendo activamente, no en crossfade, no acaba de pausar, y hay canción actual
+        // Solo ejecutar si está reproduciendo activamente, no en crossfade, no acaba de seek/pausa reciente, y hay canción actual
+        // Usamos 5s de bloqueo tras seek para dar tiempo a la preparación del siguiente archivo
         const timeSincePause = Date.now() - lastPauseTimeRef.current
         const currentIndex = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
         const hasNextSong = currentIndex >= 0 && currentIndex < queueRef.current.length - 1
@@ -2626,7 +2704,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (
           player.isCurrentlyPlaying() &&
           !isCrossfadingRef.current &&
-          timeSincePause > 2000 &&
+          timeSincePause > 5000 &&
           currentSongRef.current &&
           duration > 0 &&
           hasNextSong
@@ -2705,9 +2783,51 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             reason = `Fallback ${settings.isDjMode ? 'DJ' : 'Normal'}: ${fallbackSeconds}s restantes`
           }
 
+          // Enviar trigger time a nativo (una vez por canción) para automix en background.
+          // Si JS se congela (pantalla bloqueada), el timer nativo dispara el crossfade.
+          if (triggerTime && !automixTriggerSentRef.current && IS_NATIVE && player instanceof NativeAudioPlayer) {
+            automixTriggerSentRef.current = true
+            const nextSongForAutomix = queueRef.current[currentIndex + 1]
+            const nextCacheId = nextSongForAutomix ? generateStableCacheId(nextSongForAutomix) : null
+            const nextCachedAnalysis = nextCacheId ? analysisCacheRef.current.get(nextCacheId) : undefined
+            const nextAnalysisForConfig = (nextCachedAnalysis && !('error' in nextCachedAnalysis)) ? nextCachedAnalysis : undefined
+            const currentAnalysisForConfig = (currentAnalysis && !('error' in currentAnalysis)) ? currentAnalysis : undefined
+
+            // Pre-calcular config de crossfade para que nativo pueda ejecutarla autónomamente
+            const automixConfig = calculateCrossfadeConfig({
+              currentAnalysis: currentAnalysisForConfig ?? null,
+              nextAnalysis: nextAnalysisForConfig ?? null,
+              bufferADuration: duration,
+              bufferBDuration: nextSongForAutomix?.duration || 180,
+              mode: settings.isDjMode ? 'dj' : 'normal',
+            })
+            player.setAutomixTrigger(triggerTime, {
+              entryPoint: automixConfig.entryPoint,
+              fadeDuration: automixConfig.fadeDuration,
+              transitionType: automixConfig.transitionType,
+              useFilters: automixConfig.useFilters,
+              useAggressiveFilters: automixConfig.useAggressiveFilters,
+              needsAnticipation: automixConfig.needsAnticipation,
+              anticipationTime: automixConfig.anticipationTime,
+            })
+            console.log(`[AUTOMIX-WEB] Trigger nativo configurado: ${triggerTime.toFixed(1)}s (${automixConfig.transitionType})`)
+          }
+
           if (triggerTime && currentTime >= triggerTime) {
+            // Si queda muy poco tiempo (< 3s), no intentar crossfade — la canción
+            // terminará antes de que la descarga/preparación del siguiente archivo complete.
+            // Dejar que onEnded haga la transición directa.
+            const remaining = duration - currentTime
+            if (remaining < 3) {
+              console.log(`[AUTOMIX-WEB] Omitiendo crossfade: solo quedan ${remaining.toFixed(1)}s — se usará transición directa al terminar`)
+              return
+            }
+            // Limpiar trigger nativo (JS lo va a manejar)
+            if (IS_NATIVE && player instanceof NativeAudioPlayer) {
+              player.clearAutomixTrigger()
+            }
             console.log(
-              `[AUTOMIX-WEB] 🚀 LANZANDO CROSSFADE. Razón: ${reason}. (tiempoActual: ${currentTime.toFixed(
+              `[AUTOMIX-WEB] Lanzando crossfade. Razón: ${reason}. (tiempoActual: ${currentTime.toFixed(
                 2
               )}s, trigger: ${triggerTime.toFixed(2)}s, durFundido: ${fadeDuration.toFixed(2)}s)`
             )
@@ -2719,7 +2839,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
 
       onEnded: () => {
-        // Usar la referencia segura para evitar stale closures
+        // Si el crossfade estaba "en curso" pero la canción terminó de todas formas,
+        // significa que el crossfade se rompió/nunca arrancó. Resetear antes de avanzar.
+        if (isCrossfadingRef.current) {
+          console.warn('[WebAudioPlayer] Canción terminó con crossfade supuestamente en curso — reseteando crossfade roto')
+          isCrossfadingRef.current = false
+          setIsCrossfading(false)
+        }
         console.log('[WebAudioPlayer] Canción terminó, llamando next()')
         nextCallbackRef.current?.(true) // true = usar crossfade para transición suave
       },
@@ -2828,6 +2954,52 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           startOffset.toFixed(2)
         )
       },
+      onPlaybackStateChanged: (playing, currentTime, reason) => {
+        // Swift pausa/reanuda por causa externa (llamada, BT desconectado, nota de voz, etc.)
+        console.log(`[NativeAudio] Estado externo: isPlaying=${playing}, time=${currentTime.toFixed(1)}, reason=${reason}`)
+        setIsPlaying(playing)
+        if (!playing) {
+          // Congelar progreso en el punto exacto de pausa nativo
+          progressRef.current = currentTime
+          setProgress(currentTime)
+        }
+        updateMediaSession(currentSongRef.current, playing)
+      },
+      onCrossfadeFailed: () => {
+        // El crossfade no pudo ejecutarse (archivo siguiente no preparado, etc.)
+        // Resetear estado de crossfade y hacer transición directa a la siguiente canción
+        console.warn('[PlayerContext] Crossfade falló — fallback a playSong directo')
+        isCrossfadingRef.current = false
+        setIsCrossfading(false)
+        // Buscar la siguiente canción y reproducirla directamente
+        const currentIndex = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
+        if (currentIndex >= 0 && currentIndex < queueRef.current.length - 1) {
+          const nextSong = queueRef.current[currentIndex + 1]
+          playSong(nextSong).catch(error => {
+            console.error('[PlayerContext] Error en fallback playSong tras crossfade fallido:', error)
+          })
+        }
+      },
+      onNativeNext: (data) => {
+        // Nativo cambió de canción mientras JS estaba congelado en background.
+        // Sincronizar estado de React con lo que nativo ya está reproduciendo.
+        console.log(`[PlayerContext] Native next en background: "${data.title}"`)
+        isCrossfadingRef.current = false
+        setIsCrossfading(false)
+        setIsPlaying(true)
+
+        // Buscar la canción en la cola por título/artista (no tenemos songId desde nativo)
+        const currentIndex = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
+        if (currentIndex >= 0 && currentIndex < queueRef.current.length - 1) {
+          const nextSong = queueRef.current[currentIndex + 1]
+          setCurrentSong(nextSong)
+          currentSongRef.current = nextSong
+          progressRef.current = 0
+          setProgress(0)
+          setDuration(data.duration || nextSong.duration)
+          updateMediaSession(nextSong, true)
+        }
+      },
     })
   }
 
@@ -2841,7 +3013,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
 
     // Inicializar elementos de audio según configuración
-    if (shouldUseWebAudio()) {
+    if (IS_NATIVE) {
+      // iOS nativo: usar AVAudioEngine via NativeAudioPlayer
+      console.log('[PlayerContext] Inicializando Native Audio Engine (AVAudioEngine)')
+      webAudioPlayerRef.current = new NativeAudioPlayer()
+      configureWebAudioCallbacks(webAudioPlayerRef.current)
+      webAudioPlayerRef.current.setConfig({
+        crossfadeDuration: 8,
+        volume: volume,
+        isDjMode: settings.isDjMode,
+        useReplayGain: settings.useReplayGain,
+      })
+      // Listener para next/prev remotos (lock screen, Dynamic Island)
+      nativeAudio.addListener('onRemoteCommand', ({ action }) => {
+        // Ack al nativo para cancelar fallback (JS está vivo y procesó el comando)
+        nativeAudio.ackRemoteCommand().catch(() => {})
+        if (action === 'next') nextCallbackRef.current?.()
+        if (action === 'previous') previous()
+      })
+    } else if (shouldUseWebAudio()) {
       console.log('[PlayerContext] Inicializando Web Audio API')
       webAudioPlayerRef.current = new WebAudioPlayer()
       configureWebAudioCallbacks(webAudioPlayerRef.current)
@@ -2946,7 +3136,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [analyze]) // Incluir analyze como dependencia
 
   // Efecto: Cambios en configuración de Web Audio (permitir alternancia en runtime)
+  // En nativo, siempre usamos NativeAudioPlayer — no hay alternancia.
   useEffect(() => {
+    if (IS_NATIVE) return
     const currentUseWebAudio = shouldUseWebAudio()
 
     // Estado actual de reproducción antes del cambio
@@ -3149,6 +3341,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // en las dependencias del efecto, lo que causaba churn constante (re-registro
   // de handlers cada frame) y ventanas donde los handlers estaban en null.
   useEffect(() => {
+    // En nativo, los remote commands (play/pause/seek) se manejan directamente
+    // en Swift via MPRemoteCommandCenter → AudioEngineManager. Next/prev llegan
+    // via evento onRemoteCommand. No registrar mediaSession handlers en JS
+    // para evitar el double-toggle (WebKit + nativo ambos interceptando).
+    if (IS_NATIVE) return
+
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
       return
     }
@@ -3231,11 +3429,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [currentSong, isPlaying, updateMediaSession])
 
   // Efecto: Re-afirmar positionState periódicamente en iOS nativo.
-  // WKWebView sobreescribe el NowPlaying del lock screen con los datos del
-  // keepalive HTMLAudioElement (WAV 1s en loop). Re-publicar setPositionState
-  // cada 3s contrarresta esa sobreescritura desde la capa web.
+  // Con NativeAudioPlayer, Swift actualiza MPNowPlayingInfoCenter directamente
+  // a 4Hz — este workaround ya no es necesario. Solo se mantiene si se usa
+  // WebAudioPlayer (no debería ocurrir en nativo, pero por seguridad).
   useEffect(() => {
     if (!IS_NATIVE || !isPlaying || !currentSong?.duration) return
+    // Con NativeAudioPlayer, progress se actualiza directamente en Swift
+    if (webAudioPlayerRef.current instanceof NativeAudioPlayer) return
 
     const timer = setInterval(() => {
       try {
@@ -3378,6 +3578,89 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('pagehide', handlePageHide)
     }
   }, [duration])
+
+  // 4b. Reconciliar estado nativo al volver de background (pantalla bloqueada → desbloqueo)
+  // Sincroniza TODO: isPlaying, progress, duration, canción actual (puede haber cambiado
+  // por crossfade/next nativo mientras JS estaba congelado).
+  useEffect(() => {
+    if (!IS_NATIVE) return
+    const handleVisibility = async () => {
+      if (document.visibilityState !== 'visible') return
+      if (!(webAudioPlayerRef.current instanceof NativeAudioPlayer)) return
+      const player = webAudioPlayerRef.current as NativeAudioPlayer
+
+      try {
+        await player.reconcileState()
+        const nativeState = await nativeAudio.getPlaybackState()
+
+        // 1. Reconciliar estado básico de reproducción
+        setIsPlaying(nativeState.isPlaying)
+        progressRef.current = nativeState.currentTime
+        setProgress(nativeState.currentTime)
+        setDuration(nativeState.duration)
+        setIsCrossfading(nativeState.isCrossfading)
+        isCrossfadingRef.current = nativeState.isCrossfading
+
+        // 2. Reconciliar canción actual: comparar título nativo con la canción actual de React.
+        //    Si no coincide, nativo cambió de canción en background (automix/next nativo).
+        const nativeTitle = nativeState.title
+        const jsTitle = currentSongRef.current?.title
+        if (nativeTitle && nativeTitle !== jsTitle) {
+          console.log(`[PlayerContext] Canción cambió en background: JS="${jsTitle}" → Nativo="${nativeTitle}"`)
+          // Buscar en la cola por título+artista para encontrar la canción correcta
+          const matchingSong = queueRef.current.find(s =>
+            s.title === nativeTitle && (
+              (typeof s.artist === 'string' ? s.artist : '') === nativeState.artist
+            )
+          )
+          if (matchingSong) {
+            setCurrentSong(matchingSong)
+            currentSongRef.current = matchingSong
+            setDuration(nativeState.duration || matchingSong.duration)
+            updateMediaSession(matchingSong, nativeState.isPlaying)
+            console.log(`[PlayerContext] Canción reconciliada: "${matchingSong.title}" (queue match)`)
+          } else {
+            // Fallback: buscar por título adelante en la cola desde la última posición conocida
+            // (puede haber avanzado múltiples canciones por automix en background)
+            const lastIdx = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
+            if (lastIdx >= 0) {
+              let found = false
+              for (let i = lastIdx + 1; i < queueRef.current.length; i++) {
+                if (queueRef.current[i].title === nativeTitle) {
+                  const match = queueRef.current[i]
+                  setCurrentSong(match)
+                  currentSongRef.current = match
+                  setDuration(nativeState.duration || match.duration)
+                  updateMediaSession(match, nativeState.isPlaying)
+                  console.log(`[PlayerContext] Canción reconciliada por posición: "${match.title}" (idx ${i})`)
+                  found = true
+                  break
+                }
+              }
+              if (!found && lastIdx < queueRef.current.length - 1) {
+                // Último recurso: avanzar una posición
+                const nextInQueue = queueRef.current[lastIdx + 1]
+                setCurrentSong(nextInQueue)
+                currentSongRef.current = nextInQueue
+                setDuration(nativeState.duration || nextInQueue.duration)
+                updateMediaSession(nextInQueue, nativeState.isPlaying)
+                console.log(`[PlayerContext] Canción reconciliada por posición+1: "${nextInQueue.title}"`)
+              }
+            }
+          }
+          // Resetear automix para la nueva canción
+          automixTriggerSentRef.current = false
+          outroRefinedForCurrentSongRef.current = false
+        }
+
+        console.log(`[PlayerContext] Reconciliación completa: playing=${nativeState.isPlaying}, time=${nativeState.currentTime.toFixed(1)}s, song="${nativeState.title}"`)
+      } catch (err) {
+        console.error('[PlayerContext] Error en reconciliación:', err)
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   // 5. RESTAURAR ESTADO DESDE BACKEND (Sincronización multidispositivo)
   // Compara timestamps: si el backend tiene datos más recientes que localStorage,
@@ -3584,6 +3867,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       registerRemoteHandlers,
       setScrobblingSuppressed: (disabled: boolean) => { scrobblingDisabledRef.current = disabled },
       setScrobbleCallback: (fn: ((data: ScrobbleEventData) => void) | null) => { scrobbleCallbackRef.current = fn },
+      setCurrentContextUri: (uri: string | null) => { currentContextUriRef.current = uri },
     }),
     // Añadir todas las dependencias aquí
     [
