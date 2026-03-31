@@ -36,6 +36,10 @@ export class NativeAudioPlayer {
   private nextAnalysis: AudioAnalysisResult | null = null
   private isPlayingState = false
   private isCrossfadingState = false
+  // True only after a play() call has fully resolved (native confirmed playback).
+  // False on construction, after stop(), and after errors.
+  // Used by togglePlayPause to decide: resume() (fast, engine has audio) vs playSong() (full reload).
+  private nativeEngineLoaded = false
   private duration = 0
   private currentTime_ = 0
   private volume = 0.75
@@ -208,6 +212,13 @@ export class NativeAudioPlayer {
     return this.isPlayingState
   }
 
+  /** True if a play() call has succeeded and the native engine has audio loaded.
+   *  False after construction, stop(), or error. Used by togglePlayPause to decide
+   *  between resume() (fast) and playSong() (full reload from network). */
+  isEngineLoaded(): boolean {
+    return this.nativeEngineLoaded
+  }
+
   // === Playback ===
 
   async play(song: Song, streamUrl: string, keepPosition = false): Promise<void> {
@@ -262,6 +273,7 @@ export class NativeAudioPlayer {
     // This is the latest play() — confirm it so events start flowing again
     this.confirmedSequence = seq
     this.isPlayingState = true
+    this.nativeEngineLoaded = true
     this.duration = song.duration || 0
 
     // Update NowPlaying metadata
@@ -305,6 +317,7 @@ export class NativeAudioPlayer {
     nativeAudio.stop().catch(() => {})
     this.isPlayingState = false
     this.isCrossfadingState = false
+    this.nativeEngineLoaded = false
     // Sync sequences so events aren't blocked after stop
     this.confirmedSequence = this.playSequence
     this.currentSong = null
@@ -601,6 +614,7 @@ export class NativeAudioPlayer {
     if (silence >= NativeAudioPlayer.WATCHDOG_SILENCE_MS) {
       console.warn(`[NativeAudioPlayer] ⚠️ Watchdog: no native events for ${(silence / 1000).toFixed(1)}s while playing — firing recovery`)
       this.isPlayingState = false
+      this.nativeEngineLoaded = false
       this.callbacks.onPlaybackStateChanged?.(false, this.currentTime_, 'watchdog-silence')
       this.callbacks.onError?.(new Error('Watchdog: native audio stopped responding'))
       this.watchdogTimer = null

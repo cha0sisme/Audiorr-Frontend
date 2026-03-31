@@ -890,12 +890,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             // que podría seguir reproduciéndose en paralelo y actualizando progress.
             if (IS_NATIVE) {
               console.error('[Player] NativeAudioPlayer.play() falló:', loadError)
-              // CRÍTICO: Sincronizar UI con el estado real — sin esto, la UI muestra
-              // "reproduciendo" pero no suena nada, y la barra de progreso se queda congelada.
-              // El usuario queda atrapado sin poder reproducir ninguna canción.
+              // CRÍTICO: Resetear completamente el NativeAudioPlayer para que hasSource()
+              // devuelva false. Sin esto, togglePlayPause ve hasSource=true (porque currentSong
+              // se setea antes del await) y llama a resume() en vez de reintentar play().
+              // resume() sobre un engine vacío = silencio permanente.
+              if (webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+                webAudioPlayerRef.current.stop()
+              }
               setIsPlaying(false)
-              progressRef.current = 0
-              setProgress(0)
+              // NO resetear progressRef — preservar la posición guardada para que
+              // el siguiente tap reintente play() con keepPosition=true desde el punto correcto.
               return
             }
 
@@ -1573,10 +1577,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       } else {
         console.log(`[PlayerContext] Reanudando WebAudio (hasSource=${hasSource})`)
 
-        // FIX: Si WebAudio no tiene canción cargada (ej. refresh), cargarla
-        if (!hasSource && currentSong) {
-             console.log('[PlayerContext] WebAudio sin fuente, cargando canción actual...')
-             playSong(currentSong, true).catch(err => console.error('[PlayerContext] Error al reanudar WebAudio:', err))
+        // FIX: Si el player no tiene canción cargada (ej. refresh/restart), cargarla.
+        // Para NativeAudioPlayer: hasSource() puede ser true (currentSong set) pero el engine
+        // puede no tener audio cargado (tras restart o error). isEngineLoaded() distingue esto.
+        const needsFullLoad = webAudioPlayerRef.current instanceof NativeAudioPlayer
+          ? (!hasSource || !webAudioPlayerRef.current.isEngineLoaded()) && !!currentSong
+          : !hasSource && !!currentSong
+        if (needsFullLoad && currentSong) {
+             console.log('[PlayerContext] Player sin audio cargado, haciendo play() completo...')
+             playSong(currentSong, true).catch(err => console.error('[PlayerContext] Error al reanudar:', err))
              return
         }
 
