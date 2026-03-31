@@ -35,12 +35,10 @@ function useArtistImage(name: string | null) {
 }
 
 function CoverImage({ item }: { item: RecentContext }) {
-  const navidromeConfig = navidromeApi.getConfig()
   const artistImageUrl = useArtistImage(item.type === 'artist' ? item.id : null)
 
-  if (item.type === 'album' && item.coverArtId && navidromeConfig) {
-    const { serverUrl, username, token, salt } = navidromeConfig
-    const src = `${serverUrl}/rest/getCoverArt.view?id=${item.coverArtId}&size=300&u=${username}&t=${token}&s=${salt}&v=1.16.0&c=audiorr&f=json`
+  if (item.type === 'album' && item.coverArtId) {
+    const src = navidromeApi.getCoverUrl(item.coverArtId, 300)
     return (
       <img
         src={src}
