@@ -1335,6 +1335,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     if (shouldUseWebAudio()) {
       if (webAudioPlayerRef.current) {
+        // CRÍTICO: Limpiar automix trigger ANTES del seek.
+        // El seek nativo también limpia el trigger, pero hacerlo desde JS
+        // asegura que no haya ventana donde el timer nativo dispare.
+        if (IS_NATIVE && webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+          webAudioPlayerRef.current.clearAutomixTrigger()
+          nativeAudio.cancelCrossfade().catch(() => {})
+        }
         webAudioPlayerRef.current.seek(time)
         // Actualizar estado inmediatamente
         progressRef.current = time
@@ -1344,7 +1351,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         // Bloquear automix unos segundos después de un seek manual
         lastPauseTimeRef.current = now
         // Resetear automix trigger para que se recalcule con la nueva posición.
-        // El nativo también tiene su propio cooldown de 5s tras seek.
+        // El nativo limpia el trigger en seek() y JS lo re-enviará en el próximo onTimeUpdate.
         automixTriggerSentRef.current = false
       }
     } else {

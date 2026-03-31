@@ -263,6 +263,16 @@ class AudioEngineManager {
             publishNowPlayingInfo()
             MPNowPlayingInfoCenter.default().playbackState = .playing
 
+            // Asegurar que los comandos remotos estén habilitados.
+            // iOS puede deshabilitarlos tras interrupciones o cambios de ruta.
+            let cc = MPRemoteCommandCenter.shared()
+            cc.playCommand.isEnabled = true
+            cc.pauseCommand.isEnabled = true
+            cc.togglePlayPauseCommand.isEnabled = true
+            cc.nextTrackCommand.isEnabled = true
+            cc.previousTrackCommand.isEnabled = true
+            cc.changePlaybackPositionCommand.isEnabled = true
+
             print("[AudioEngineManager] Play: \(fileURL.lastPathComponent) desde \(String(format: "%.1f", startAt))s (RG: \(String(format: "%.3f", replayGainMultiplier)))")
 
         } catch {
@@ -319,8 +329,14 @@ class AudioEngineManager {
         let wasPlaying = isPlaying
         playerA.stop()
 
-        // Marcar timestamp de seek para bloquear automix nativo durante 5s
+        // Marcar timestamp de seek para bloquear automix nativo brevemente
         lastSeekTime = CFAbsoluteTimeGetCurrent()
+
+        // CRÍTICO: Limpiar automix trigger al hacer seek.
+        // JS lo recalculará y re-enviará con la posición correcta.
+        // Sin esto, el trigger viejo puede dispararse prematuramente
+        // si el seek deja currentTime cerca del triggerTime anterior.
+        clearAutomixTrigger()
 
         let sampleRate = file.processingFormat.sampleRate
         let startFrame = AVAudioFramePosition(max(0, time) * sampleRate)
@@ -595,9 +611,10 @@ class AudioEngineManager {
               nextFile != nil
         else { return }
 
-        // Bloquear automix durante 5s después de un seek manual
+        // Bloquear automix durante 2s después de un seek manual.
+        // Esto da tiempo a JS para recalcular y re-enviar el trigger correcto.
         let timeSinceSeek = CFAbsoluteTimeGetCurrent() - lastSeekTime
-        guard timeSinceSeek > 5.0 else { return }
+        guard timeSinceSeek > 2.0 else { return }
 
         let time = currentTime()
         if time >= triggerTime {

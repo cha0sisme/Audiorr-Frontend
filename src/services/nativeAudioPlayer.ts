@@ -104,6 +104,8 @@ export class NativeAudioPlayer {
       }),
       await nativeAudio.addListener('onTrackEnd', () => {
         this.isPlayingState = false
+        // Sync sequences to unblock events for the next play() call
+        this.confirmedSequence = this.playSequence
         // Si el crossfade estaba "activo" cuando la pista terminó, algo salió mal — resetear
         if (this.isCrossfadingState) {
           console.warn('[NativeAudioPlayer] Track ended during crossfade — resetting crossfade state')
@@ -380,6 +382,8 @@ export class NativeAudioPlayer {
     }).catch(e => {
       console.error('[NativeAudioPlayer] executeCrossfade failed:', e)
       this.isCrossfadingState = false
+      // Sync sequences so events aren't permanently blocked after failed crossfade
+      this.confirmedSequence = this.playSequence
       // Notify JS that crossfade couldn't start — PlayerContext will fall back to playSong
       this.callbacks.onCrossfadeFailed?.()
     })
@@ -458,8 +462,11 @@ export class NativeAudioPlayer {
 
   // === Noop methods (not needed with native engine) ===
 
-  setPauseTime(_time: number): void {
-    // noop — native handles position
+  setPauseTime(time: number): void {
+    // Set currentTime_ so that play() with keepPosition=true uses the correct
+    // start position. Critical for resume after app restart, where the saved
+    // progress is in localStorage but NativeAudioPlayer was just created with currentTime_=0.
+    this.currentTime_ = time
   }
 
   clearPreDecodeCache(): void {
