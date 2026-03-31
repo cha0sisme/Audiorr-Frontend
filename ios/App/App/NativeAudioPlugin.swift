@@ -60,6 +60,9 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let replayGainDb = call.getDouble("replayGainDb") ?? Double.nan
         let trackPeak = call.getDouble("trackPeak") ?? 0
         let duration = call.getDouble("duration") ?? 0
+        let title = call.getString("title")
+        let artist = call.getString("artist")
+        let album = call.getString("album")
 
         let rgMultiplier = AudioEngineManager.computeReplayGainMultiplier(gainDb: replayGainDb, trackPeak: trackPeak)
 
@@ -71,7 +74,10 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                         fileURL: fileURL,
                         startAt: startAt,
                         replayGainMultiplier: rgMultiplier,
-                        duration: duration
+                        duration: duration,
+                        title: title,
+                        artist: artist,
+                        album: album
                     )
                     call.resolve()
                 }

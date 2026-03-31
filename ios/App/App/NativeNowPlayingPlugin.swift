@@ -61,6 +61,11 @@ public class NativeNowPlayingPlugin: CAPPlugin, CAPBridgedPlugin {
         shadow.layer.shadowRadius  = 20
         shadow.layer.shadowOffset  = CGSize(width: 0, height: -4)
         shadow.layer.cornerRadius  = 26
+        // Desactivar interacción: este mini-player es gestionado por AppDelegate.
+        // Sin esto, el shadow view (visible en la jerarquía aunque container está
+        // hidden) intercepta toques destinados al WKWebView (ej. botones inferiores
+        // del NowPlayingViewer).
+        shadow.isUserInteractionEnabled = false
         view.addSubview(shadow)
         shadow.addSubview(container)
 

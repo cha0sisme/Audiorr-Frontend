@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { backendApi, DailyMix } from '../services/backendApi'
 import { navidromeApi } from '../services/navidromeApi'
 import { ArrowPathIcon } from '@heroicons/react/24/outline'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 import { usePinnedPlaylists } from '../hooks/usePinnedPlaylists'
 import { PlaylistItem } from './PlaylistsPage'
 import { Playlist } from '../services/navidromeApi'
@@ -26,6 +27,8 @@ export default function DailyMixSection({ format = 'home' }: { format?: 'home' |
 
   const playerState = usePlayerState()
   const playerActions = usePlayerActions()
+  const backendAvailable = useBackendAvailable()
+  const hasFetched = useRef(false)
   const { isPinned, togglePinnedPlaylist } = usePinnedPlaylists()
 
   const handlePlayPlaylist = async (e: React.MouseEvent, playlistId: string) => {
@@ -72,9 +75,15 @@ export default function DailyMixSection({ format = 'home' }: { format?: 'home' |
   }
 
   useEffect(() => {
+    if (!backendAvailable) {
+      hasFetched.current = false
+      return
+    }
+    if (hasFetched.current) return
+    hasFetched.current = true
     loadAndMaybeGenerate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [backendAvailable])
 
   const handleGenerate = async () => {
     try {

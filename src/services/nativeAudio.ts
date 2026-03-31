@@ -11,6 +11,9 @@ export interface NativeAudioPlayOptions {
   replayGainDb?: number
   trackPeak?: number
   duration?: number
+  title?: string
+  artist?: string
+  album?: string
 }
 
 export interface NativeAudioPrepareNextOptions {

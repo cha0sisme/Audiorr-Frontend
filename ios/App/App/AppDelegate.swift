@@ -2,6 +2,7 @@ import UIKit
 import Capacitor
 import AVFoundation
 import WebKit
+import CarPlay
 
 // Extensión para buscar el WKWebView en la jerarquía de vistas
 private extension UIView {
@@ -13,7 +14,7 @@ private extension UIView {
 
 // UIWindow personalizada: garantiza que las vistas nativas (tab bar, mini-player)
 // reciban los toques ANTES que WKWebView, independientemente del z-order.
-private class NativeAwareWindow: UIWindow {
+class NativeAwareWindow: UIWindow {
     // Vistas nativas registradas para tener prioridad de hit-test
     var priorityViews: [UIView] = []
 
@@ -44,7 +45,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
     // ── Estado interno ──────────────────────────────────────────────────────
     private var nativeUIReady    = false
-    private weak var webViewRef: WKWebView?
+    weak var webViewRef: WKWebView?
 
     // Tab bar
     private var tabBar: UITabBar?
@@ -105,8 +106,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         )
 
         // Reemplazar UIWindow con NativeAwareWindow para que UITabBar y el mini-player
-        // reciban los toques antes que WKWebView (fix: "solo funciona tras hacer scroll")
-        if let existing = window {
+        // reciban los toques antes que WKWebView (fix: "solo funciona tras hacer scroll").
+        // Con scene lifecycle (iOS 13+), MainSceneDelegate crea NativeAwareWindow directamente,
+        // así que este bloque solo aplica al fallback sin scenes.
+        if let existing = window, !(existing is NativeAwareWindow) {
             let native: NativeAwareWindow
             if #available(iOS 13.0, *), let scene = existing.windowScene {
                 native = NativeAwareWindow(windowScene: scene)
@@ -738,6 +741,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                      restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity,
                                                            restorationHandler: restorationHandler)
+    }
+
+    // ── Scene configuration (CarPlay) ───────────────────────────────────────
+
+    func application(_ application: UIApplication,
+                     configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        if connectingSceneSession.role == .carTemplateApplication {
+            let config = UISceneConfiguration(name: "CarPlay", sessionRole: connectingSceneSession.role)
+            config.delegateClass = CarPlaySceneDelegate.self
+            return config
+        }
+        // Default scene (main app) — no delegate, AppDelegate.window sigue funcionando
+        return UISceneConfiguration(name: "Default", sessionRole: connectingSceneSession.role)
     }
 }
 

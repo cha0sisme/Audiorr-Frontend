@@ -9,6 +9,9 @@ import Capacitor
 /// Gestiona reproducción, NowPlaying, remote commands e interrupciones.
 class AudioEngineManager {
 
+    // MARK: - Shared instance (para acceso desde CarPlay)
+    static private(set) var shared: AudioEngineManager?
+
     // MARK: - Engine y nodos
 
     private let engine = AVAudioEngine()
@@ -42,6 +45,13 @@ class AudioEngineManager {
     // Interrupciones
     private var wasPlayingBeforeInterruption = false
     private var commandCenterReady = false
+
+    /// Diccionario local que mantiene el estado completo de NowPlaying.
+    /// Siempre escribir a este dict y publicar con publishNowPlayingInfo().
+    /// NUNCA leer del singleton MPNowPlayingInfoCenter.default().nowPlayingInfo
+    /// (devuelve una copia y causa race conditions con read-modify-write).
+    /// Esto también evita que WKWebView en Capacitor pueda borrar nuestra info.
+    private var localNowPlayingInfo: [String: Any] = [:]
 
     // MARK: - Crossfade
 
@@ -109,6 +119,8 @@ class AudioEngineManager {
         setupAudioGraph()
         setupObservers()
         setupCommandCenter()
+
+        AudioEngineManager.shared = self
     }
 
     deinit {
@@ -165,7 +177,14 @@ class AudioEngineManager {
 
     // MARK: - Reproducción
 
-    func play(fileURL: URL, startAt: Double, replayGainMultiplier: Float, duration: Double) {
+    func play(fileURL: URL, startAt: Double, replayGainMultiplier: Float, duration: Double,
+              title: String? = nil, artist: String? = nil, album: String? = nil) {
+        // Guardar metadata inmediatamente si se proporciona, ANTES de tocar el engine.
+        // Esto asegura que MPNowPlayingInfoCenter tenga título desde el primer momento,
+        // necesario para que Dynamic Island muestre el reproductor.
+        if let t = title, !t.isEmpty { currentSongTitle = t }
+        if let a = artist               { currentSongArtist = a }
+        if let al = album                { currentSongAlbum = al }
         ensureEngineRunning()
         cancelNativeNextFallback() // JS respondió
         clearAutomixTrigger()
@@ -224,23 +243,24 @@ class AudioEngineManager {
 
             startProgressTimer()
 
-            // Establecer NowPlaying info mínima inmediatamente para que Dynamic Island aparezca.
-            // JS enviará metadata completa (title, artist, artwork) justo después.
-            var info: [String: Any] = [
+            // Establecer NowPlaying info inmediatamente para que Dynamic Island aparezca.
+            // Usar el diccionario local (nunca leer del singleton — race conditions con WKWebView).
+            // Preservar artwork existente si la hay (reutilizar en caso de cambio de canción).
+            let existingArtwork = localNowPlayingInfo[MPMediaItemPropertyArtwork]
+            localNowPlayingInfo = [
                 MPMediaItemPropertyPlaybackDuration: currentSongDuration,
                 MPNowPlayingInfoPropertyElapsedPlaybackTime: startAt,
                 MPNowPlayingInfoPropertyPlaybackRate: 1.0,
             ]
-            // Preservar metadata existente si la hay (reutilizar en caso de seek/resume)
             if !currentSongTitle.isEmpty {
-                info[MPMediaItemPropertyTitle] = currentSongTitle
-                info[MPMediaItemPropertyArtist] = currentSongArtist
-                info[MPMediaItemPropertyAlbumTitle] = currentSongAlbum
+                localNowPlayingInfo[MPMediaItemPropertyTitle] = currentSongTitle
+                localNowPlayingInfo[MPMediaItemPropertyArtist] = currentSongArtist
+                localNowPlayingInfo[MPMediaItemPropertyAlbumTitle] = currentSongAlbum
             }
-            if let existingArtwork = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] {
-                info[MPMediaItemPropertyArtwork] = existingArtwork
+            if let artwork = existingArtwork {
+                localNowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
             }
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            publishNowPlayingInfo()
             MPNowPlayingInfoCenter.default().playbackState = .playing
 
             print("[AudioEngineManager] Play: \(fileURL.lastPathComponent) desde \(String(format: "%.1f", startAt))s (RG: \(String(format: "%.3f", replayGainMultiplier)))")
@@ -688,56 +708,59 @@ class AudioEngineManager {
     // MARK: - NowPlaying (directo, sin JS)
 
     func updateNowPlayingMetadata(title: String, artist: String, album: String, duration: Double, artworkUrl: String?) {
-        currentSongTitle = title
-        currentSongArtist = artist
-        currentSongAlbum = album
-        currentSongDuration = duration
+        let update = { [weak self] in
+            guard let self = self else { return }
+            self.currentSongTitle = title
+            self.currentSongArtist = artist
+            self.currentSongAlbum = album
+            self.currentSongDuration = duration
 
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: title,
-            MPMediaItemPropertyArtist: artist,
-            MPMediaItemPropertyAlbumTitle: album,
-            MPMediaItemPropertyPlaybackDuration: duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime(),
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-        ]
+            self.localNowPlayingInfo[MPMediaItemPropertyTitle] = title
+            self.localNowPlayingInfo[MPMediaItemPropertyArtist] = artist
+            self.localNowPlayingInfo[MPMediaItemPropertyAlbumTitle] = album
+            self.localNowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.currentTime()
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = self.isPlaying ? 1.0 : 0.0
 
-        // Preservar artwork existente
-        if let existingArtwork = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] {
-            info[MPMediaItemPropertyArtwork] = existingArtwork
+            self.publishNowPlayingInfo()
+            MPNowPlayingInfoCenter.default().playbackState = self.isPlaying ? .playing : .paused
+
+            // Descargar artwork en background
+            if let urlStr = artworkUrl, let url = URL(string: urlStr) {
+                URLSession.shared.dataTask(with: url) { data, _, _ in
+                    guard let data = data, let image = UIImage(data: data) else { return }
+                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        self.localNowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
+                        self.publishNowPlayingInfo()
+                    }
+                }.resume()
+            }
         }
-
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
-
-        // Descargar artwork en background
-        if let urlStr = artworkUrl, let url = URL(string: urlStr) {
-            URLSession.shared.dataTask(with: url) { data, _, _ in
-                guard let data = data, let image = UIImage(data: data) else { return }
-                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                DispatchQueue.main.async {
-                    guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-                    info[MPMediaItemPropertyArtwork] = artwork
-                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                }
-            }.resume()
-        }
+        if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
     }
 
     private func updateNowPlayingProgress() {
-        guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime()
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        localNowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime()
+        localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        publishNowPlayingInfo()
     }
 
-    private func updateNowPlayingPlaybackState() {
+    func updateNowPlayingPlaybackState() {
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
         updateNowPlayingProgress()
     }
 
     private func clearNowPlaying() {
+        localNowPlayingInfo = [:]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+
+    /// Publica el diccionario local como una escritura atómica al singleton.
+    /// Usar siempre en lugar de escribir directamente a MPNowPlayingInfoCenter.
+    private func publishNowPlayingInfo() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = localNowPlayingInfo
     }
 
     // MARK: - Remote Command Center
@@ -772,6 +795,10 @@ class AudioEngineManager {
         cc.nextTrackCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.ensureAudioSessionActive()
+            // Limpiar automix INMEDIATAMENTE para evitar race condition:
+            // sin esto, el timer nativo podría disparar crossfade mientras JS
+            // procesa el comando de next (forAutomix=false, cambio directo).
+            self.clearAutomixTrigger()
             // Enviar a JS
             self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "next"])
             // Programar fallback nativo si JS no responde en 2s
@@ -898,7 +925,18 @@ class AudioEngineManager {
             // Bluetooth/auriculares desconectados → pausar
             if isPlaying {
                 pause()
+                // Prevenir que handleInterruption(.ended) reanude tras route change:
+                // en algunos dispositivos iOS envía interruption + routeChange juntos.
+                wasPlayingBeforeInterruption = false
                 notifyPlaybackStateChanged(reason: "routeLost")
+            }
+            // Safety net: asegurar que el lock screen muestre estado pausado.
+            // En algunos edge cases (BT disconnect + reconfigure de audio route),
+            // iOS puede resetear el playbackState brevemente. Re-setear tras un tick.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, !self.isPlaying else { return }
+                MPNowPlayingInfoCenter.default().playbackState = .paused
+                self.updateNowPlayingProgress()
             }
             print("[AudioEngineManager] Ruta perdida — pausado")
 

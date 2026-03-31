@@ -204,4 +204,26 @@ export function useAudioBridge() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, playerState.isPlaying, playerState.currentSong?.id])
+
+  // ── 7. CarPlay: reproducir playlist ────────────────────────────────────────
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleCarPlayPlaylist = async (e: Event) => {
+      const playlistId = (e as CustomEvent).detail?.playlistId
+      if (!playlistId) return
+      console.log('[useAudioBridge] CarPlay play playlist:', playlistId)
+      try {
+        const songs = await navidromeApi.getPlaylistSongs(playlistId)
+        if (songs.length > 0) {
+          playerActions.playPlaylist(songs)
+        }
+      } catch (error) {
+        console.error('[useAudioBridge] Error playing CarPlay playlist:', error)
+      }
+    }
+
+    window.addEventListener('_carplayPlayPlaylist', handleCarPlayPlaylist)
+    return () => window.removeEventListener('_carplayPlayPlaylist', handleCarPlayPlaylist)
+  }, [isNative, playerActions])
 }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { API_BASE_URL } from '../services/backendApi'
 
 const BackendAvailableContext = createContext<boolean>(true)
@@ -16,9 +16,12 @@ export function BackendAvailableProvider({ children }: { children: ReactNode }) 
       return true
     }
   })
+  const availableRef = useRef(available)
+  availableRef.current = available
 
   useEffect(() => {
     let mounted = true
+    let interval: ReturnType<typeof setInterval>
 
     const check = async () => {
       try {
@@ -39,18 +42,30 @@ export function BackendAvailableProvider({ children }: { children: ReactNode }) 
       }
     }
 
-    check()
+    // Adaptive polling: when backend is unavailable, poll every 15s so network
+    // changes (VPN on, WiFi switch) are detected quickly without waiting minutes.
+    // When available, relax to every 2 minutes.
+    const startPolling = () => {
+      clearInterval(interval)
+      const delay = availableRef.current ? 2 * 60 * 1000 : 15_000
+      interval = setInterval(() => {
+        check().then(() => {
+          // If availability changed, restart polling with the appropriate interval
+          const newDelay = availableRef.current ? 2 * 60 * 1000 : 15_000
+          if (newDelay !== delay) startPolling()
+        })
+      }, delay)
+    }
 
-    // Re-check every 5 minutes as a fallback
-    const interval = setInterval(check, 5 * 60 * 1000)
+    check().then(startPolling)
 
-    // Re-check immediately when network comes back (e.g. VPN connected)
-    const onOnline = () => { check() }
+    // Re-check immediately when network comes back
+    const onOnline = () => { check().then(startPolling) }
     window.addEventListener('online', onOnline)
 
     // Re-check when user returns to the app (tab/app focus)
     const onVisible = () => {
-      if (document.visibilityState === 'visible') check()
+      if (document.visibilityState === 'visible') check().then(startPolling)
     }
     document.addEventListener('visibilitychange', onVisible)
 

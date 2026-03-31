@@ -213,6 +213,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const [isPlaying, setIsPlaying] = useState(false)
+  // Loading guard: true while playSong() is awaiting native play().
+  // Prevents togglePlayPause/seek from creating conflicting state during load.
+  const isLoadingRef = useRef(false)
 
   // --- Estado para progreso (con persistencia) ---
   const [progress, setProgress] = useState(() => {
@@ -301,6 +304,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const analysisCacheRef = useRef<Map<string, AudioAnalysisResult | { error: string }>>(new Map())
   const outroRefinedForCurrentSongRef = useRef(false)
   const automixTriggerSentRef = useRef(false) // true cuando ya enviamos trigger a nativo para esta canción
+  // Play sequence counter: prevents stale async play() results from corrupting state
+  // when the user taps multiple songs rapidly. Only the latest playSong() call matters.
+  const playSongSequenceRef = useRef(0)
   const nextCallbackRef = useRef<(forAutomix?: boolean) => void>()
   const timeUpdateHandlerRef = useRef<() => void>()
   const endedHandlerRef = useRef<() => void>()
@@ -724,8 +730,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return
       }
 
+      // Sequence counter: invalidate any in-flight playSong() calls immediately.
+      // If the user taps 6 songs rapidly, only the last one's post-load logic runs.
+      const thisPlaySeq = ++playSongSequenceRef.current
+
       outroRefinedForCurrentSongRef.current = false
       automixTriggerSentRef.current = false
+
+      // CRÍTICO: Cancelar crossfade/automix nativo ANTES de cualquier otra cosa.
+      if (IS_NATIVE && webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+        webAudioPlayerRef.current.clearAutomixTrigger()
+        nativeAudio.cancelCrossfade().catch(() => {})
+      }
 
       // Repriorizar análisis cuando se cambia de canción
       if (currentSongRef.current?.id !== song.id) {
@@ -830,6 +846,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           updateMediaSession(newCurrentSong, false) // false = aún no está reproduciendo
           
           // Cargar y reproducir audio (puede tardar para archivos grandes)
+          isLoadingRef.current = true
           try {
             // ⚡ FIX: Si keepPosition, sincronizar pauseTime del WebAudioPlayer ANTES de play()
             // Esto es necesario porque tras un refresh el WebAudioPlayer tiene pauseTime=0
@@ -837,8 +854,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               webAudioPlayerRef.current.setPauseTime(positionToRestore)
             }
             await webAudioPlayerRef.current!.play(song, streamUrl, keepPosition)
-            
+
+            // ─── Stale call guard ───────────────────────────────────────
+            // If the user tapped another song while this one was loading,
+            // discard this result. The newer playSong() owns the state now.
+            if (playSongSequenceRef.current !== thisPlaySeq) {
+              console.log(`[Player] Descartando resultado stale de play() (seq=${thisPlaySeq}, actual=${playSongSequenceRef.current})`)
+              return
+            }
+
             // Audio cargado exitosamente - actualizar estado de reproducción
+            isLoadingRef.current = false
             setIsPlaying(true)
             updateMediaSession(newCurrentSong, true) // true = ahora sí está reproduciendo
 
@@ -851,16 +877,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               webAudioPlayerRef.current!.setCurrentAnalysis(null)
             }
           } catch (loadError) {
+            isLoadingRef.current = false
             // Si fue cancelación (usuario cambió de canción), ignorar silenciosamente
             if (loadError instanceof DOMException && loadError.name === 'AbortError') {
               console.log('[Player] Carga cancelada - usuario cambió de canción')
-              return // No hacer nada más, la nueva canción se está cargando
+              return
             }
+            // Stale error: user already moved to another song, don't touch state
+            if (playSongSequenceRef.current !== thisPlaySeq) return
             
             // En nativo, el NativeAudioPlayer maneja todo — no crear fallback HTML Audio
             // que podría seguir reproduciéndose en paralelo y actualizando progress.
             if (IS_NATIVE) {
               console.error('[Player] NativeAudioPlayer.play() falló:', loadError)
+              // CRÍTICO: Sincronizar UI con el estado real — sin esto, la UI muestra
+              // "reproduciendo" pero no suena nada, y la barra de progreso se queda congelada.
+              // El usuario queda atrapado sin poder reproducir ninguna canción.
+              setIsPlaying(false)
+              progressRef.current = 0
+              setProgress(0)
               return
             }
 
@@ -1501,6 +1536,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const togglePlayPause = useCallback(() => {
     if (remoteHandlersRef.current?.togglePlayPause) {
       remoteHandlersRef.current.togglePlayPause()
+      return
+    }
+    // Guard: if a playSong() is currently loading (network download in flight),
+    // ignore togglePlayPause to prevent conflicting state mutations.
+    // The user will see the song loading UI; tapping play/pause during load is a no-op.
+    if (isLoadingRef.current) {
+      console.log('[PlayerContext] togglePlayPause ignored — playSong() loading in flight')
       return
     }
     console.log('[PlayerContext] togglePlayPause called - useWebAudio:', shouldUseWebAudio())
@@ -2867,13 +2909,32 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       onError: (error) => {
         console.error('[WebAudioPlayer] Error:', error)
-        // Intentar retry si es un error de red
         const songId = currentSongRef.current?.id
         const song = currentSongRef.current
         const errorMsg = error instanceof Error ? error.message : String(error)
-        const isNetworkError = errorMsg.includes('fetch') || errorMsg.includes('network') || errorMsg.includes('Failed') || errorMsg.includes('abort')
 
-        if (songId && song && isNetworkError && streamRetryManager.shouldRetry(songId)) {
+        // Watchdog recovery: native audio stopped responding silently.
+        // Attempt to reload the current song from its last known position.
+        const isWatchdog = errorMsg.includes('Watchdog')
+        if (isWatchdog && song) {
+          console.warn('[PlayerContext] 🔄 Watchdog recovery: reloading current song')
+          const currentPosition = progressRef.current
+          playSong(song, true).then(() => {
+            if (currentPosition > 1) {
+              webAudioPlayerRef.current?.seek(currentPosition)
+            }
+          }).catch(err => {
+            console.error('[PlayerContext] Watchdog recovery failed:', err)
+            setIsPlaying(false)
+          })
+          return
+        }
+
+        // Retry on network errors (timeout, fetch failure, etc.)
+        const isRetryable = errorMsg.includes('fetch') || errorMsg.includes('network')
+          || errorMsg.includes('Failed') || errorMsg.includes('abort') || errorMsg.includes('timeout')
+
+        if (songId && song && isRetryable && streamRetryManager.shouldRetry(songId)) {
           const currentPosition = progressRef.current
           streamRetryManager.scheduleRetry(async () => {
             if (!webAudioPlayerRef.current || !currentSongRef.current) throw new Error('No player')
@@ -2971,13 +3032,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         console.warn('[PlayerContext] Crossfade falló — fallback a playSong directo')
         isCrossfadingRef.current = false
         setIsCrossfading(false)
+        automixTriggerSentRef.current = false
         // Buscar la siguiente canción y reproducirla directamente
         const currentIndex = queueRef.current.findIndex(s => s.id === currentSongRef.current?.id)
         if (currentIndex >= 0 && currentIndex < queueRef.current.length - 1) {
           const nextSong = queueRef.current[currentIndex + 1]
           playSong(nextSong).catch(error => {
             console.error('[PlayerContext] Error en fallback playSong tras crossfade fallido:', error)
+            // Si el fallback también falla, asegurar que la UI refleje que no está reproduciendo
+            setIsPlaying(false)
           })
+        } else {
+          // No hay siguiente canción — asegurar que la UI no quede en estado "reproduciendo"
+          setIsPlaying(false)
         }
       },
       onNativeNext: (data) => {

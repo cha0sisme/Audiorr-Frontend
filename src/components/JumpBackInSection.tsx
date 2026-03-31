@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { navidromeApi } from '../services/navidromeApi'
 import { API_BASE_URL } from '../services/backendApi'
 import { usePlayerActions } from '../contexts/PlayerContext'
+import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 import HorizontalScrollSection from './HorizontalScrollSection'
 
 interface RecentContext {
@@ -148,8 +149,15 @@ export default function JumpBackInSection() {
   const hasFetched = useRef(false)
   const navigate = useNavigate()
   const playerActions = usePlayerActions()
+  const backendAvailable = useBackendAvailable()
 
   useEffect(() => {
+    // Re-fetch when backend becomes available (e.g., VPN activated)
+    if (!backendAvailable) {
+      // Reset so we re-fetch when it comes back
+      hasFetched.current = false
+      return
+    }
     if (hasFetched.current) return
     hasFetched.current = true
 
@@ -174,7 +182,7 @@ export default function JumpBackInSection() {
         }
       })
       .catch(() => { /* ignorar — endpoint opcional */ })
-  }, [])
+  }, [backendAvailable])
 
   if (items.length === 0) return null
 
