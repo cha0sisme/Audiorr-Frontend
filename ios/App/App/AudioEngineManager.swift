@@ -371,6 +371,10 @@ class AudioEngineManager {
     func seek(to time: Double) {
         guard let file = currentFile else { return }
 
+        // Invalidate old completion handlers (same pattern as play())
+        playSequence += 1
+        let thisSeq = playSequence
+
         let wasPlaying = isPlaying
         playerA.stop()
 
@@ -396,7 +400,8 @@ class AudioEngineManager {
         let activePlayer = playerA
         playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
             DispatchQueue.main.async {
-                guard let self = self, self.isPlaying, !self.isCrossfading, self.playerA === activePlayer else { return }
+                guard let self = self, self.isPlaying, !self.isCrossfading,
+                      self.playerA === activePlayer, self.playSequence == thisSeq else { return }
                 self.isPlaying = false
                 self.stopProgressTimer()
                 self.updateNowPlayingPlaybackState()
@@ -694,6 +699,10 @@ class AudioEngineManager {
     func playNextDirectly() {
         guard let nextFile = nextFile else { return }
 
+        // Invalidate old completion handlers
+        playSequence += 1
+        let thisSeq = playSequence
+
         // Parar canción actual
         playerA.stop()
 
@@ -716,7 +725,8 @@ class AudioEngineManager {
         let activePlayer = playerA
         playerA.scheduleSegment(nextFile, startingFrame: 0, frameCount: AVAudioFrameCount(totalFrames), at: nil) { [weak self] in
             DispatchQueue.main.async {
-                guard let self = self, self.isPlaying, !self.isCrossfading, self.playerA === activePlayer else { return }
+                guard let self = self, self.isPlaying, !self.isCrossfading,
+                      self.playerA === activePlayer, self.playSequence == thisSeq else { return }
                 self.isPlaying = false
                 self.stopProgressTimer()
                 self.updateNowPlayingPlaybackState()
