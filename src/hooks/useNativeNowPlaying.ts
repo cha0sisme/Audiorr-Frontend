@@ -60,7 +60,10 @@ export function useNativeNowPlaying() {
     return { artworkUrl, artistText }
   }
 
-  // Helper centralizado para enviar update al mini-player nativo
+  // Helper centralizado para enviar update al mini-player nativo.
+  // Usa isDarkRef.current en vez del closure isDark para evitar stale closures
+  // en los intervalos/effects que no tienen isDark en sus dependencias.
+  // Sin esto, el timer de 2s puede mandar isDark=false momentáneamente.
   const sendUpdate = (overrides?: { isDark?: boolean }) => {
     if (!effectiveSong) return
     const { artworkUrl, artistText } = getUpdateFields(effectiveSong)
@@ -73,7 +76,7 @@ export function useNativeNowPlaying() {
       duration:   effectiveDuration || 1,
       isVisible:  true,
       subtitle:   getSubtitle(),
-      isDark:     overrides?.isDark ?? isDark,
+      isDark:     overrides?.isDark ?? isDarkRef.current,
     })
   }
 
@@ -164,15 +167,14 @@ export function useNativeNowPlaying() {
   useEffect(() => {
     if (!isNative) return
 
-    const tapHandle       = nativeNowPlaying.addListener('tap',       () => {
-      window.dispatchEvent(new CustomEvent('native-nowplaying-tap'))
-    })
+    // NO registrar listener de 'tap' aquí: Swift ya despacha 'native-nowplaying-tap'
+    // vía evalJS, y NowPlayingBar lo escucha directamente. Re-despacharlo desde aquí
+    // crea un loop infinito (listener de 'native-nowplaying-tap' que despacha 'native-nowplaying-tap').
     const playHandle      = nativeNowPlaying.addListener('playPause', () => playerActionsRef.current.togglePlayPause())
     const nextHandle      = nativeNowPlaying.addListener('next',      () => playerActionsRef.current.next())
     const prevHandle      = nativeNowPlaying.addListener('previous',  () => playerActionsRef.current.previous())
 
     return () => {
-      tapHandle.remove()
       playHandle.remove()
       nextHandle.remove()
       prevHandle.remove()

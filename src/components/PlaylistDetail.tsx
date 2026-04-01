@@ -478,15 +478,14 @@ export default function PlaylistDetail() {
         {/* Botón play/pause */}
         <button
           onClick={handleMainPlayClick}
-          className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full text-white select-none active:scale-95 transition-transform focus:outline-none ${
+          className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full select-none active:scale-95 transition-transform focus:outline-none ${
             isRemote
-              ? 'bg-green-700/80 dark:bg-green-500/20 border border-green-500/40 dark:border-green-500/35'
-              : 'bg-gray-700/80 dark:bg-white/[.13] border border-white/20'
+              ? 'bg-green-600/90 dark:bg-green-500/20 text-white border border-green-500/30 dark:border-green-500/35'
+              : 'bg-black/[.08] dark:bg-white/[.13] text-gray-900 dark:text-white border border-black/[.08] dark:border-white/20'
           }`}
           style={{
             backdropFilter: 'blur(24px) saturate(1.8)',
             WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-            boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
           }}
           aria-label={isThisPlaylistPlaying && isPlaying ? "Pausar playlist" : "Reproducir playlist"}
         >
@@ -506,23 +505,22 @@ export default function PlaylistDetail() {
         <button
           onClick={handleSmartMixClick}
           disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
-          className={`group flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] border text-white ${
+          className={`group flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] border ${
             isSmartMixPlaying
-              ? 'smartmix-playing-btn'
+              ? 'smartmix-playing-btn text-gray-900 dark:text-white'
               : isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing'
-                ? 'border-white/15 bg-white/[.08] text-white/50 cursor-not-allowed'
+                ? 'border-black/[.06] dark:border-white/15 bg-black/[.04] dark:bg-white/[.08] text-gray-400 dark:text-white/50 cursor-not-allowed'
                 : isCurrentPlaylistSmartMixed && smartMixStatus === 'error'
-                  ? 'border-red-500/20 bg-red-900/20 text-red-300'
+                  ? 'border-red-500/20 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300'
                   : isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'
                     ? 'smartmix-premium-btn'
-                    : 'bg-gray-700/80 dark:bg-white/[.13] border-white/20'
+                    : 'bg-black/[.08] dark:bg-white/[.13] text-gray-900 dark:text-white border-black/[.08] dark:border-white/20'
           }`}
           style={
             !(isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'))
               ? {
                   backdropFilter: 'blur(24px) saturate(1.8)',
                   WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-                  boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
                 }
               : undefined
           }
@@ -531,18 +529,18 @@ export default function PlaylistDetail() {
             <ArrowPathIcon className="w-4 h-4 animate-spin text-white/60" />
           )}
           {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && (
-            <SparklesIcon className="w-4 h-4 text-white group-hover:scale-110 transition-transform duration-300" />
+            <SparklesIcon className="w-4 h-4 group-hover:scale-110 transition-transform duration-300" />
           )}
           {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && (
-            <SparklesIcon className="w-4 h-4 text-white animate-pulse" />
+            <SparklesIcon className="w-4 h-4 animate-pulse" />
           )}
           {isSmartMixPlaying && (
-            <CheckIcon className="w-4 h-4 text-white" />
+            <CheckIcon className="w-4 h-4" />
           )}
           {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && (
-            <XCircleIcon className="w-4 h-4 text-red-300" />
+            <XCircleIcon className="w-4 h-4 text-red-600 dark:text-red-300" />
           )}
-          <span className="whitespace-nowrap tracking-normal text-white">
+          <span className="whitespace-nowrap tracking-normal">
             {isSmartMixPlaying && 'Mezcla activa'}
             {isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing' && 'Analizando...'}
             {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && 'Mezcla Inteligente'}
@@ -568,11 +566,10 @@ export default function PlaylistDetail() {
                 comment: displayPlaylist?.comment,
               })
             }
-            className="flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full text-white select-none active:scale-95 transition-transform focus:outline-none bg-gray-700/80 dark:bg-white/[.13] border border-white/20"
+            className="flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full text-gray-900 dark:text-white select-none active:scale-95 transition-transform focus:outline-none bg-black/[.08] dark:bg-white/[.13] border border-black/[.08] dark:border-white/20"
             style={{
               backdropFilter: 'blur(24px) saturate(1.8)',
               WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-              boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
             }}
             aria-pressed={isPinned(id)}
             aria-label={isPinned(id) ? 'Desanclar playlist' : 'Anclar playlist'}

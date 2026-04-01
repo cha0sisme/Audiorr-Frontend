@@ -412,6 +412,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         shadow.layer.shadowRadius  = 20
         shadow.layer.shadowOffset  = CGSize(width: 0, height: -4)
         shadow.layer.cornerRadius  = 26
+        // Empezar sin interacción — se activa cuando el mini-player se muestra.
+        // Sin esto, el shadow (en priorityViews) intercepta toques del WKWebView
+        // aunque el container hijo esté hidden.
+        shadow.isUserInteractionEnabled = false
 
         // Contenedor con blur
         let container = UIView()
@@ -613,8 +617,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             nowPlayingContainer?.isHidden  = false
             nowPlayingContainer?.alpha     = 1
             nowPlayingContainer?.transform = .identity
+            // Habilitar interacción en el shadow para que el tap gesture funcione
+            miniPlayerShadow?.isUserInteractionEnabled = true
         } else if !isVisible {
             nowPlayingContainer?.isHidden = true
+            // Desactivar interacción del shadow cuando el mini-player está oculto.
+            // Sin esto, el shadow (siempre visible en la jerarquía de priorityViews)
+            // intercepta toques destinados al WKWebView (ej. filas de SongTable).
+            miniPlayerShadow?.isUserInteractionEnabled = false
         }
         titleLabel?.text  = title
         artistLabel?.text = artist

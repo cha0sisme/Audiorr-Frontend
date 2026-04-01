@@ -547,9 +547,13 @@ class AudioEngineManager {
             self.crossfadeExecutor = nil
 
             self.updateNowPlayingPlaybackState()
-            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": startOffset])
+            // Enviar la posición ACTUAL del nuevo player (no startOffset, que es donde
+            // B empezó al inicio del crossfade). Tras el swap, currentTime() lee del
+            // nuevo playerA y refleja startOffset + tiempo transcurrido del crossfade.
+            let actualPosition = self.currentTime()
+            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": actualPosition])
 
-            print("[AudioEngineManager] Crossfade completado (swap A↔B), offset: \(String(format: "%.1f", startOffset))s")
+            print("[AudioEngineManager] Crossfade completado (swap A↔B), offset: \(String(format: "%.1f", actualPosition))s")
         }
 
         crossfadeExecutor = executor
