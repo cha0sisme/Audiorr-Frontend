@@ -76,6 +76,12 @@ export class NativeAudioPlayer {
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null
   private lastEventTimestamp = 0
 
+  // Block stale crossfade events after manual skip.
+  // Set true by clearAutomixTrigger(), false by setAutomixTrigger()/startCrossfade().
+  private blockCrossfadeEvents = false
+  // Timestamp of last play() call — used to detect stale onTrackEnd from playerA.stop()
+  private lastPlayTimestamp = 0
+
   // Native event listeners
   private listeners: PluginListenerHandle[] = []
 
@@ -88,13 +94,21 @@ export class NativeAudioPlayer {
   private async setupNativeListeners(): Promise<void> {
     this.listeners.push(
       await nativeAudio.addListener('onTimeUpdate', (data: TimeUpdateEvent) => {
-        // Ignorar eventos stale que llegan después de un pause/stop desde JS.
-        if (!this.isPlayingState && data.isPlaying) return
-
         // Ignorar eventos durante transición de canción. Cuando play() está en
         // vuelo (playSequence !== confirmedSequence), los eventos del bridge son
         // de la canción ANTERIOR y corromperían el progreso de la nueva.
         if (this.playSequence !== this.confirmedSequence) return
+
+        // Si el nativo dice que está reproduciendo pero JS cree que no (e.g., tras
+        // watchdog timeout o reconexión), sincronizar el estado JS con la realidad.
+        // Sin esto, el progreso se congela indefinidamente tras recuperación del watchdog.
+        if (!this.isPlayingState && data.isPlaying) {
+          console.log('[NativeAudioPlayer] Sincronizando isPlayingState con nativo (was false, native says true)')
+          this.isPlayingState = true
+          this.nativeEngineLoaded = true
+          this.startWatchdog()
+          this.callbacks.onPlaybackStateChanged?.(true, data.currentTime, 'native-sync')
+        }
 
         this.lastNativeTime = data.currentTime
         this.lastTimestamp = Date.now()
@@ -102,11 +116,18 @@ export class NativeAudioPlayer {
         this.duration = data.duration
         // Feed the watchdog — native is alive and sending updates
         this.lastEventTimestamp = Date.now()
-        // No actualizar isPlayingState desde onTimeUpdate — eso es trabajo
-        // de onPlaybackStateChanged y de los métodos explícitos (play/pause/resume).
         this.callbacks.onTimeUpdate?.(data.currentTime, data.duration)
       }),
       await nativeAudio.addListener('onTrackEnd', () => {
+        // Guard: when play(newSong) calls native play(), Swift does playerA.stop()
+        // which fires the OLD song's completion handler → onTrackEnd. This stale event
+        // arrives AFTER the new play() resolved (isPlayingState=true). A real track end
+        // can't happen within 2s of play() starting, so use a timestamp guard.
+        const timeSincePlay = Date.now() - this.lastPlayTimestamp
+        if (timeSincePlay < 2000) {
+          console.log(`[NativeAudioPlayer] Ignoring stale onTrackEnd — play() was ${timeSincePlay}ms ago`)
+          return
+        }
         this.isPlayingState = false
         // Sync sequences to unblock events for the next play() call
         this.confirmedSequence = this.playSequence
@@ -118,10 +139,23 @@ export class NativeAudioPlayer {
         this.callbacks.onEnded?.()
       }),
       await nativeAudio.addListener('onCrossfadeStart', () => {
+        // Si un skip manual puso blockCrossfadeEvents=true, el timer nativo
+        // pudo haber disparado crossfade antes de recibir el clear. Ignorar.
+        if (this.blockCrossfadeEvents) {
+          console.warn('[NativeAudioPlayer] Ignoring stale onCrossfadeStart — manual skip in progress')
+          nativeAudio.cancelCrossfade().catch(() => {})
+          return
+        }
         this.isCrossfadingState = true
         this.callbacks.onCrossfadeStart?.()
       }),
       await nativeAudio.addListener('onCrossfadeComplete', (data: CrossfadeCompleteEvent) => {
+        // Ignorar crossfade complete si fue resultado de un crossfade que debimos haber cancelado.
+        if (this.blockCrossfadeEvents) {
+          console.warn('[NativeAudioPlayer] Ignoring stale onCrossfadeComplete — manual skip in progress')
+          this.isCrossfadingState = false
+          return
+        }
         this.isCrossfadingState = false
         // Crossfade completed a valid song transition — ensure events flow for the new song
         this.confirmedSequence = this.playSequence
@@ -225,6 +259,7 @@ export class NativeAudioPlayer {
     // Increment sequence FIRST — this immediately invalidates any in-flight play()
     // calls and suppresses stale native events (onTimeUpdate checks playSequence !== confirmedSequence).
     const seq = ++this.playSequence
+    this.lastPlayTimestamp = Date.now()
     console.log(`[NativeAudioPlayer] Play (seq=${seq}): ${song.title}`)
 
     // Cancel any in-progress or scheduled crossfade/automix from the previous song.
@@ -368,6 +403,8 @@ export class NativeAudioPlayer {
 
   startCrossfade(): void {
     if (!this.nextSong || this.isCrossfadingState) return
+    // JS inicia crossfade deliberadamente — permitir eventos de crossfade
+    this.blockCrossfadeEvents = false
 
     const mode: MixMode = this.isDjMode ? 'dj' : 'normal'
 
@@ -439,6 +476,8 @@ export class NativeAudioPlayer {
     useFilters: boolean; useAggressiveFilters: boolean
     needsAnticipation: boolean; anticipationTime: number
   }): void {
+    // Nuevo ciclo de automix — desbloquear eventos de crossfade.
+    this.blockCrossfadeEvents = false
     nativeAudio.setAutomixTrigger({
       triggerTime,
       ...crossfadeConfig,
@@ -447,6 +486,10 @@ export class NativeAudioPlayer {
   }
 
   clearAutomixTrigger(): void {
+    // Bloquear eventos de crossfade hasta que JS inicie uno legítimo.
+    // Esto previene que un crossfade nativo en vuelo (timer disparó antes del clear)
+    // contamine el estado JS durante un skip manual.
+    this.blockCrossfadeEvents = true
     nativeAudio.clearAutomixTrigger().catch(() => {})
   }
 
