@@ -427,62 +427,37 @@
     transform: scaleY(0.75) translateZ(0);
   }
 }
-/* SmartMix Premium Button Style - Refined & Homogenous */
+/* SmartMix Button Styles — Apple Music-consistent, glass morphism */
 .smartmix-premium-btn {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(135deg, #3b82f6 0%, #4f46e5 100%);
-  background-size: 200% 200%;
-  animation: premium-gradient 4s ease infinite;
-  border: none !important;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
   color: white !important;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  box-shadow: 0 2px 8px -2px rgba(59, 130, 246, 0.2);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  transform: translateZ(0);
-}
-
-.smartmix-premium-btn::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-  transform: translateX(-100%);
-  transition: transform 0.6s ease;
-}
-
-.smartmix-premium-btn:hover::after {
-  transform: translateX(100%);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  transition: all 0.2s ease;
 }
 
 .smartmix-premium-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px -4px rgba(59, 130, 246, 0.3);
-  filter: brightness(1.05);
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .smartmix-premium-btn:active {
-  transform: translateY(0) scale(0.97);
+  transform: scale(0.97);
 }
 
 .smartmix-playing-btn {
-  background: rgba(59, 130, 246, 0.1);
-  color: #1d4ed8;
-  border: 1px solid rgba(59, 130, 246, 0.3) !important;
-  box-shadow: none !important;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
   cursor: default;
 }
 
 .dark .smartmix-playing-btn {
-  background: rgba(59, 130, 246, 0.15);
-  color: #60a5fa;
-  border: 1px solid rgba(59, 130, 246, 0.4) !important;
-}
-
-@keyframes premium-gradient {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
 }
 
 /* ── Context menu bottom sheet (mobile) ──────────────────────────────────── */

@@ -83,6 +83,9 @@ export function useCanvas(song: Song | null, enabled: boolean = true): CanvasSta
       return
     }
 
+    // Limpiar canvas anterior inmediatamente al cambiar de canción
+    // para no seguir mostrando el video de la canción previa
+    setCanvasUrl(null)
     setIsLoading(true)
     setError(null)
 

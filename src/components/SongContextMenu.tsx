@@ -37,6 +37,8 @@ interface Props {
   showGoToAlbum?: boolean
   showGoToSong?: boolean
   isAdmin?: boolean
+  /** When true, the mobile sheet sits flush at the bottom (no extra padding for TabBar/NowPlayingBar) */
+  fullScreenContext?: boolean
 }
 
 export default function SongContextMenu({
@@ -49,6 +51,7 @@ export default function SongContextMenu({
   showGoToAlbum = true,
   showGoToSong = true,
   isAdmin = false,
+  fullScreenContext = false,
 }: Props) {
   const navigate = useNavigate()
   const playerActions = usePlayerActions()
@@ -162,9 +165,12 @@ export default function SongContextMenu({
             // On native iOS, the TabBar (~49px) and NowPlayingBar (~64px) are UIKit views
             // rendered OUTSIDE the WebView — they overlay the bottom. Add extra padding
             // so the cancel button is visible above them.
-            paddingBottom: Capacitor.isNativePlatform()
-              ? 'calc(env(safe-area-inset-bottom) + 130px)'
-              : 'env(safe-area-inset-bottom)',
+            // In full-screen contexts (e.g. NowPlayingViewer) the bars are hidden.
+            paddingBottom: fullScreenContext
+              ? 'env(safe-area-inset-bottom)'
+              : Capacitor.isNativePlatform()
+                ? 'calc(env(safe-area-inset-bottom) + 130px)'
+                : 'env(safe-area-inset-bottom)',
           }}
         >
           {/* Song info header */}

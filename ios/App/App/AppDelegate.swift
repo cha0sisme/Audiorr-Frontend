@@ -207,6 +207,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                 // al WKWebView (donde vive el NowPlayingViewer).
                 self.miniPlayerShadow?.isUserInteractionEnabled = false
                 self.tabBar?.isUserInteractionEnabled           = false
+
+                // Eliminar los 49pt extra del safe area para que el WKWebView
+                // use la geometría real del dispositivo (el viewer es full-screen,
+                // el tab bar está oculto).
+                if let rootVC = self.window?.rootViewController {
+                    rootVC.additionalSafeAreaInsets = .zero
+                }
+
                 UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseIn) {
                     self.nowPlayingContainer?.alpha     = 0
                     self.nowPlayingContainer?.transform = CGAffineTransform(translationX: 0, y: 16)
@@ -222,6 +230,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             DispatchQueue.main.async {
                 self.viewerIsOpen = false
                 let tabBarH = self.tabBar?.frame.height ?? 80
+
+                // Restaurar los 49pt del tab bar en el safe area
+                if let rootVC = self.window?.rootViewController {
+                    rootVC.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 49, right: 0)
+                }
+
                 // Restaurar interacción y visibilidad
                 self.miniPlayerShadow?.isHidden                = false
                 self.miniPlayerShadow?.isUserInteractionEnabled = true

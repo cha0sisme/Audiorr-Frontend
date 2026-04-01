@@ -506,16 +506,16 @@ export default function PlaylistDetail() {
         <button
           onClick={handleSmartMixClick}
           disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
-          className={`group flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-300 focus:outline-none select-none active:scale-[0.98] border ${
+          className={`group flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] border text-white ${
             isSmartMixPlaying
-              ? 'smartmix-playing-btn !text-white !bg-blue-600/40 border-blue-500/30'
+              ? 'smartmix-playing-btn'
               : isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing'
-                ? 'border-white/10 bg-gray-700/80 dark:bg-white/[.13] text-white/50 cursor-not-allowed'
+                ? 'border-white/15 bg-white/[.08] text-white/50 cursor-not-allowed'
                 : isCurrentPlaylistSmartMixed && smartMixStatus === 'error'
-                  ? 'border-red-500/30 bg-red-900/40 text-red-300'
+                  ? 'border-red-500/20 bg-red-900/20 text-red-300'
                   : isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'
-                    ? 'smartmix-premium-btn border-white/20'
-                    : 'bg-gray-700/80 dark:bg-white/[.13] border border-white/20 text-white'
+                    ? 'smartmix-premium-btn'
+                    : 'bg-gray-700/80 dark:bg-white/[.13] border-white/20'
           }`}
           style={
             !(isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'))

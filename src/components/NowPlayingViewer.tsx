@@ -458,7 +458,7 @@ export default function NowPlayingViewer({
                 canvasUrl={canvasUrl}
                 isLoading={isLoadingCanvas}
                 className="w-full h-full object-cover pointer-events-none"
-                isPlaying={playerState.isPlaying}
+                isPlaying={isPlaying}
               />
               <div
                 className="absolute inset-0 pointer-events-none"
@@ -675,13 +675,19 @@ export default function NowPlayingViewer({
                   </svg>
                 </motion.button>
 
-                {/* Play / Pause — solid white (or accent-tinted) circle */}
+                {/* Play / Pause — accent-tinted circle, or glass when canvas is active */}
                 <motion.button
                   whileTap={{ scale: 0.93 }}
                   disabled={!currentSong}
                   onClick={handleTogglePlayPause}
                   className="w-[74px] h-[74px] flex items-center justify-center rounded-full disabled:opacity-30"
-                  style={{
+                  style={hasCanvas ? {
+                    background: 'rgba(255, 255, 255, 0.18)',
+                    backdropFilter: 'blur(24px) saturate(1.8)',
+                    WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+                    boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
+                    border: '1px solid rgba(255, 255, 255, 0.22)',
+                  } : {
                     background: accentColor || 'white',
                     boxShadow: accentColor
                       ? `0 6px 28px ${accentColor}55`
@@ -694,7 +700,7 @@ export default function NowPlayingViewer({
                       className="w-9 h-9"
                       fill="currentColor"
                       viewBox="0 0 24 24"
-                      style={{ color: playIconColor }}
+                      style={{ color: hasCanvas ? 'white' : playIconColor }}
                     >
                       <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
                     </svg>
@@ -703,7 +709,7 @@ export default function NowPlayingViewer({
                       className="w-9 h-9"
                       fill="currentColor"
                       viewBox="0 0 24 24"
-                      style={{ color: playIconColor }}
+                      style={{ color: hasCanvas ? 'white' : playIconColor }}
                     >
                       <path d="M8 5v14l11-7z" />
                     </svg>
@@ -724,8 +730,8 @@ export default function NowPlayingViewer({
                 </motion.button>
               </div>
 
-              {/* Bottom actions row */}
-              <div className="flex items-center justify-between">
+              {/* Bottom actions row — px-2 matches playback controls alignment */}
+              <div className="flex items-center justify-between px-2">
                 <button
                   className="p-2 text-white/40 hover:text-white/65 transition-colors"
                   aria-label="Cola de reproducción"
@@ -736,16 +742,14 @@ export default function NowPlayingViewer({
 
                 {hasLyrics ? (
                   <button
-                    className="flex flex-col items-center gap-1 text-white/35 hover:text-white/55 transition-colors text-[10px] font-semibold uppercase tracking-widest"
+                    className="p-2 text-white/40 hover:text-white/65 transition-colors"
                     onClick={() => {
                       const c = scrollContainerRef.current
                       if (c) c.scrollTo({ top: c.clientHeight, behavior: 'smooth' })
                     }}
+                    aria-label="Letras"
                   >
-                    <span>Letras</span>
-                    <svg className="w-3 h-3 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <div className="w-5 h-5" style={{ mask: 'url(/lyrics.svg) center/contain no-repeat', WebkitMask: 'url(/lyrics.svg) center/contain no-repeat', backgroundColor: 'currentColor' }} />
                   </button>
                 ) : <div className="w-9" />}
 
@@ -865,6 +869,7 @@ export default function NowPlayingViewer({
               showGoToArtist={!!currentSong.artist}
               showGoToAlbum={!!currentSong.albumId}
               showGoToSong={true}
+              fullScreenContext={true}
             />
           )}
         </div>,
