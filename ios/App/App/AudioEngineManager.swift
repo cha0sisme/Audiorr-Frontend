@@ -53,6 +53,11 @@ class AudioEngineManager {
     /// Esto también evita que WKWebView en Capacitor pueda borrar nuestra info.
     private var localNowPlayingInfo: [String: Any] = [:]
 
+    // Play sequence counter: incremented on every play() call.
+    // The completion handler captures the current value and only fires onTrackEnd
+    // if it still matches — preventing stale handlers from old songs.
+    private var playSequence: Int = 0
+
     // MARK: - Crossfade
 
     var crossfadeExecutor: CrossfadeExecutor?
@@ -164,14 +169,23 @@ class AudioEngineManager {
         print("[AudioEngineManager] Audio graph configurado")
     }
 
-    private func ensureEngineRunning() {
-        guard !engine.isRunning else { return }
+    /// Intenta arrancar el engine si no está corriendo.
+    /// Retorna `true` si el engine está corriendo al finalizar, `false` si falló.
+    @discardableResult
+    private func ensureEngineRunning() -> Bool {
+        guard !engine.isRunning else { return true }
         do {
             try AVAudioSession.sharedInstance().setActive(true)
             try engine.start()
             print("[AudioEngineManager] Engine arrancado")
+            return true
         } catch {
             print("[AudioEngineManager] Error arrancando engine: \(error)")
+            plugin?.notifyListeners("onError", data: [
+                "message": "Engine failed to start: \(error.localizedDescription)",
+                "code": "ENGINE_START_ERROR"
+            ])
+            return false
         }
     }
 
@@ -185,9 +199,16 @@ class AudioEngineManager {
         if let t = title, !t.isEmpty { currentSongTitle = t }
         if let a = artist               { currentSongArtist = a }
         if let al = album                { currentSongAlbum = al }
-        ensureEngineRunning()
+        guard ensureEngineRunning() else {
+            print("[AudioEngineManager] play() abortado: engine no arrancó")
+            return
+        }
         cancelNativeNextFallback() // JS respondió
         clearAutomixTrigger()
+
+        // Invalidate any pending completion handlers from the previous song.
+        playSequence += 1
+        let thisPlaySeq = playSequence
 
         // Detener reproducción anterior
         playerA.stop()
@@ -214,6 +235,10 @@ class AudioEngineManager {
 
             guard framesToPlay > 0 else {
                 print("[AudioEngineManager] No hay frames para reproducir")
+                plugin?.notifyListeners("onError", data: [
+                    "message": "No frames to play (startFrame=\(startFrame), totalFrames=\(totalFrames))",
+                    "code": "NO_FRAMES"
+                ])
                 return
             }
 
@@ -228,7 +253,8 @@ class AudioEngineManager {
                     guard let self = self,
                           self.isPlaying,
                           !self.isCrossfading,
-                          self.playerA === activePlayer // Solo si sigue siendo el player activo
+                          self.playerA === activePlayer, // Solo si sigue siendo el player activo
+                          self.playSequence == thisPlaySeq // No hubo otro play() posterior
                     else { return }
                     self.isPlaying = false
                     self.stopProgressTimer()
@@ -240,6 +266,21 @@ class AudioEngineManager {
 
             playerA.play()
             isPlaying = true
+
+            // Validar que el player realmente arrancó tras un breve delay.
+            // playerA.play() puede fallar silenciosamente si el engine murió entre
+            // ensureEngineRunning() y aquí (race condition con interrupciones).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self, self.isPlaying, self.playerA === activePlayer, self.playSequence == thisPlaySeq else { return }
+                if self.playerA.lastRenderTime == nil || !self.engine.isRunning {
+                    print("[AudioEngineManager] ⚠️ playerA no está renderizando — reiniciando engine")
+                    self.isPlaying = false
+                    self.plugin?.notifyListeners("onError", data: [
+                        "message": "Player failed to start rendering",
+                        "code": "RENDER_FAILED"
+                    ])
+                }
+            }
 
             startProgressTimer()
 
@@ -306,7 +347,11 @@ class AudioEngineManager {
 
     func resume() {
         guard !isPlaying else { return }
-        ensureEngineRunning()
+        guard ensureEngineRunning() else {
+            print("[AudioEngineManager] resume() abortado: engine no arrancó")
+            notifyPlaybackStateChanged(reason: "engine-dead")
+            return
+        }
 
         playerA.play()
         if isCrossfading { playerB.play() }
