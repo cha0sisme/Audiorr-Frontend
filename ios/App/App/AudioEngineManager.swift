@@ -765,8 +765,16 @@ class AudioEngineManager {
     }
 
     func updateNowPlayingPlaybackState() {
-        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
-        updateNowPlayingProgress()
+        // MPNowPlayingInfoCenter DEBE actualizarse en el main thread.
+        // pause()/resume() pueden ser llamados desde el hilo de Capacitor (background)
+        // y si actualizamos desde ahí, iOS puede ignorar el cambio silenciosamente,
+        // dejando el lock screen/Dynamic Island desincronizado.
+        let update = { [weak self] in
+            guard let self = self else { return }
+            MPNowPlayingInfoCenter.default().playbackState = self.isPlaying ? .playing : .paused
+            self.updateNowPlayingProgress()
+        }
+        if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
     }
 
     private func clearNowPlaying() {
@@ -812,10 +820,11 @@ class AudioEngineManager {
         cc.nextTrackCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.ensureAudioSessionActive()
-            // Limpiar automix INMEDIATAMENTE para evitar race condition:
-            // sin esto, el timer nativo podría disparar crossfade mientras JS
-            // procesa el comando de next (forAutomix=false, cambio directo).
+            // Limpiar automix Y cancelar crossfade en curso INMEDIATAMENTE.
+            // Si el automix disparó un crossfade justo antes del tap en "next",
+            // cancelCrossfade() lo detiene para que el skip sea instantáneo.
             self.clearAutomixTrigger()
+            self.cancelCrossfade()
             // Enviar a JS
             self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "next"])
             // Programar fallback nativo si JS no responde en 2s
@@ -829,8 +838,12 @@ class AudioEngineManager {
         cc.previousTrackCommand.addTarget { [weak self] _ in
             guard let self = self else { return .commandFailed }
             self.ensureAudioSessionActive()
-            // Previous = seek to 0 (nativo, siempre funciona)
-            self.seek(to: 0)
+            // Limpiar automix y cancelar crossfade (igual que next).
+            self.clearAutomixTrigger()
+            self.cancelCrossfade()
+            // Delegar lógica a JS: si > 3s → seek(0), si <= 3s → canción anterior.
+            // No hacer seek(0) nativo para evitar artefacto audible cuando JS decide
+            // ir a la canción anterior (se oiría un reinicio breve antes del cambio).
             self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "previous"])
             return .success
         }
