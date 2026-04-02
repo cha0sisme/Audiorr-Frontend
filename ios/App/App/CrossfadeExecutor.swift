@@ -211,11 +211,17 @@ class CrossfadeExecutor {
         // Configurar EQ inicial
         setupInitialEQ()
 
-        // Programar playerB
+        // ORDEN CRÍTICO: schedule → taps → play
+        // 1. Programar B SIN reproducir (establece el formato en el grafo)
         schedulePlayerB()
 
-        // Instalar taps de gain (sample-accurate)
+        // 2. Instalar taps ANTES de play() — si se instalan después,
+        //    los primeros buffers de B pasan al mainMixer sin gain control
+        //    y B entra a volumen completo sin fade-in ni filtros.
         installGainTaps()
+
+        // 3. Ahora sí reproducir B (los taps ya están activos)
+        playerB.play()
 
         // Iniciar DispatchSourceTimer para filtros (~60Hz) — funciona en background
         startFilterAutomation()
@@ -264,11 +270,12 @@ class CrossfadeExecutor {
             return
         }
 
-        // Silenciar mixerB inicialmente — el tap controlará el gain per-sample
+        // El tap controlará el gain per-sample (gainForPlayerB empieza en 0)
         mixerB.outputVolume = 1.0
 
         playerB.scheduleSegment(nextFile, startingFrame: startFrame, frameCount: framesToPlay, at: nil)
-        playerB.play()
+        // NO llamar playerB.play() aquí — start() lo hace DESPUÉS de installGainTaps()
+        // para que los taps estén activos desde el primer buffer.
     }
 
     // MARK: - Gain Taps (sample-accurate volume automation)
@@ -276,7 +283,7 @@ class CrossfadeExecutor {
     private func installGainTaps() {
         let bufferSize: AVAudioFrameCount = 512
 
-        // Tap en mixerA (outgoing)
+        // Tap en mixerA (outgoing) — playerA ya está sonando, formato siempre válido
         let formatA = mixerA.outputFormat(forBus: 0)
         if formatA.sampleRate > 0 && formatA.channelCount > 0 {
             mixerA.installTap(onBus: 0, bufferSize: bufferSize, format: formatA) {
@@ -293,13 +300,22 @@ class CrossfadeExecutor {
         }
 
         // Tap en mixerB (incoming)
-        let formatB = mixerB.outputFormat(forBus: 0)
+        // IMPORTANTE: Usar el formato del archivo en vez de mixerB.outputFormat.
+        // Antes del primer play() de playerB, el mixer puede no tener formato válido
+        // (sampleRate=0, channelCount=0) → el tap no se instala → B suena a full
+        // sin gain control ni filtros durante todo el crossfade.
+        var formatB = mixerB.outputFormat(forBus: 0)
+        if formatB.sampleRate == 0 || formatB.channelCount == 0 {
+            formatB = nextFile.processingFormat
+        }
         if formatB.sampleRate > 0 && formatB.channelCount > 0 {
             mixerB.installTap(onBus: 0, bufferSize: bufferSize, format: formatB) {
                 [weak self] buffer, _ in
                 guard let self = self, !self.isCancelled else { return }
                 self.applyGainToBuffer(buffer, isPlayerA: false)
             }
+        } else {
+            print("[CrossfadeExecutor] ⚠️ No se pudo instalar tap en mixerB — formato inválido")
         }
     }
 
