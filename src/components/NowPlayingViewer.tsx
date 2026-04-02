@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { LyricLine } from './LyricsPanel'
@@ -253,15 +253,26 @@ export default function NowPlayingViewer({
   }
 
 
-  // Reset dismiss state cuando se abre el viewer.
   // Track a render-visible state: cuando drag-to-close dispara onClose(),
   // ocultamos el componente inmediatamente (sin esperar a AnimatePresence)
   // para evitar el flash de 1 frame que FM causa al resetear estilos.
   const [renderVisible, setRenderVisible] = useState(isOpen)
+  const hasEnteredRef = useRef(false)
+
+  // Synchronous reset during render: cuando isOpen pasa a false, limpiar
+  // hasEnteredRef ANTES de que React evalúe el JSX. Sin esto, al re-abrir
+  // hasEnteredRef seguía en true del open anterior → el div aparecía en
+  // translateY(0) un frame antes de que el effect lo moviera.
+  if (!isOpen) {
+    hasEnteredRef.current = false
+  }
+
   useEffect(() => {
     if (isOpen) {
       isDismissingRef.current = false
       setRenderVisible(true)
+    } else {
+      setRenderVisible(false)
     }
   }, [isOpen])
 
@@ -365,11 +376,17 @@ export default function NowPlayingViewer({
     effectiveDuration > 0 &&
     isFinite(effectiveDuration) &&
     isFinite(effectiveProgress)
-      ? (effectiveProgress / effectiveDuration) * 100
+      // Clamp 0-100: durante crossfade, duration puede cambiar a la de canción B
+      // mientras progress aún es de canción A → >100% → bolita sale de pantalla.
+      ? Math.min(100, Math.max(0, (effectiveProgress / effectiveDuration) * 100))
       : 0
 
   // Durante el drag mostramos la posición local (sin esperar a que el seek actualice el estado)
   const progressPct = dragPct !== null ? dragPct : rawProgressPct
+
+  // Durante crossfade, desactivar la transición CSS para que el salto de
+  // canción A (~100%) a canción B (~5%) no anime la barra hacia atrás.
+  const isCrossfading = playerState.isCrossfading
 
   // Tiempo mostrado en el label izquierdo (durante drag = posición estimada)
   const displayTime = dragPct !== null
@@ -388,32 +405,52 @@ export default function NowPlayingViewer({
   const hasLyrics = lyrics.length > 0 || loadingLyrics
 
 
-  // Efecto de entrada: tras montar el div, quitamos translateY(100%) para animarlo hacia arriba.
-  // Usamos un ref + rAF para que el cambio de estilo ocurra en el frame siguiente al mount.
-  const hasEnteredRef = useRef(false)
+  // ── Entry animation ────────────────────────────────────────────────────────
+  // Estrategia en dos fases para evitar el flash:
+  //   1) useLayoutEffect posiciona el div en translateY(100%) ANTES del paint.
+  //   2) useEffect (post-paint) fuerza un reflow y dispara la transición CSS.
+  // Esto reemplaza el doble-rAF que era poco fiable en WKWebView.
+
+  // Fase 1: posicionar off-screen antes de que el browser pinte.
+  useLayoutEffect(() => {
+    if (isOpen && !hasEnteredRef.current) {
+      const el = motionDivRef.current
+      if (el) {
+        el.style.transition = 'none'
+        el.style.transform = 'translateY(100%)'
+        el.style.willChange = 'transform'
+      }
+    }
+  }, [isOpen, renderVisible])
+
+  // Fase 2: animar hacia arriba después del primer paint.
   useEffect(() => {
-    if (isOpen && renderVisible) {
-      hasEnteredRef.current = false
-      // Doble-rAF: primer rAF para que el browser pinte translateY(100%),
-      // segundo rAF para aplicar translateY(0) y disparar la transición CSS.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const el = motionDivRef.current
-          if (el) {
-            el.style.transition = 'transform 0.42s cubic-bezier(0.32, 0.72, 0, 1)'
-            el.style.transform = 'translateY(0)'
-            const onDone = () => {
-              hasEnteredRef.current = true
-              el.style.transition = ''
-              el.style.willChange = 'auto'
-              el.removeEventListener('transitionend', onDone)
-            }
-            el.addEventListener('transitionend', onDone, { once: true })
-            // Safety timeout
-            setTimeout(onDone, 460)
-          }
-        })
-      })
+    if (isOpen && renderVisible && !hasEnteredRef.current) {
+      hasEnteredRef.current = true
+      const el = motionDivRef.current
+      if (!el) return
+
+      // Forzar reflow: el browser compromete translateY(100%) antes de
+      // que apliquemos translateY(0). Más fiable que doble-rAF en WKWebView.
+      void el.offsetHeight
+
+      el.style.transition = 'transform 0.42s cubic-bezier(0.32, 0.72, 0, 1)'
+      el.style.transform = 'translateY(0)'
+
+      let done = false
+      const onDone = () => {
+        if (done) return
+        done = true
+        el.style.transition = ''
+        el.style.willChange = 'auto'
+      }
+      el.addEventListener('transitionend', onDone, { once: true })
+      const timer = setTimeout(onDone, 460)
+
+      return () => {
+        clearTimeout(timer)
+        el.removeEventListener('transitionend', onDone)
+      }
     }
   }, [isOpen, renderVisible])
 
@@ -424,8 +461,9 @@ export default function NowPlayingViewer({
           ref={motionDivRef}
           style={{
             backgroundColor: '#0a0a0a',
-            transform: hasEnteredRef.current ? undefined : 'translateY(100%)',
-            willChange: 'transform',
+            // transform y willChange gestionados vía DOM en los effects de entrada/drag.
+            // NO ponerlos aquí: React los sobrescribiría en cada re-render,
+            // deshaciendo la animación en curso.
           }}
           className="fixed inset-0 z-[9995]"
         >
@@ -593,7 +631,7 @@ export default function NowPlayingViewer({
                       style={{
                         width: `${progressPct}%`,
                         background: 'white',
-                        transition: dragPct !== null || !isPlaying ? 'none' : 'width 500ms linear',
+                        transition: dragPct !== null || !isPlaying || isCrossfading ? 'none' : 'width 500ms linear',
                       }}
                     />
                   </div>
@@ -605,7 +643,7 @@ export default function NowPlayingViewer({
                       width: dragPct !== null ? 18 : 14,
                       height: dragPct !== null ? 18 : 14,
                       background: 'white',
-                      transition: dragPct !== null ? 'width 100ms, height 100ms' : !isPlaying ? 'width 100ms, height 100ms' : 'left 500ms linear, width 100ms, height 100ms',
+                      transition: dragPct !== null || isCrossfading ? 'width 100ms, height 100ms' : !isPlaying ? 'width 100ms, height 100ms' : 'left 500ms linear, width 100ms, height 100ms',
                     }}
                   />
                 </div>

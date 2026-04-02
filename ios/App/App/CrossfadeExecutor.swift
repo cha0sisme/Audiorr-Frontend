@@ -202,6 +202,12 @@ class CrossfadeExecutor {
     // MARK: - Start
 
     func start() {
+        // Poner mixerA a unity ANTES de instalar taps. El tap ya incluye
+        // maxVolumeA (ReplayGain) en gainForPlayerA(). Sin esto, el mixer
+        // aplica RG una vez y el tap otra → volumen doble (rg²) que baja
+        // de golpe al empezar el crossfade.
+        mixerA.outputVolume = 1.0
+
         // Configurar EQ inicial
         setupInitialEQ()
 
@@ -566,6 +572,14 @@ class CrossfadeExecutor {
 
         filterTimer?.cancel()
         filterTimer = nil
+
+        // Poner los mixers en su volumen final ANTES de quitar los taps.
+        // Sin esto, al quitar el tap de mixerB (que tenía outputVolume=1.0),
+        // B pasa de maxVolumeB (tap) a 1.0 (sin tap) → spike de volumen
+        // hasta que onComplete (async, siguiente run loop) corrige el valor.
+        mixerA.outputVolume = 0            // A ya está silenciado, a punto de pararse
+        mixerB.outputVolume = maxVolumeB   // B continúa con su ReplayGain
+
         removeTaps()
 
         print("[CrossfadeExecutor] Crossfade completado")

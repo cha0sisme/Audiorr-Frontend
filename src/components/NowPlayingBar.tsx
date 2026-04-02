@@ -241,12 +241,13 @@ export default function NowPlayingBar({
 
   const sourceLink = getSourceLink()
 
-  // FIX: Proteger contra valores inválidos para evitar barra de progreso rota
+  // FIX: Proteger contra valores inválidos para evitar barra de progreso rota.
+  // Clamp 0-100: durante crossfade, duration puede cambiar antes que progress.
   const progressPercentage =
-    currentDuration > 0 && 
-    isFinite(currentDuration) && 
+    currentDuration > 0 &&
+    isFinite(currentDuration) &&
     isFinite(currentProgress)
-      ? (currentProgress / currentDuration) * 100
+      ? Math.min(100, Math.max(0, (currentProgress / currentDuration) * 100))
       : 0
 
   // En nativo, el mini-player es UIKit — solo renderizamos el NowPlayingViewer.

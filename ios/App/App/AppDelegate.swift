@@ -607,9 +607,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
     private func updateNowPlaying(title: String, artist: String, artworkUrl: String?,
                                   isPlaying: Bool, progress: Double, duration: Double,
                                   isVisible: Bool, isDark: Bool = false, subtitle: String? = nil) {
-        // Forzar modo oscuro/claro en todo el mini-player (blur + labels + botones)
-        // independientemente del modo del sistema iOS
-        miniPlayerShadow?.overrideUserInterfaceStyle = isDark ? .dark : .light
+        // NO forzar overrideUserInterfaceStyle: dejar que el mini-player siga
+        // el modo del sistema (igual que UITabBar). Así obtiene la misma animación
+        // de transición dark↔light y los mismos colores de material/blur.
 
         miniPlayerShouldShow = isVisible
         if isVisible && !viewerIsOpen {
