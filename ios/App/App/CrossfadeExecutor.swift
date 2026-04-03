@@ -1,8 +1,9 @@
 import AVFoundation
 import QuartzCore
+import Foundation
 
-/// Ejecuta crossfades con precisión sample-accurate para volumen (installTap)
-/// y ~60Hz para filtros EQ (DispatchSourceTimer, funciona en background).
+/// Ejecuta crossfades usando mixer.outputVolume para volumen (~60Hz)
+/// y EQ bands para filtros (DispatchSourceTimer, funciona en background).
 /// Port exacto de AudioEffectsChain.ts + CrossfadeEngine.ts.
 class CrossfadeExecutor {
 
@@ -70,6 +71,16 @@ class CrossfadeExecutor {
         lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0)
     )
 
+    // MARK: - Prototipos de EQ Global
+    // Permite que B herede el estado de EQ de A si el usuario tiene un EQ activo.
+    struct EQState {
+        var band0Frequency: Float = 20
+        var band0Bypass: Bool = true
+        var band1Frequency: Float = 200
+        var band1Gain: Float = 0
+        var band1Bypass: Bool = true
+    }
+
     // MARK: - Estado
 
     let config: Config
@@ -77,6 +88,7 @@ class CrossfadeExecutor {
     let preset: FilterPreset
     let maxVolumeA: Float
     let maxVolumeB: Float
+    var getMasterVolume: (() -> Float)?
 
     private let engine: AVAudioEngine
     private let playerA: AVAudioPlayerNode
@@ -90,6 +102,7 @@ class CrossfadeExecutor {
 
     // DispatchSourceTimer en vez de CADisplayLink — funciona en background
     private var filterTimer: DispatchSourceTimer?
+    private var safetyWatchdog: DispatchSourceTimer?
     private var isCancelled = false
     private var lastLogTime: Double = 0
 
@@ -110,6 +123,7 @@ class CrossfadeExecutor {
         nextFile: AVAudioFile,
         maxVolumeA: Float,
         maxVolumeB: Float,
+        getMasterVolume: @escaping () -> Float,
         currentTitle: String,
         nextTitle: String
     ) {
@@ -125,6 +139,7 @@ class CrossfadeExecutor {
         self.nextFile = nextFile
         self.maxVolumeA = maxVolumeA
         self.maxVolumeB = maxVolumeB
+        self.getMasterVolume = getMasterVolume
 
         // Seleccionar preset
         if config.needsAnticipation {
@@ -146,7 +161,7 @@ class CrossfadeExecutor {
           \(config.transitionType.rawValue): "\(currentTitle)" → "\(nextTitle)"
           Entry: \(String(format: "%.2f", config.entryPoint))s | Fade: \(String(format: "%.2f", config.fadeDuration))s
           Filters: \(filtersDesc) | Anticipation: \(anticDesc)
-          ReplayGain A: \(String(format: "%.3f", maxVolumeA)) | B: \(String(format: "%.3f", maxVolumeB))
+          RG A: \(String(format: "%.3f", maxVolumeA)) | B: \(String(format: "%.3f", maxVolumeB)) | Vol: \(String(format: "%.2f", getMasterVolume()))
           Timings:
             filterStart:  \(String(format: "%.2f", timings.filterStartTime - timings.startTime))s
             volFadeStart: \(String(format: "%.2f", timings.volumeFadeStartTime - timings.startTime))s
@@ -202,38 +217,29 @@ class CrossfadeExecutor {
     // MARK: - Start
 
     func start() {
-        // Poner mixerA a unity ANTES de instalar taps. El tap ya incluye
-        // maxVolumeA (ReplayGain) en gainForPlayerA(). Sin esto, el mixer
-        // aplica RG una vez y el tap otra → volumen doble (rg²) que baja
-        // de golpe al empezar el crossfade.
-        mixerA.outputVolume = 1.0
+        // Keep mixerA at its current replayGain level (set by AudioEngineManager)
+        // Keep mainMixerNode at user volume (set by AudioEngineManager)
+        // mixerB starts at 0 (set in schedulePlayerB)
+        // Volume automation is handled by filterTick() updating mixer.outputVolume at ~60Hz
 
-        // Configurar EQ inicial
         setupInitialEQ()
 
-        // ORDEN CRÍTICO: schedule → taps → play
-        // 1. Programar B SIN reproducir (establece el formato en el grafo)
         schedulePlayerB()
 
-        // 2. Instalar taps ANTES de play() — si se instalan después,
-        //    los primeros buffers de B pasan al mainMixer sin gain control
-        //    y B entra a volumen completo sin fade-in ni filtros.
-        installGainTaps()
-
-        // 3. Ahora sí reproducir B (los taps ya están activos)
         playerB.play()
 
-        // Iniciar DispatchSourceTimer para filtros (~60Hz) — funciona en background
         startFilterAutomation()
+
+        startSafetyWatchdog()
     }
 
     func cancel() {
         isCancelled = true
         filterTimer?.cancel()
         filterTimer = nil
-        removeTaps()
+        safetyWatchdog?.cancel()
+        safetyWatchdog = nil
         playerB.stop()
-        // Restaurar mixer A a su volumen normal
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
     }
@@ -241,7 +247,6 @@ class CrossfadeExecutor {
     // MARK: - Setup
 
     private func setupInitialEQ() {
-        // Activar EQ bands
         if config.useFilters {
             eqA.bands[0].bypass = false
             eqA.bands[0].frequency = preset.highpassA.startFreq
@@ -257,6 +262,24 @@ class CrossfadeExecutor {
             eqB.bands[1].frequency = preset.lowshelfB.frequency
             eqB.bands[1].gain = preset.lowshelfB.startGain
         }
+
+        for i in 2..<6 {
+            eqB.bands[i].bypass = eqA.bands[i].bypass
+            eqB.bands[i].filterType = eqA.bands[i].filterType
+            eqB.bands[i].frequency = eqA.bands[i].frequency
+            eqB.bands[i].bandwidth = eqA.bands[i].bandwidth
+            eqB.bands[i].gain = eqA.bands[i].gain
+        }
+
+        if !config.useFilters && !config.needsAnticipation {
+            for i in 0..<2 {
+                eqB.bands[i].bypass = eqA.bands[i].bypass
+                eqB.bands[i].filterType = eqA.bands[i].filterType
+                eqB.bands[i].frequency = eqA.bands[i].frequency
+                eqB.bands[i].bandwidth = eqA.bands[i].bandwidth
+                eqB.bands[i].gain = eqA.bands[i].gain
+            }
+        }
     }
 
     private func schedulePlayerB() {
@@ -270,80 +293,14 @@ class CrossfadeExecutor {
             return
         }
 
-        // El tap controlará el gain per-sample (gainForPlayerB empieza en 0)
-        mixerB.outputVolume = 1.0
+        mixerB.outputVolume = 0  // B starts silent; filterTick ramps it up
 
         playerB.scheduleSegment(nextFile, startingFrame: startFrame, frameCount: framesToPlay, at: nil)
-        // NO llamar playerB.play() aquí — start() lo hace DESPUÉS de installGainTaps()
-        // para que los taps estén activos desde el primer buffer.
     }
 
-    // MARK: - Gain Taps (sample-accurate volume automation)
-
-    private func installGainTaps() {
-        let bufferSize: AVAudioFrameCount = 512
-
-        // Tap en mixerA (outgoing) — playerA ya está sonando, formato siempre válido
-        let formatA = mixerA.outputFormat(forBus: 0)
-        if formatA.sampleRate > 0 && formatA.channelCount > 0 {
-            mixerA.installTap(onBus: 0, bufferSize: bufferSize, format: formatA) {
-                [weak self] buffer, _ in
-                guard let self = self, !self.isCancelled else { return }
-                self.applyGainToBuffer(buffer, isPlayerA: true)
-
-                // Verificar finalización desde el render thread (funciona en background)
-                let t = CACurrentMediaTime()
-                if t >= self.timings.transitionEndTime + 0.3 {
-                    self.completeFromRenderThread()
-                }
-            }
-        }
-
-        // Tap en mixerB (incoming)
-        // IMPORTANTE: Usar el formato del archivo en vez de mixerB.outputFormat.
-        // Antes del primer play() de playerB, el mixer puede no tener formato válido
-        // (sampleRate=0, channelCount=0) → el tap no se instala → B suena a full
-        // sin gain control ni filtros durante todo el crossfade.
-        var formatB = mixerB.outputFormat(forBus: 0)
-        if formatB.sampleRate == 0 || formatB.channelCount == 0 {
-            formatB = nextFile.processingFormat
-        }
-        if formatB.sampleRate > 0 && formatB.channelCount > 0 {
-            mixerB.installTap(onBus: 0, bufferSize: bufferSize, format: formatB) {
-                [weak self] buffer, _ in
-                guard let self = self, !self.isCancelled else { return }
-                self.applyGainToBuffer(buffer, isPlayerA: false)
-            }
-        } else {
-            print("[CrossfadeExecutor] ⚠️ No se pudo instalar tap en mixerB — formato inválido")
-        }
-    }
-
-    private func applyGainToBuffer(_ buffer: AVAudioPCMBuffer, isPlayerA: Bool) {
-        let frames = Int(buffer.frameLength)
-        let channels = Int(buffer.format.channelCount)
-        let sampleRate = buffer.format.sampleRate
-        let now = CACurrentMediaTime()
-
-        for ch in 0..<channels {
-            guard let samples = buffer.floatChannelData?[ch] else { continue }
-            for i in 0..<frames {
-                let sampleTime = now + Double(i) / sampleRate
-                let gain: Float
-                if isPlayerA {
-                    gain = gainForPlayerA(at: sampleTime)
-                } else {
-                    gain = gainForPlayerB(at: sampleTime)
-                }
-                samples[i] *= gain
-            }
-        }
-    }
-
-    private func removeTaps() {
-        mixerA.removeTap(onBus: 0)
-        mixerB.removeTap(onBus: 0)
-    }
+    // MARK: - Volume automation via mixer.outputVolume (updated from filterTick at ~60Hz)
+    // NOTE: installTap buffers are read-only copies — modifying them does NOT affect audio output.
+    // We use mixer.outputVolume instead, which is the documented and reliable API for volume control.
 
     // MARK: - Volume curves for A (port exacto de AudioEffectsChain.ts líneas 152-204)
 
@@ -356,14 +313,12 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut, .cutAFadeInB:
-            // Mantiene maxVol, corte en últimos 200ms
             let cutStart = max(0, 1.0 - 0.2 / duration)
             if progress < cutStart { return maxVolumeA }
             let cutP = Float((progress - cutStart) / (1.0 - cutStart))
             return maxVolumeA * powf(0.0001 / maxVolumeA, cutP)
 
         case .eqMix:
-            // Exponencial a 70% midpoint, luego exponencial a 0
             if progress < 0.5 {
                 let p = Float(progress * 2)
                 return maxVolumeA * powf(maxVolumeA * 0.7 / maxVolumeA, p)
@@ -372,7 +327,6 @@ class CrossfadeExecutor {
             return maxVolumeA * 0.7 * powf(0.0001 / (maxVolumeA * 0.7), remaining)
 
         case .beatMatchBlend:
-            // 80% durante 80% del tiempo, luego drop rápido
             if progress < 0.8 {
                 let p = Float(progress / 0.8)
                 return maxVolumeA * powf(maxVolumeA * 0.8 / maxVolumeA, p)
@@ -381,7 +335,6 @@ class CrossfadeExecutor {
             return maxVolumeA * 0.8 * powf(0.0001 / (maxVolumeA * 0.8), drop)
 
         case .naturalBlend:
-            // Lineal a 90% midpoint, luego lineal a 0
             if progress < 0.5 {
                 let p = Float(progress / 0.5)
                 return maxVolumeA * (1.0 - 0.1 * p)
@@ -390,7 +343,6 @@ class CrossfadeExecutor {
             return max(0.0001, maxVolumeA * 0.9 * (1.0 - remaining))
 
         case .crossfade, .fadeOutACutB:
-            // Clásico: exponencial
             return maxVolumeA * powf(0.0001 / maxVolumeA, Float(progress))
         }
     }
@@ -398,7 +350,6 @@ class CrossfadeExecutor {
     // MARK: - Volume curves for B (port exacto de AudioEffectsChain.ts líneas 308-394)
 
     func gainForPlayerB(at t: Double) -> Float {
-        // CON ANTICIPACIÓN
         if config.needsAnticipation {
             if t < timings.anticipationStartTime {
                 return 0
@@ -406,22 +357,21 @@ class CrossfadeExecutor {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return 0 }
                 let p = Float((t - timings.anticipationStartTime) / dur)
-                return maxVolumeB * 0.30 * max(0, p)              // 0→30%
+                return maxVolumeB * 0.30 * max(0, p)
             } else if t < timings.fadeInStartTime {
                 let dur = timings.fadeInStartTime - timings.filterStartTime
                 guard dur > 0 else { return maxVolumeB * 0.30 }
                 let p = Float((t - timings.filterStartTime) / dur)
-                return maxVolumeB * (0.30 + 0.20 * p)             // 30→50%
+                return maxVolumeB * (0.30 + 0.20 * p)
             } else if t < timings.fadeInEndTime {
                 let dur = timings.fadeInEndTime - timings.fadeInStartTime
                 guard dur > 0 else { return maxVolumeB * 0.50 }
                 let p = Float((t - timings.fadeInStartTime) / dur)
-                return maxVolumeB * (0.50 + 0.50 * p)             // 50→100%
+                return maxVolumeB * (0.50 + 0.50 * p)
             }
             return maxVolumeB
         }
 
-        // SIN ANTICIPACIÓN
         guard t >= timings.fadeInStartTime else { return 0 }
         let fadeInDuration = timings.fadeInEndTime - timings.fadeInStartTime
         guard fadeInDuration > 0 else { return maxVolumeB }
@@ -429,11 +379,9 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .fadeOutACutB, .cut:
-            // 100ms ramp
             return maxVolumeB * Float(min(1.0, (t - timings.fadeInStartTime) / 0.1))
 
         case .eqMix, .beatMatchBlend:
-            // 30% del tiempo a full
             return maxVolumeB * Float(min(1.0, progress / 0.3))
 
         case .naturalBlend:
@@ -443,7 +391,6 @@ class CrossfadeExecutor {
             return maxVolumeB * Float(0.8 + 0.2 * (progress - 0.4) / 0.6)
 
         case .crossfade, .cutAFadeInB:
-            // Lineal completo
             return maxVolumeB * Float(progress)
         }
     }
@@ -452,7 +399,6 @@ class CrossfadeExecutor {
 
     private func startFilterAutomation() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        // ~60Hz = 16.67ms intervalo
         timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             self?.filterTick()
@@ -470,31 +416,35 @@ class CrossfadeExecutor {
 
         let t = CACurrentMediaTime()
 
-        // Verificar finalización (backup — el render thread tap también lo verifica)
         if t >= timings.transitionEndTime + 0.5 {
             completeCrossfade()
             return
         }
 
-        // Filtros A (highpass que sube — quita graves)
+        // ── Volume automation via mixer.outputVolume ──
+        // gainForPlayerA/B already incorporate ReplayGain (maxVolumeA/B).
+        // mainMixerNode.outputVolume stays at user volume (untouched).
+        let gA = gainForPlayerA(at: t)
+        let gB = gainForPlayerB(at: t)
+        mixerA.outputVolume = gA
+        mixerB.outputVolume = gB
+
+        // ── Filter automation ──
         if config.useFilters {
             applyFiltersA(at: t)
         }
 
-        // Filtros B (highpass que baja + lowshelf que sube — trae graves)
         if config.useFilters || config.needsAnticipation {
             applyFiltersB(at: t)
         }
 
-        // Log periódico cada ~1s
         if t - lastLogTime >= 1.0 {
             lastLogTime = t
             let elapsed = t - timings.startTime
-            let gA = gainForPlayerA(at: t)
-            let gB = gainForPlayerB(at: t)
+            let vol = getMasterVolume?() ?? 1.0
             let freqA = eqA.bands[0].frequency
             let freqB = eqB.bands[0].frequency
-            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA)) hp=\(String(format: "%.0f", freqA))Hz | B: vol=\(String(format: "%.3f", gB)) hp=\(String(format: "%.0f", freqB))Hz")
+            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA * vol)) hp=\(String(format: "%.0f", freqA))Hz | B: vol=\(String(format: "%.3f", gB * vol)) hp=\(String(format: "%.0f", freqB))Hz | master=\(String(format: "%.2f", vol))")
         }
     }
 
@@ -505,7 +455,6 @@ class CrossfadeExecutor {
         let bandA = eqA.bands[0]
 
         if config.transitionType == .eqMix || config.transitionType == .beatMatchBlend {
-            // Corte de graves más rápido: midFreq al 30% del tiempo
             let totalDur = timings.transitionEndTime - timings.filterStartTime
             guard totalDur > 0 else { return }
             let p = (t - timings.filterStartTime) / totalDur
@@ -516,7 +465,6 @@ class CrossfadeExecutor {
                 bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float((p - quickCut) / (1.0 - quickCut)))
             }
         } else {
-            // Normal: lineal startFreq→midFreq durante filterLead, luego midFreq→endFreq
             if t < timings.volumeFadeStartTime {
                 let dur = timings.volumeFadeStartTime - timings.filterStartTime
                 guard dur > 0 else { return }
@@ -538,7 +486,6 @@ class CrossfadeExecutor {
         let lsB = eqB.bands[1]
 
         if config.needsAnticipation {
-            // 3 fases
             if t < timings.filterStartTime {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return }
@@ -562,7 +509,6 @@ class CrossfadeExecutor {
                 lsB.gain = preset.lowshelfB.endGain
             }
         } else {
-            // Sin anticipación: lineal durante fade-in
             guard t >= timings.fadeInStartTime else { return }
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
             guard dur > 0 else { return }
@@ -574,36 +520,42 @@ class CrossfadeExecutor {
 
     // MARK: - Completion
 
-    /// Llamado desde el render thread (installTap) — dispatch al main thread de forma segura
-    private func completeFromRenderThread() {
-        guard !isCancelled else { return }
-        DispatchQueue.main.async { [weak self] in
-            self?.completeCrossfade()
-        }
-    }
-
     private func completeCrossfade() {
         guard !isCancelled else { return }
-        isCancelled = true // Prevent re-entry
+        isCancelled = true
 
         filterTimer?.cancel()
         filterTimer = nil
+        safetyWatchdog?.cancel()
+        safetyWatchdog = nil
 
-        // Poner los mixers en su volumen final ANTES de quitar los taps.
-        // Sin esto, al quitar el tap de mixerB (que tenía outputVolume=1.0),
-        // B pasa de maxVolumeB (tap) a 1.0 (sin tap) → spike de volumen
-        // hasta que onComplete (async, siguiente run loop) corrige el valor.
-        mixerA.outputVolume = 0            // A ya está silenciado, a punto de pararse
-        mixerB.outputVolume = maxVolumeB   // B continúa con su ReplayGain
+        mixerA.outputVolume = 0
+        mixerB.outputVolume = maxVolumeB
 
-        removeTaps()
+        let vol = getMasterVolume?() ?? 1.0
+        engine.mainMixerNode.outputVolume = vol
 
-        print("[CrossfadeExecutor] Crossfade completado")
+        print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.onComplete?(self.timings.startOffset)
         }
+    }
+
+    // MARK: - Watchdog
+    
+    private func startSafetyWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timeout = timings.totalTime + 2.0
+        timer.schedule(deadline: .now() + timeout, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self = self, !self.isCancelled else { return }
+            print("[CrossfadeExecutor] ⚠️ Watchdog disparado — abortando crossfade por timeout")
+            self.completeCrossfade()
+        }
+        safetyWatchdog = timer
+        timer.resume()
     }
 
     // MARK: - Interpolation helpers
