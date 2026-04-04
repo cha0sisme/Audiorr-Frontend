@@ -65,3 +65,5 @@ release/
 # Large/debug files
 localhost.har.txt
 
+# Local development plans
+implementation_plan.md
