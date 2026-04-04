@@ -11,6 +11,7 @@
 [![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
 [![Capacitor](https://img.shields.io/badge/iOS-Capacitor-119EFF?logo=ionic&logoColor=white)](https://capacitorjs.com)
+[![Swift](https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white)](https://developer.apple.com/swift/)
 
 </div>
 
