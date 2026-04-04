@@ -196,7 +196,7 @@ export function SongTable({
   const gridTemplate = getGridTemplate(showIndex, showAlbum)
 
   return (
-    <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-4 md:mx-0 ${className}`}>
+    <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`}>
       {/* Column header */}
       <div className={`grid items-center gap-2 md:gap-3 px-3 md:px-4 py-2 border-b border-gray-100 dark:border-white/5
         ${gridTemplate}

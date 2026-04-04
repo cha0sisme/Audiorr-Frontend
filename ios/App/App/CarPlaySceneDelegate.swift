@@ -29,26 +29,41 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         self.interfaceController = interfaceController
         print("[CarPlay] Conectado")
 
-        // Tab 1: Playlists
-        let playlistsList = CPListTemplate(title: "Playlists", sections: [])
-        playlistsList.tabTitle = "Playlists"
-        playlistsList.tabImage = UIImage(systemName: "music.note.list")
-        self.playlistsTemplate = playlistsList
+        // Botón 1: Playlists
+        let playlistsGridButton = CPGridButton(titleVariants: ["Playlists"], image: UIImage(systemName: "music.note.list")!) { [weak self] _ in
+            guard let self = self, let plist = self.playlistsTemplate else { return }
+            self.interfaceController?.pushTemplate(plist, animated: true, completion: nil)
+        }
 
-        // Tab 2: Now Playing
-        let nowPlaying = CPNowPlayingTemplate.shared
+        // Botón 2: Ahora suena
+        let nowPlayingGridButton = CPGridButton(titleVariants: ["Ahora Suena"], image: UIImage(systemName: "play.circle.fill")!) { [weak self] _ in
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        }
 
-        let tabBar = CPTabBarTemplate(templates: [playlistsList, nowPlaying])
-        interfaceController.setRootTemplate(tabBar, animated: true, completion: nil)
+        // Home: Grid Menú (Premium Look)
+        let homeGrid = CPGridTemplate(title: "Audiorr", gridButtons: [playlistsGridButton, nowPlayingGridButton])
+        
+        // Botón de navegación para el reproductor (siempre visible arriba a la derecha)
+        let nowPlayingBarButton = CPBarButton(image: UIImage(systemName: "play.circle")!) { [weak self] _ in
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        }
+
+        // La lista de playlists real se prepara como sub-template
+        let plistList = CPListTemplate(title: "Playlists", sections: [
+            CPListSection(items: [
+                CPListItem(text: "Cargando playlists...", detailText: "Inicia sesión en el iPhone si es necesario", image: nil)
+            ])
+        ])
+        plistList.trailingNavigationBarButtons = [nowPlayingBarButton]
+        self.playlistsTemplate = plistList
+
+        interfaceController.setRootTemplate(homeGrid, animated: true, completion: nil)
 
         // Cargar config y playlists
         fetchConfigAndLoadPlaylists()
     }
 
-    @objc func templateApplicationScene(
-        _ templateApplicationScene: CPTemplateApplicationScene,
-        didDisconnect interfaceController: CPInterfaceController
-    ) {
+    func sceneDidDisconnect(_ scene: UIScene) {
         self.interfaceController = nil
         self.navidromeConfig = nil
         self.backendBaseUrl = nil
@@ -86,21 +101,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                     return
                 }
 
-                // Navidrome config
                 if let navString = wrapper["navidrome"] as? String,
                    let navData = navString.data(using: .utf8),
                    let config = try? JSONDecoder().decode(NavidromeConfig.self, from: navData) {
                     self?.navidromeConfig = config
-                    print("[CarPlay] Navidrome config: \(config.serverUrl)")
+                    print("[CarPlay] Navidrome config ok")
+                    self?.loadPlaylists()
+                } else {
+                    print("[CarPlay] No hay configuración de Navidrome — ¿usuario inició sesión?")
+                    let placeholder = CPListItem(text: "Inicia sesión en el iPhone", detailText: "Configura tu servidor en la app", image: nil)
+                    self?.playlistsTemplate?.updateSections([CPListSection(items: [placeholder])])
                 }
-
-                // Backend URL (para covers)
-                if let backendUrl = wrapper["backendUrl"] as? String, !backendUrl.isEmpty {
-                    self?.backendBaseUrl = backendUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    print("[CarPlay] Backend URL: \(self?.backendBaseUrl ?? "")")
-                }
-
-                self?.loadPlaylists()
             }
         }
     }
@@ -256,14 +267,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
             webView.evaluateJavaScript(js, completionHandler: nil)
         }
 
-        // Ir al tab de Now Playing
-        if #available(iOS 17.0, *) {
-            if let tabBar = interfaceController?.rootTemplate as? CPTabBarTemplate {
-                let nowPlayingIndex = tabBar.templates.firstIndex(where: { $0 is CPNowPlayingTemplate })
-                if let idx = nowPlayingIndex {
-                    tabBar.selectTemplate(at: idx)
-                }
-            }
-        }
+        // Ir a la pantalla de "Ahora suena" (Now Playing Template)
+        // Usamos pushTemplate — esto permite al usuario retroceder a la lista.
+        self.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
     }
 }

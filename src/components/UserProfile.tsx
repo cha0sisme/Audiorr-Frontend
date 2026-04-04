@@ -425,7 +425,7 @@ export default function UserProfile() {
   }
 
   return (
-    <div className="space-y-8">
+    <div>
       <PageHero
         type="user"
         title={username || ''}
@@ -440,13 +440,13 @@ export default function UserProfile() {
         } : null}
         artistName={username}
         metadata={
-          <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-5 gap-y-2 text-sm md:text-base text-white/90">
+          <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-sm md:text-base text-white/90">
             <span className="font-bold">
               {playlists.length} {playlists.length === 1 ? 'playlist pública' : 'playlists públicas'}
             </span>
             {userData?.updatedAt && (
-              <span className="flex items-center gap-2 opacity-80 font-medium">
-                <span className="text-white/40">•</span>
+              <span className="flex items-center gap-1.5 opacity-80 font-medium">
+                <span className="text-white/30 text-[10px] mx-0.5">•</span>
                 <ClockIcon className="w-4 h-4 opacity-70" />
                 <span>Última conexión {new Date(userData.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
               </span>
@@ -455,7 +455,7 @@ export default function UserProfile() {
         }
       />
 
-      <div className="space-y-8">
+      <div className="px-5 md:px-8 lg:px-10 space-y-8 mt-6">
         {/* Mini Wrapped Section */}
         <MiniWrappedSection username={username || ''} />
 

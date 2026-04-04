@@ -141,6 +141,24 @@ export default function PlaylistDetail() {
 
   const dominantColors = useDominantColors(activeCoverUrl)
 
+  const accentButtonStyle = useMemo<{ backgroundColor: string; color: string } | null>(() => {
+    if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
+      return null
+    }
+    const hex = dominantColors.primary
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    const dr = Math.min(255, Math.round(r * 1.1))
+    const dg = Math.min(255, Math.round(g * 1.1))
+    const db = Math.min(255, Math.round(b * 1.1))
+    const brightness = (dr * 299 + dg * 587 + db * 114) / 1000
+    return {
+      backgroundColor: `rgb(${dr}, ${dg}, ${db})`,
+      color: brightness > 180 ? '#000000' : '#ffffff',
+    }
+  }, [dominantColors])
+
 
   const timeAgo = useCallback((isoDate: string): string => {
     const diff = Date.now() - new Date(isoDate).getTime()
@@ -406,7 +424,7 @@ export default function PlaylistDetail() {
 
 
   return (
-    <div className="space-y-8 antialiased">
+    <div>
       {loading && !pinnedFallback ? (
         <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-500 dark:text-gray-400">
           <div className="w-10 h-10 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -427,7 +445,7 @@ export default function PlaylistDetail() {
             customCoverUrl={activeCoverUrl}
             isGeneratingCover={isGeneratingCover}
             metadata={
-              <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-2 md:gap-x-3 gap-y-1 text-xs md:text-base text-white/80">
+              <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-white/80">
                 <button
                   onClick={() => navigate(`/user/${displayPlaylist?.owner || ownerName}`)}
                   className="hover:underline transition-all cursor-pointer whitespace-nowrap"
@@ -436,24 +454,25 @@ export default function PlaylistDetail() {
                 </button>
                 {!isDailyMix && (
                   <>
-                    <span className="text-white/40">•</span>
+                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
                     <span className="whitespace-nowrap">{songCountLabel}</span>
                   </>
                 )}
                 {totalDurationFormatted && (
                   <>
-                    <span className="text-white/40">•</span>
+                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
                     <span className="whitespace-nowrap">{totalDurationFormatted}</span>
                   </>
                 )}
                 {displayPlaylistComment && !isDailyMix && (
                   <>
+                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
                     <span className="italic text-white/70">{displayPlaylistComment}</span>
                   </>
                 )}
                 {isDailyMix && (
                   <>
-                    <span className="text-white/40">•</span>
+                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
                     <span className="inline-flex items-center gap-1.5 text-white/80 whitespace-nowrap">
                       <img
                         src="/assets/logo-icon.svg"
@@ -470,134 +489,109 @@ export default function PlaylistDetail() {
                 )}
               </div>
             }
+            actions={
+              <div className="flex items-center gap-2">
+                {backendAvailable && (
+                  <button
+                    onClick={handleSmartMixClick}
+                    disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
+                    className={`group inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] ${
+                      isSmartMixPlaying
+                        ? 'smartmix-playing-btn text-gray-900 dark:text-white'
+                        : isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing'
+                          ? 'border border-white/15 bg-white/[.08] text-white/50 cursor-not-allowed'
+                          : isCurrentPlaylistSmartMixed && smartMixStatus === 'error'
+                            ? 'border border-red-400/30 bg-red-900/30 text-red-300'
+                            : accentButtonStyle
+                              ? `border-none shadow-md ${isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' ? 'shimmer-premium smartmix-ready-glow' : ''}`
+                              : 'bg-white/[.15] text-white border border-white/20'
+                    }`}
+                    style={
+                      isSmartMixPlaying
+                        ? undefined
+                        : {
+                            backdropFilter: 'blur(24px) saturate(1.8)',
+                            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+                            ...(accentButtonStyle ?? {}),
+                          }
+                    }
+                  >
+                    {isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing' && (
+                      <ArrowPathIcon className="w-4 h-4 animate-spin opacity-60" />
+                    )}
+                    {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && (
+                      <SparklesIcon className="w-4 h-4 group-hover:scale-110 transition-transform duration-300" />
+                    )}
+                    {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && (
+                      <SparklesIcon className="w-4 h-4 animate-pulse" />
+                    )}
+                    {isSmartMixPlaying && <CheckIcon className="w-4 h-4" />}
+                    {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && (
+                      <XCircleIcon className="w-4 h-4 text-red-300" />
+                    )}
+                    <span className="whitespace-nowrap tracking-normal">
+                      {isSmartMixPlaying && 'Mezcla activa'}
+                      {isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing' && 'Analizando...'}
+                      {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && 'Mezcla Inteligente'}
+                      {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && 'SmartMix'}
+                      {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && 'Reintentar'}
+                    </span>
+                  </button>
+                )}
+                {id && (
+                  <button
+                    onClick={() =>
+                      togglePinnedPlaylist({
+                        id,
+                        name: displayPlaylist?.name ?? '',
+                        owner: displayPlaylist?.owner ?? ownerName,
+                        songCount: displayPlaylist?.songCount ?? songs.length,
+                        duration: displayPlaylist?.duration ?? totalDurationSeconds,
+                        created: displayPlaylist?.created,
+                        changed: displayPlaylist?.changed,
+                        coverArt: displayPlaylist?.coverArt,
+                        comment: displayPlaylist?.comment,
+                      })
+                    }
+                    className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full select-none active:scale-95 transition-transform focus:outline-none ${
+                      accentButtonStyle ? 'border-none shadow-md' : 'text-white bg-white/[.15] border border-white/20'
+                    }`}
+                    style={{
+                      backdropFilter: 'blur(24px) saturate(1.8)',
+                      WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+                      ...(accentButtonStyle ?? {}),
+                    }}
+                    aria-pressed={isPinned(id)}
+                    aria-label={isPinned(id) ? 'Desanclar playlist' : 'Anclar playlist'}
+                  >
+                    {isPinned(id) ? <PinFilledIcon className="w-5 h-5 opacity-90" /> : <PinOutlinedIcon className="w-5 h-5" />}
+                  </button>
+                )}
+              </div>
+            }
           />
 
-
-      {/* Botones de acción — mismo estilo glass, ancho completo */}
-      <div className="flex items-center gap-2 w-full">
-        {/* Botón play/pause */}
-        <button
-          onClick={handleMainPlayClick}
-          className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full select-none active:scale-95 transition-transform focus:outline-none ${
-            isRemote
-              ? 'bg-green-600/90 dark:bg-green-500/20 text-white border border-green-500/30 dark:border-green-500/35'
-              : 'bg-black/[.08] dark:bg-white/[.13] text-gray-900 dark:text-white border border-black/[.08] dark:border-white/20'
-          }`}
-          style={{
-            backdropFilter: 'blur(24px) saturate(1.8)',
-            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-          }}
-          aria-label={isThisPlaylistPlaying && isPlaying ? "Pausar playlist" : "Reproducir playlist"}
-        >
-          {isThisPlaylistPlaying && isPlaying ? (
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-          ) : (
-            <svg className="w-6 h-6 -translate-x-[1px]" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
-
-        {/* Botón SmartMix — ocupa el espacio restante (requiere backend) */}
-        {backendAvailable && (
-        <button
-          onClick={handleSmartMixClick}
-          disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
-          className={`group flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] border ${
-            isSmartMixPlaying
-              ? 'smartmix-playing-btn text-gray-900 dark:text-white'
-              : isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing'
-                ? 'border-black/[.06] dark:border-white/15 bg-black/[.04] dark:bg-white/[.08] text-gray-400 dark:text-white/50 cursor-not-allowed'
-                : isCurrentPlaylistSmartMixed && smartMixStatus === 'error'
-                  ? 'border-red-500/20 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-300'
-                  : isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'
-                    ? 'smartmix-premium-btn'
-                    : 'bg-black/[.08] dark:bg-white/[.13] text-gray-900 dark:text-white border-black/[.08] dark:border-white/20'
-          }`}
-          style={
-            !(isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'ready'))
-              ? {
-                  backdropFilter: 'blur(24px) saturate(1.8)',
-                  WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-                }
-              : undefined
-          }
-        >
-          {isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing' && (
-            <ArrowPathIcon className="w-4 h-4 animate-spin text-white/60" />
-          )}
-          {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && (
-            <SparklesIcon className="w-4 h-4 group-hover:scale-110 transition-transform duration-300" />
-          )}
-          {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && (
-            <SparklesIcon className="w-4 h-4 animate-pulse" />
-          )}
-          {isSmartMixPlaying && (
-            <CheckIcon className="w-4 h-4" />
-          )}
-          {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && (
-            <XCircleIcon className="w-4 h-4 text-red-600 dark:text-red-300" />
-          )}
-          <span className="whitespace-nowrap tracking-normal">
-            {isSmartMixPlaying && 'Mezcla activa'}
-            {isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing' && 'Analizando...'}
-            {(!isCurrentPlaylistSmartMixed || smartMixStatus === 'idle') && 'Mezcla Inteligente'}
-            {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && 'SmartMix'}
-            {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && 'Reintentar'}
-          </span>
-        </button>
-        )}
-
-        {/* Botón anclar */}
-        {id && (
-          <button
-            onClick={() =>
-              togglePinnedPlaylist({
-                id,
-                name: displayPlaylist?.name ?? '',
-                owner: displayPlaylist?.owner ?? ownerName,
-                songCount: displayPlaylist?.songCount ?? songs.length,
-                duration: displayPlaylist?.duration ?? totalDurationSeconds,
-                created: displayPlaylist?.created,
-                changed: displayPlaylist?.changed,
-                coverArt: displayPlaylist?.coverArt,
-                comment: displayPlaylist?.comment,
-              })
-            }
-            className="flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full text-gray-900 dark:text-white select-none active:scale-95 transition-transform focus:outline-none bg-black/[.08] dark:bg-white/[.13] border border-black/[.08] dark:border-white/20"
-            style={{
-              backdropFilter: 'blur(24px) saturate(1.8)',
-              WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-            }}
-            aria-pressed={isPinned(id)}
-            aria-label={isPinned(id) ? 'Desanclar playlist' : 'Anclar playlist'}
-          >
-            {isPinned(id) ? <PinFilledIcon className="w-5 h-5 text-blue-400" /> : <PinOutlinedIcon className="w-5 h-5" />}
-          </button>
-        )}
-
         <input
+          hidden
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
           accept="image/*"
-          className="hidden"
         />
-      </div>
 
-      <SongTable
-        songs={songs}
-        currentSongId={effectiveCurrentSongId}
-        isPlaying={isPlaying}
-        isAnalyzing={isPlayerAnalyzing}
-        analysisCurrentSongId={analysisCurrentSongId}
-        onSongDoubleClick={handlePlaySong}
-        onSongContextMenu={handleContextMenu}
-        showAlbum={true}
-        showCover={true}
-      />
+        <div className="px-5 md:px-8 lg:px-10 space-y-8 mt-6">
+          <SongTable
+            songs={songs}
+            currentSongId={effectiveCurrentSongId}
+            isPlaying={isPlaying}
+            isAnalyzing={isPlayerAnalyzing}
+            analysisCurrentSongId={analysisCurrentSongId}
+            onSongDoubleClick={handlePlaySong}
+            onSongContextMenu={handleContextMenu}
+            showAlbum={true}
+            showCover={true}
+          />
+        </div>
 
       {menu && (
         <SongContextMenu

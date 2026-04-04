@@ -450,7 +450,10 @@ export class NativeAudioPlayer {
     if (!this.isPlayingState) return this.currentTime_
     // Interpolate between native updates
     const elapsed = (Date.now() - this.lastTimestamp) / 1000
-    return this.lastNativeTime + elapsed
+    const interpolated = this.lastNativeTime + elapsed
+    // No permitir que la extrapolación de JS supere la duración de la canción,
+    // especialmente durante crossfade esto causa que la bolita salte fuera.
+    return this.duration > 0 ? Math.min(this.duration, interpolated) : interpolated
   }
 
   getPlaybackState(): PlaybackState {

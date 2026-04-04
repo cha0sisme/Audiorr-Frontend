@@ -210,7 +210,7 @@ export default function SongDetail() {
   }
 
   return (
-    <div className="space-y-8">
+    <div>
       <PageHero
         type="song"
         title={song.title}
@@ -222,6 +222,7 @@ export default function SongDetail() {
         isRemote={!!isRemote}
         coverArtId={song.coverArt}
         onCoverClick={handleCoverClick}
+        widePlayButton
         metadata={
           <>
             <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-lg md:text-xl text-white/90">
@@ -237,29 +238,31 @@ export default function SongDetail() {
                 {song.album}
               </Link>
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-2 md:gap-x-3 gap-y-1 text-xs md:text-base text-white/80">
+            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-white/80">
               {getReleaseTypeLabel(albumInfo?.mbReleaseType) && (
                 <>
                   <span className="whitespace-nowrap">{getReleaseTypeLabel(albumInfo?.mbReleaseType)}</span>
-                  <span className="text-white/40">•</span>
+                  <span className="text-white/30 text-[10px] mx-0.5">•</span>
                 </>
               )}
               {formatDate(albumInfo?.originalReleaseDate) && (
                 <>
                   <span className="whitespace-nowrap">{formatDate(albumInfo?.originalReleaseDate)}</span>
-                  {song.genre && <span className="text-white/40">•</span>}
+                  {song.genre && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
                 </>
               )}
               {song.genre && (
-                <div className="flex items-center flex-wrap justify-center md:justify-start gap-2">
-                  {song.genre.split(',').map(g => (
-                    <Link
-                      key={g.trim()}
-                      to={`/genre/${encodeURIComponent(g.trim())}`}
-                      className="px-3 py-1 bg-white/20 text-white rounded-full text-[10px] md:text-xs font-semibold transition-colors hover:bg-white/30 cursor-pointer whitespace-nowrap"
-                    >
-                      {g.trim()}
-                    </Link>
+                <div className="flex items-center flex-wrap justify-center md:justify-start gap-x-1.5">
+                  {song.genre.split(',').map((g, idx, arr) => (
+                    <span key={g.trim()} className="flex items-center gap-x-1.5">
+                      <Link
+                        to={`/genre/${encodeURIComponent(g.trim())}`}
+                        className="text-white/80 hover:text-white hover:underline transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        {g.trim()}
+                      </Link>
+                      {idx < arr.length - 1 && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
+                    </span>
                   ))}
                 </div>
               )}
@@ -268,82 +271,57 @@ export default function SongDetail() {
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3 md:gap-4">
-        <button
-          onClick={handleMainPlayClick}
-          className={`flex h-11 w-11 items-center justify-center rounded-full text-white select-none active:scale-95 transition-transform focus:outline-none ${
-            isRemote
-              ? 'bg-green-700/80 dark:bg-green-500/20 border border-green-500/40 dark:border-green-500/35'
-              : 'bg-gray-700/80 dark:bg-white/[.13] border border-white/20'
-          }`}
-          style={{
-            backdropFilter: 'blur(24px) saturate(1.8)',
-            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-            boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
-          }}
-          aria-label={isThisSongPlaying && isPlaying ? "Pausar canción" : "Reproducir canción"}
-        >
-          {isThisSongPlaying && isPlaying ? (
-            <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-          ) : (
-            <svg className="w-7 h-7 -translate-x-[1px]" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
-      </div>
+      <div className="px-5 md:px-8 lg:px-10 space-y-8 mt-6">
+        <SongTable
+          songs={[song]}
+          currentSongId={playerState.currentSong?.id}
+          isPlaying={playerState.isPlaying}
+          onSongDoubleClick={handlePlaySong}
+          onSongContextMenu={() => {}} // No context menu for the main song card here
+          showAlbum={false}
+          showCover={false}
+          showIndex={false}
+        />
 
-      <SongTable
-        songs={[song]}
-        currentSongId={playerState.currentSong?.id}
-        isPlaying={playerState.isPlaying}
-        onSongDoubleClick={handlePlaySong}
-        onSongContextMenu={() => {}} // No context menu for the main song card here
-        showAlbum={false}
-        showCover={false}
-        showIndex={false}
-      />
-
-      {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
-        <div className="mt-6 pt-2 text-xs text-gray-400 dark:text-gray-500">
-          ©{' '}
-          {albumInfo.originalReleaseDate?.year ||
-            albumInfo.year ||
-            song.year ||
-            new Date().getFullYear()}{' '}
-          {albumInfo.recordLabels.map(label => label.name).join(', ')}
-        </div>
-      )}
-
-      {/* --- Sección de Canciones Similares --- */}
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
-          Canciones Similares
-        </h2>
-        {loadingSimilar && (
-          <div className="flex justify-center py-8">
-            <Spinner />
+        {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
+          <div className="mt-6 pt-2 text-xs text-gray-400 dark:text-gray-500">
+            ©{' '}
+            {albumInfo.originalReleaseDate?.year ||
+              albumInfo.year ||
+              song.year ||
+              new Date().getFullYear()}{' '}
+            {albumInfo.recordLabels.map(label => label.name).join(', ')}
           </div>
         )}
-        {!loadingSimilar && similarSongs.length === 0 && (
-          <p className="text-center py-8 text-gray-500 dark:text-gray-400">
-            No se encontraron canciones similares en tu biblioteca.
-          </p>
-        )}
-        {!loadingSimilar && similarSongs.length > 0 && (
-          <SongTable
-            songs={similarSongs}
-            currentSongId={playerState.currentSong?.id}
-            isPlaying={playerState.isPlaying}
-            onSongDoubleClick={(s) => { playerActions.setCurrentContextUri(`song:${s.id}`); playerActions.playSong(s) }}
-            onSongContextMenu={() => {}} // Context menu not implemented for similar songs yet
-            showAlbum={false}
-            showCover={true}
-            showIndex={false}
-          />
-        )}
+
+        {/* --- Sección de Canciones Similares --- */}
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
+            Canciones Similares
+          </h2>
+          {loadingSimilar && (
+            <div className="flex justify-center py-8">
+              <Spinner />
+            </div>
+          )}
+          {!loadingSimilar && similarSongs.length === 0 && (
+            <p className="text-center py-8 text-gray-500 dark:text-gray-400">
+              No se encontraron canciones similares en tu biblioteca.
+            </p>
+          )}
+          {!loadingSimilar && similarSongs.length > 0 && (
+            <SongTable
+              songs={similarSongs}
+              currentSongId={playerState.currentSong?.id}
+              isPlaying={playerState.isPlaying}
+              onSongDoubleClick={(s) => { playerActions.setCurrentContextUri(`song:${s.id}`); playerActions.playSong(s) }}
+              onSongContextMenu={() => {}} // Context menu not implemented for similar songs yet
+              showAlbum={false}
+              showCover={true}
+              showIndex={false}
+            />
+          )}
+        </div>
       </div>
 
       <AlbumCoverModal

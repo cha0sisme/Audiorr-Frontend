@@ -99,27 +99,16 @@ class AudioEngineManager {
         mixerA = AVAudioMixerNode()
         mixerB = AVAudioMixerNode()
 
-        // Ambos EQ con 2 bandas (highpass + lowshelf) para que sean intercambiables
-        // tras el swap de crossfade. La banda extra queda bypassed cuando no se usa.
-        eqA = AVAudioUnitEQ(numberOfBands: 2)
+        // EQ con 6 bandas: 0-1 reserved for crossfade, 2-5 reserved for global EQ.
+        eqA = AVAudioUnitEQ(numberOfBands: 6)
         eqA.bands[0].filterType = .highPass
-        eqA.bands[0].frequency = 20 // bypass efectivo
-        eqA.bands[0].bandwidth = 2.0 // Q ≈ 0.7
-        eqA.bands[0].bypass = true
         eqA.bands[1].filterType = .lowShelf
-        eqA.bands[1].frequency = 200
-        eqA.bands[1].gain = 0
-        eqA.bands[1].bypass = true
+        for i in 0..<6 { eqA.bands[i].bypass = true }
 
-        eqB = AVAudioUnitEQ(numberOfBands: 2)
+        eqB = AVAudioUnitEQ(numberOfBands: 6)
         eqB.bands[0].filterType = .highPass
-        eqB.bands[0].frequency = 20
-        eqB.bands[0].bandwidth = 2.0
-        eqB.bands[0].bypass = true
         eqB.bands[1].filterType = .lowShelf
-        eqB.bands[1].frequency = 200
-        eqB.bands[1].gain = 0
-        eqB.bands[1].bypass = true
+        for i in 0..<6 { eqB.bands[i].bypass = true }
 
         setupAudioGraph()
         setupObservers()
@@ -224,8 +213,12 @@ class AudioEngineManager {
             // Aplicar ReplayGain via mixerA
             mixerA.outputVolume = replayGainMultiplier
 
-            // Asegurar EQ A en bypass (no estamos en crossfade)
+            // Asegurar EQ A en bypass para bandas de transición (no estamos en crossfade)
             eqA.bands[0].bypass = true
+            eqA.bands[1].bypass = true
+            
+            // Forzar volumen maestro al valor actual del usuario
+            engine.mainMixerNode.outputVolume = volume
 
             // Calcular frame de inicio
             let sampleRate = file.processingFormat.sampleRate
@@ -510,6 +503,7 @@ class AudioEngineManager {
             nextFile: nextFile,
             maxVolumeA: replayGainMultiplierA,
             maxVolumeB: replayGainMultiplierB,
+            getMasterVolume: { [weak self] in self?.volume ?? 1.0 },
             currentTitle: currentSongTitle,
             nextTitle: "" // Se establece desde JS al llamar executeCrossfade
         )
@@ -533,15 +527,18 @@ class AudioEngineManager {
             self.playStartOffset = startOffset
             self.pauseSampleTime = 0
 
-            // Resetear EQ a bypass (ambos, tras el swap)
+            // Resetear EQ a bypass (bandas de crossfade 0-1 tras el swap)
             self.eqA.bands[0].bypass = true
             self.eqA.bands[1].bypass = true
             self.eqB.bands[0].bypass = true
             self.eqB.bands[1].bypass = true
-
+            
             // Resetear mixer volumes
             self.mixerA.outputVolume = self.replayGainMultiplierA
             self.mixerB.outputVolume = 0
+            
+            // Asegurar que el master mixer tiene el volumen correcto post-crossfade
+            self.engine.mainMixerNode.outputVolume = self.volume
 
             self.isCrossfading = false
             self.crossfadeExecutor = nil
@@ -797,9 +794,20 @@ class AudioEngineManager {
             self.localNowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration
             self.localNowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = self.currentTime()
             self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = self.isPlaying ? 1.0 : 0.0
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyIsLiveStream] = false
+
+            self.localNowPlayingInfo[MPMediaItemPropertyAlbumArtist] = artist
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackQueueIndex] = 0
+            self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackQueueCount] = 1
 
             self.publishNowPlayingInfo()
             MPNowPlayingInfoCenter.default().playbackState = self.isPlaying ? .playing : .paused
+
+            // Re-broadcast after 300ms to ensure CarPlay catches the update
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.publishNowPlayingInfo()
+            }
 
             // Descargar artwork en background
             if let urlStr = artworkUrl, let url = URL(string: urlStr) {

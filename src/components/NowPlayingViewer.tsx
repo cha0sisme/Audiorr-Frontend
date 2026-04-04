@@ -372,21 +372,23 @@ export default function NowPlayingViewer({
   const effectiveProgress = isRemote ? (remotePlaybackState?.position || 0) : playerProgress.progress
   const effectiveDuration = isRemote ? (remoteSong?.duration || remotePlaybackState?.metadata?.duration || 0) : playerProgress.duration
 
+  const isCrossfading = playerState.isCrossfading
+
   const rawProgressPct =
     effectiveDuration > 0 &&
     isFinite(effectiveDuration) &&
     isFinite(effectiveProgress)
-      // Clamp 0-100: durante crossfade, duration puede cambiar a la de canción B
-      // mientras progress aún es de canción A → >100% → bolita sale de pantalla.
-      ? Math.min(100, Math.max(0, (effectiveProgress / effectiveDuration) * 100))
+      ? Math.min(
+          // Si estamos en medio de un crossfade, nunca permitir que la barra
+          // llegue al 100% (o se pase), mantenerla en ~99.5% hasta que se
+          // resuelva el swap de metadatos, para dar sensación de continuidad.
+          isCrossfading ? 99.5 : 100,
+          Math.max(0, (effectiveProgress / effectiveDuration) * 100)
+        )
       : 0
 
   // Durante el drag mostramos la posición local (sin esperar a que el seek actualice el estado)
   const progressPct = dragPct !== null ? dragPct : rawProgressPct
-
-  // Durante crossfade, desactivar la transición CSS para que el salto de
-  // canción A (~100%) a canción B (~5%) no anime la barra hacia atrás.
-  const isCrossfading = playerState.isCrossfading
 
   // Tiempo mostrado en el label izquierdo (durante drag = posición estimada)
   const displayTime = dragPct !== null

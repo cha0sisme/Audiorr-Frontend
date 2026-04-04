@@ -4,6 +4,7 @@ import UniversalCover from './UniversalCover'
 import { useLocation } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { useHeroPresence } from '../contexts/HeroPresenceContext'
+import { useTheme } from '../contexts/ThemeContext'
 
 const ROOT_TABS = new Set(['/', '/artists', '/playlists', '/search', '/audiorr'])
 const isNative = Capacitor.isNativePlatform()
@@ -18,9 +19,12 @@ interface PageHeroProps {
   onPlay?: () => void
   isPlaying?: boolean
   isRemote?: boolean
-  
+
   metadata?: React.ReactNode
-  
+  actions?: React.ReactNode
+  noBottomGap?: boolean
+  widePlayButton?: boolean
+
   // Cover config
   coverArtId?: string
   artistName?: string
@@ -65,7 +69,10 @@ export default function PageHero({
   onImageLoaded,
   backgroundColor,
   initial,
-  isExplicit
+  isExplicit,
+  actions,
+  noBottomGap = false,
+  widePlayButton = false,
 }: PageHeroProps) {
   const location = useLocation()
   const hasBackButton = isNative && !ROOT_TABS.has(location.pathname)
@@ -77,6 +84,7 @@ export default function PageHero({
   }, [incHero, decHero])
 
   const [heroProgress, setHeroProgress] = useState(0)
+  const [overscroll, setOverscroll] = useState(0)
   const heroRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -88,8 +96,17 @@ export default function PageHero({
     const handleScroll = () => {
       const rect = heroEl.getBoundingClientRect()
       const height = rect.height || heroEl.offsetHeight || 1
-      const progress = Math.min(Math.max((0 - rect.top) / height, 0), 1)
+      
+      // Progress calculation for fading/sticky (going up)
+      // We subtract the overscroll from rect.top to get the "clean" scroll position
+      const scrollPos = -Math.min(0, rect.top)
+      const progress = Math.min(Math.max(scrollPos / height, 0), 1)
       setHeroProgress(progress)
+
+      // Overscroll calculation for bounce (pulling down)
+      // In some browsers/scrolling modes, rect.top will be positive when overscrolling
+      const os = Math.max(0, rect.top)
+      setOverscroll(os)
     }
 
     handleScroll()
@@ -135,15 +152,31 @@ export default function PageHero({
   const gradientBackground = paletteGradient ?? fallbackGradient
 
   const heroSectionStyle = {
-    backgroundImage: gradientBackground,
     minHeight: 340,
-    backdropFilter: 'saturate(130%)',
   }
+
 
   const fadeProgress = Math.min(Math.max(heroProgress, 0), 1)
   const stickyOpacity = Math.min(Math.max((fadeProgress - 0.55) / 0.25, 0), 1)
   const heroOpacity = 1 - Math.min(fadeProgress, 0.92)
   const heroTranslate = fadeProgress * 36
+
+  // Bounce / Overscroll effects
+  const bounceScale = 1 + (overscroll / 1000)
+  const bounceTranslate = overscroll * 0.5 // Content moves down slower than scroll to create depth
+
+  const combinedBackgroundStyle = {
+    backgroundImage: gradientBackground,
+    backdropFilter: 'saturate(130%)',
+    // Usamos múltiples paradas (gradient easing) para que el desvanecimiento sea mucho más suave y natural,
+    // especialmente visible en modo claro. Empieza a desvanecerse desde el 40% de la altura.
+    WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
+    maskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
+    opacity: heroOpacity,
+    transform: `translateY(${heroTranslate + bounceTranslate}px) scale(${(1 + fadeProgress * 0.04) * bounceScale})`,
+    transition: overscroll > 0 ? 'none' : 'opacity 120ms linear, transform 140ms linear',
+    willChange: 'opacity, transform',
+  }
 
   const stickyBgColor = useMemo(() => {
     if (!dominantColors) return undefined
@@ -154,9 +187,36 @@ export default function PageHero({
     return `rgb(${r}, ${g}, ${b})`
   }, [dominantColors])
 
+  const buttonColors = useMemo(() => {
+    if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
+      return { bg: 'rgba(255,255,255,0.15)', text: '#ffffff' }
+    }
+    const hex = dominantColors.primary
+    const r = parseInt(hex.slice(1, 3), 16)
+    const g = parseInt(hex.slice(3, 5), 16)
+    const b = parseInt(hex.slice(5, 7), 16)
+    
+    // Aumentamos la luminosidad para que sea un color plano vibrante (estilo Apple Music)
+    // En lugar de multiplicar por 0.58 (oscurecer mucho), usamos un factor más alto o incluso saturamos.
+    const dr = Math.min(255, Math.round(r * 1.1))
+    const dg = Math.min(255, Math.round(g * 1.1))
+    const db = Math.min(255, Math.round(b * 1.1))
+    
+    // Calculamos el brillo del color resultante para decidir si el texto es blanco o negro
+    const brightness = (dr * 299 + dg * 587 + db * 114) / 1000
+    
+    return {
+      bg: `rgb(${dr}, ${dg}, ${db})`,
+      text: brightness > 180 ? '#000000' : '#ffffff',
+    }
+  }, [dominantColors])
+
+  const { isDark } = useTheme()
+
   // Update iOS notch / browser chrome color
   useEffect(() => {
-    const color = stickyBgColor ?? '#0a0e19'
+    const defaultColor = isDark ? '#121212' : '#f9fafb'
+    const color = stickyBgColor ?? defaultColor
     let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     if (!meta) {
       meta = document.createElement('meta')
@@ -164,57 +224,44 @@ export default function PageHero({
       document.head.appendChild(meta)
     }
     meta.setAttribute('content', color)
-    return () => { meta?.setAttribute('content', '#0a0e19') }
-  }, [stickyBgColor])
-
-  const stickyStyle = useMemo(() => {
-    const visible = stickyOpacity > 0.05
-    const eased = Math.min(Math.max((stickyOpacity - 0.05) / 0.95, 0), 1)
-    if (!visible) {
-      return {
-        opacity: 0,
-        transform: 'translateY(-24px)',
-        pointerEvents: 'none' as const,
-        visibility: 'hidden' as const,
-      }
+    return () => { 
+      meta?.setAttribute('content', defaultColor)
     }
-    const padding = 10 + eased * 6
-    return {
-      opacity: stickyOpacity,
-      transform: 'translateY(0px)',
-      pointerEvents: 'auto' as const,
-      visibility: 'visible' as const,
-      backgroundColor: stickyBgColor ?? 'rgb(10, 14, 25)',
-      backgroundImage: 'linear-gradient(140deg, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.10) 100%)',
-      borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-      paddingTop: `${padding}px`,
-      paddingBottom: `${padding}px`,
-      backdropFilter: 'blur(20px) saturate(150%)',
-    }
-  }, [stickyOpacity, stickyBgColor])
+  }, [stickyBgColor, isDark])
 
-  // Negative margin para cancelar el padding del RoutesContainer y quedar flush al top.
-  // IMPORTANTE: solo se aplica al <section>, no al sticky div.
-  // El sticky div debe ser hermano en el Fragment para que su rango de sticking
-  // sea el contenedor de la página completa (no solo la altura del hero).
-  // Usamos style inline (no className) para que gane sobre space-y-* del componente padre,
-  // que tiene mayor especificidad CSS y sobreescribiría un -mt-[60px] via className.
-  const sectionWrapperStyle = hasBackButton
-    ? { marginTop: '-60px' }  // cancela p-4 (16px) + spacer (44px) → hero flush al top
+
+
+  // Ya no necesitamos márgenes negativos agresivos porque NavigationStack 
+  // ahora neutraliza el padding del contenedor cuando hay un Hero.
+  // Pero en móvil, queremos asegurarnos de que el hero llegue al top absoluto (atrás del notch).
+  const sectionWrapperStyle = isNative
+    ? { marginTop: '0px' }
     : undefined
 
   // El sticky header siempre se ancla en top-0.
-  // El botón de atrás (z-9990) flota encima gracias a su z-index;
-  // el pl-[100px] del header evita que el título se solape con él.
+  // En iOS nativo, env(safe-area-inset-top) nos da el offset del notch.
   const stickyTopClass = 'top-0'
 
   return (
     <>
-      <div className={`sticky ${stickyTopClass} z-40 h-0 -mx-4 md:-mx-6 lg:-mx-8 pointer-events-none`}>
-        <div className="absolute top-0 left-0 right-0 pointer-events-none">
+      <div className={`sticky ${stickyTopClass} z-40 h-0 pointer-events-none`}>
+        {/* Este contenedor absoluto ya empieza en top-0 del scroll container (que es top-0 de la pantalla) */}
+        <div 
+          className="absolute top-0 left-0 right-0 pointer-events-none transition-opacity duration-200"
+          style={{
+            opacity: stickyOpacity,
+            backgroundColor: stickyBgColor ?? 'rgb(10, 14, 25)',
+            backdropFilter: 'blur(24px) saturate(1.8)',
+            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            // Importante: el background debe cubrir el notch
+            paddingTop: isNative ? 'env(safe-area-inset-top)' : '0px',
+            visibility: stickyOpacity > 0 ? 'visible' : 'hidden',
+          }}
+        >
+          {/* El contenido real del header pegajoso */}
           <div
-            className={`flex items-center gap-3 px-4 sm:px-6 lg:px-10 ${hasBackButton ? 'pl-[100px] sm:pl-[100px] lg:pl-[100px]' : ''}`}
-            style={stickyStyle}
+            className={`flex items-center gap-3 px-4 sm:px-6 lg:px-10 h-[60px] ${hasBackButton ? 'pl-[100px] sm:pl-[100px] lg:pl-[100px]' : ''}`}
           >
             <div className={`flex h-10 w-10 items-center justify-center overflow-hidden shadow-md bg-slate-800/60 ${type === 'artist' || type === 'user' ? 'rounded-full' : 'rounded-md'}`}>
               {(type !== 'user' && coverImageUrl) ? (
@@ -258,16 +305,11 @@ export default function PageHero({
         </div>
       </div>
 
-      <div className="-mt-4 md:-mt-6 lg:-mt-8" style={sectionWrapperStyle}>
-      <section ref={heroRef} className="relative overflow-hidden rounded-none md:rounded-3xl text-white !mt-0 -mx-4 md:-mx-6 lg:-mx-8" style={heroSectionStyle}>
+      <div className={`${noBottomGap ? ' -mb-14' : ''}`} style={sectionWrapperStyle}>
+      <section ref={heroRef} className="relative overflow-hidden rounded-none md:rounded-3xl text-white !mt-0" style={heroSectionStyle}>
         <div
           className="absolute inset-0"
-          style={{
-            opacity: heroOpacity,
-            transform: `translateY(${heroTranslate}px) scale(${1 + fadeProgress * 0.04})`,
-            transition: 'opacity 120ms linear, transform 140ms linear',
-            willChange: 'opacity, transform',
-          }}
+          style={combinedBackgroundStyle}
         >
           {(type !== 'user' && coverImageUrl) && (
             <img
@@ -297,11 +339,12 @@ export default function PageHero({
         </div>
 
         <div
-          className="relative flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pt-6 pb-6 md:pt-14 md:pb-10"
+          className="relative flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pt-6 pb-9 md:pt-14 md:pb-9"
           style={{
+            paddingTop: isNative ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem',
             opacity: heroOpacity,
-            transform: `translateY(${heroTranslate * 0.6}px)`,
-            transition: 'opacity 120ms linear, transform 140ms linear',
+            transform: `translateY(${heroTranslate * 0.6 + bounceTranslate}px)`,
+            transition: overscroll > 0 ? 'none' : 'opacity 120ms linear, transform 140ms linear',
             willChange: 'opacity, transform',
           }}
         >
@@ -329,6 +372,37 @@ export default function PageHero({
               )}
             </h1>
             {metadata}
+            {(onPlay || actions) && (
+              <div className="mt-5 flex items-center gap-3 justify-center md:justify-start">
+                {onPlay && (
+                  <button
+                    onClick={onPlay}
+                    className={`flex-shrink-0 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-transform focus:outline-none select-none ${widePlayButton ? 'h-11 px-6 gap-2' : 'w-12 h-12'}`}
+                    style={{ backgroundColor: buttonColors.bg, color: buttonColors.text }}
+                    aria-label={isPlaying ? 'Pausar' : 'Reproducir'}
+                  >
+                    {isPlaying ? (
+                      <>
+                        <svg className={`${widePlayButton ? 'w-5 h-5' : 'w-6 h-6'}`} fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                        </svg>
+                        {widePlayButton && (
+                          <span className="font-bold text-sm tracking-tight">Pausar</span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <PlayIcon className={`${widePlayButton ? 'w-5 h-5' : 'w-7 h-7 -translate-x-[1px]'}`} />
+                        {widePlayButton && (
+                          <span className="font-bold text-sm tracking-tight">Reproducir</span>
+                        )}
+                      </>
+                    )}
+                  </button>
+                )}
+                {actions}
+              </div>
+            )}
           </div>
         </div>
       </section>

@@ -210,7 +210,7 @@ export default function ArtistsDetail() {
   const displayedSongs = showAllSongs ? songs : songs.slice(0, 5)
 
   return (
-    <div className="space-y-8 antialiased">
+    <div>
       <PageHero
         type="artist"
         title={decodedName}
@@ -223,14 +223,15 @@ export default function ArtistsDetail() {
         artistName={decodedName}
         onCoverClick={() => artistImage && setShowAvatarModal(true)}
         onImageLoaded={setArtistImage}
+        widePlayButton
         metadata={
-          <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm md:text-base text-white/80">
+          <div className="mt-5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm md:text-base text-white/80">
             {albums.length > 0 && (
               <>
                 <span className="font-semibold">
                   {albums.length} {albums.length === 1 ? 'álbum' : 'álbumes'}
                 </span>
-                <span className="text-white/40">•</span>
+                <span className="text-white/30 text-[10px] mx-0.5">•</span>
               </>
             )}
             {totalSongs > 0 && (
@@ -242,64 +243,132 @@ export default function ArtistsDetail() {
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3 md:gap-4 px-1">
-        <button
-          onClick={handleMainPlayClick}
-          className={`flex h-11 w-11 items-center justify-center rounded-full text-white select-none active:scale-95 transition-transform focus:outline-none ${
-            isRemote
-              ? 'bg-green-700/80 dark:bg-green-500/20 border border-green-500/40 dark:border-green-500/35'
-              : 'bg-gray-700/80 dark:bg-white/[.13] border border-white/20'
-          }`}
-          style={{
-            backdropFilter: 'blur(24px) saturate(1.8)',
-            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-            boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
-          }}
-          aria-label={isThisArtistPlaying && isPlaying ? "Pausar artista" : "Reproducir artista"}
-        >
-          {isThisArtistPlaying && isPlaying ? (
-            <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-          ) : (
-            <svg className="w-7 h-7 -translate-x-[1px]" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
-      </div>
+      <div className="px-5 md:px-8 lg:px-10 space-y-8 mt-6">
+        {loading ? (
+          <section>
+            <div className="flex items-center gap-3 py-6 text-gray-400 dark:text-gray-500">
+              <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin flex-shrink-0" />
+              <span className="text-sm">Cargando canciones y álbumes...</span>
+            </div>
+          </section>
+        ) : songs.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Populares</h2>
+              {songs.length > 5 && (
+                <button
+                  onClick={() => setShowAllSongs(!showAllSongs)}
+                  className="text-sm font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                >
+                  {showAllSongs ? 'Ver menos' : 'Ver más'}
+                </button>
+              )}
+            </div>
+            <SongTable
+              songs={displayedSongs}
+              currentSongId={currentSongId}
+              isPlaying={isPlaying}
+              onSongDoubleClick={handlePlaySong}
+              onSongContextMenu={handleContextMenu}
+              showAlbum={false}
+              showCover={true}
+            />
+          </section>
+        )}
 
-      {loading ? (
-        <section>
-          <div className="flex items-center gap-3 py-6 text-gray-400 dark:text-gray-500">
-            <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin flex-shrink-0" />
-            <span className="text-sm">Cargando canciones y álbumes...</span>
-          </div>
-        </section>
-      ) : songs.length > 0 && (
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Populares</h2>
-            {songs.length > 5 && (
+        {albums.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Álbumes</h2>
               <button
-                onClick={() => setShowAllSongs(!showAllSongs)}
+                onClick={() => setShowAllAlbums(!showAllAlbums)}
                 className="text-sm font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
               >
-                {showAllSongs ? 'Ver menos' : 'Ver más'}
+                {showAllAlbums ? 'Ver menos' : 'Ver más'}
               </button>
+            </div>
+
+            {!showAllAlbums ? (
+              <HorizontalScrollSection>
+                {albums.map(album => (
+                  <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
+                    <AlbumCard album={album} showPlayButton={true} />
+                  </div>
+                ))}
+              </HorizontalScrollSection>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
+                {albums.map(album => (
+                  <AlbumCard key={album.id} album={album} showPlayButton={true} />
+                ))}
+              </div>
             )}
-          </div>
-          <SongTable
-            songs={displayedSongs}
-            currentSongId={currentSongId}
-            isPlaying={isPlaying}
-            onSongDoubleClick={handlePlaySong}
-            onSongContextMenu={handleContextMenu}
-            showAlbum={false}
-            showCover={true}
-          />
-        </section>
-      )}
+          </section>
+        )}
+
+        {collaborations.length > 0 && (
+          <section>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Aparece en</h2>
+            <HorizontalScrollSection>
+              {collaborations.map(album => (
+                <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
+                  <AlbumCard album={album} showPlayButton={true} />
+                </div>
+              ))}
+            </HorizontalScrollSection>
+          </section>
+        )}
+
+        {!playlistsLoading && playlists.length > 0 && (
+          <section>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Playlists con {decodedName}</h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+              {playlists.map(playlist => (
+                <ArtistPlaylistItem key={playlist.id} playlist={playlist} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {artistInfo && artistInfo.similarArtists.length > 0 && (
+          <section>
+            <HorizontalScrollSection title="Fans también escuchan">
+              {artistInfo.similarArtists.slice(0, 15).map(artist => (
+                <Link
+                  key={artist.id}
+                  to={`/artists/${encodeURIComponent(artist.name)}`}
+                  className="flex-shrink-0 w-32 text-center group"
+                >
+                  <div className="w-32 h-32 mx-auto mb-3">
+                    <UniversalCover type="artist" artistName={artist.name} context="grid" />
+                  </div>
+                  <p className="font-bold text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-500 transition-colors text-sm">
+                    {artist.name}
+                  </p>
+                </Link>
+              ))}
+            </HorizontalScrollSection>
+          </section>
+        )}
+
+        {artistInfo?.biography && (
+          <section className="mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500" style={biographyBgStyle}>
+            <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-6">
+              Acerca de {decodedName}
+            </h2>
+            <div 
+              className="prose prose-sm md:prose-base dark:prose-invert max-w-none text-gray-600 dark:text-gray-300 leading-relaxed font-normal"
+              dangerouslySetInnerHTML={{ 
+                __html: artistInfo.biography
+                  .replace(/<a[^>]*>.*?Read more on Last\.fm.*?<\/a>/gi, '')
+                  .replace(/<a[^>]*>.*?/gi, '<span class="text-blue-500 hover:underline cursor-pointer">')
+                  .replace(/<\/a>/gi, '</span>')
+                  .replace(/Read more on Last\.fm/gi, '') 
+              }}
+            />
+          </section>
+        )}
+      </div>
 
       {menu && (
         <SongContextMenu
@@ -310,99 +379,6 @@ export default function ArtistsDetail() {
           showGoToArtist={false}
           isAdmin={navidromeApi.getConfig()?.isAdmin === true}
         />
-      )}
-
-      {albums.length > 0 && (
-        <section>
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Álbumes</h2>
-            <button
-              onClick={() => setShowAllAlbums(!showAllAlbums)}
-              className="text-sm font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
-            >
-              {showAllAlbums ? 'Ver menos' : 'Ver más'}
-            </button>
-          </div>
-
-          {!showAllAlbums ? (
-            <HorizontalScrollSection>
-              {albums.map(album => (
-                <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                  <AlbumCard album={album} showPlayButton={true} />
-                </div>
-              ))}
-            </HorizontalScrollSection>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
-              {albums.map(album => (
-                <AlbumCard key={album.id} album={album} showPlayButton={true} />
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {collaborations.length > 0 && (
-        <section>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Aparece en</h2>
-          <HorizontalScrollSection>
-            {collaborations.map(album => (
-              <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                <AlbumCard album={album} showPlayButton={true} />
-              </div>
-            ))}
-          </HorizontalScrollSection>
-        </section>
-      )}
-
-      {!playlistsLoading && playlists.length > 0 && (
-        <section>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Playlists con {decodedName}</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
-            {playlists.map(playlist => (
-              <ArtistPlaylistItem key={playlist.id} playlist={playlist} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {artistInfo && artistInfo.similarArtists.length > 0 && (
-        <section>
-          <HorizontalScrollSection title="Fans también escuchan">
-            {artistInfo.similarArtists.slice(0, 15).map(artist => (
-              <Link
-                key={artist.id}
-                to={`/artists/${encodeURIComponent(artist.name)}`}
-                className="flex-shrink-0 w-32 text-center group"
-              >
-                <div className="w-32 h-32 mx-auto mb-3">
-                  <UniversalCover type="artist" artistName={artist.name} context="grid" />
-                </div>
-                <p className="font-bold text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-500 transition-colors text-sm">
-                  {artist.name}
-                </p>
-              </Link>
-            ))}
-          </HorizontalScrollSection>
-        </section>
-      )}
-
-      {artistInfo?.biography && (
-        <section className="mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500" style={biographyBgStyle}>
-          <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-6">
-            Acerca de {decodedName}
-          </h2>
-          <div 
-            className="prose prose-sm md:prose-base dark:prose-invert max-w-none text-gray-600 dark:text-gray-300 leading-relaxed font-normal"
-            dangerouslySetInnerHTML={{ 
-              __html: artistInfo.biography
-                .replace(/<a[^>]*>.*?Read more on Last\.fm.*?<\/a>/gi, '')
-                .replace(/<a[^>]*>.*?/gi, '<span class="text-blue-500 hover:underline cursor-pointer">')
-                .replace(/<\/a>/gi, '</span>')
-                .replace(/Read more on Last\.fm/gi, '') 
-            }}
-          />
-        </section>
       )}
 
       <AlbumCoverModal

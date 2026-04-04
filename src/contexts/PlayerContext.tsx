@@ -2712,9 +2712,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const configureWebAudioCallbacks = (player: WebAudioPlayer | NativeAudioPlayer) => {
     player.setCallbacks({
       onTimeUpdate: (currentTime, duration) => {
-        setDuration(duration)
+        // Bloquear actualizaciones de duración durante crossfades nativos.
+        // Swift swapea el archivo interno antes de disparar onCrossfadeComplete,
+        // lo que hace que llegue un onTimeUpdate con la duración de la canción B
+        // mientras React aún cree que la canción actual es A -> división errónea -> salto ball.
+        if (!isCrossfadingRef.current) {
+          setDuration(duration)
+        }
 
         // --- Sincronizar progreso (similar a HTML Audio, con throttle) ---
+        // Durante crossfade, si el progreso viene del nuevo player (muy pequeño) 
+        // pero aún mostramos la canción anterior, ignorar para evitar saltos.
+        const isLikelyNextSongTime = isCrossfadingRef.current && currentTime < 30 && progressRef.current > 60
+        if (isLikelyNextSongTime) return
+
         progressRef.current = currentTime
         const now = Date.now()
         if (now - lastProgressUpdateRef.current >= 500) {

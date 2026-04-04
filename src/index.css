@@ -163,6 +163,13 @@
     max-width: 100%;
   }
 
+  html, body {
+    height: 100%;
+    overflow-x: hidden;
+    overscroll-behavior-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   h1, h2, h3, h4, h5, h6 {
     font-family: 'Space Grotesk', sans-serif;
     font-variation-settings: 'wght' 700;
@@ -452,6 +459,46 @@
 
 .smartmix-premium-btn:active {
   transform: scale(0.97);
+}
+
+/* SmartMix Ready Effects */
+.smartmix-ready-glow {
+  box-shadow: 0 4px 15px rgba(255, 255, 255, 0.15), inset 0 0 10px rgba(255, 255, 255, 0.1);
+  animation: premium-breathing 3s infinite ease-in-out;
+}
+
+.shimmer-premium {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer-premium::after {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -200%;
+  width: 100%;
+  height: 200%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.3),
+    transparent
+  );
+  transform: rotate(20deg);
+  animation: shimmer-effect 4s infinite;
+  pointer-events: none;
+}
+
+@keyframes shimmer-effect {
+  0% { transform: translateX(-100%) rotate(20deg); }
+  20% { transform: translateX(200%) rotate(20deg); }
+  100% { transform: translateX(200%) rotate(20deg); }
+}
+
+@keyframes premium-breathing {
+  0%, 100% { transform: scale(1); filter: brightness(1); }
+  50% { transform: scale(1.02); filter: brightness(1.15); }
 }
 
 .smartmix-playing-btn {

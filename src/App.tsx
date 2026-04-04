@@ -7,7 +7,7 @@ import QueuePanel from './components/QueuePanel'
 import { PlayerProvider, usePlayerState, usePlayerActions } from './contexts/PlayerContext'
 import { useCanvas } from './hooks/useCanvas'
 import { ThemeProvider } from './contexts/ThemeContext'
-import { HeroPresenceProvider } from './contexts/HeroPresenceContext'
+import { HeroPresenceProvider, useHeroPresence } from './contexts/HeroPresenceContext'
 import { Capacitor } from '@capacitor/core'
 import { SidebarProvider } from './contexts/SidebarContext'
 import { SettingsProvider } from './contexts/SettingsContext'
@@ -189,18 +189,30 @@ function MainApp() {
     setShowCanvas(!showCanvas)
   }
 
+  const { heroPresent } = useHeroPresence()
+
   return (
-    <div className="h-screen flex flex-col bg-gray-100 dark:bg-gray-800 font-sans">
+    <div className={`h-screen flex flex-col bg-gray-50 dark:bg-[#121212] font-sans selection:bg-blue-500/30`}>
       <OfflineBanner />
-      {/* Botón nativo de volver atrás — solo en iOS/Android, páginas de detalle */}
+      {/* Botón nativo de volver atrás — siempre visible y encima de todo */}
       <NativeBackButton />
       {/* TabBar: navegación nativa iOS/móvil (reemplaza el menú hamburguesa) */}
       <TabBar />
-      <div className="flex flex-1 overflow-hidden">
+      
+      {/* Contenedor principal sin paddings restrictivos */}
+      <div className="flex flex-1 overflow-hidden relative">
         <Sidebar />
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Safe area spacer para móvil — el Header está hidden en mobile */}
-          <div className="flex-shrink-0 md:hidden" style={{ height: 'env(safe-area-inset-top)' }} />
+        <main className="flex-1 flex flex-col overflow-hidden relative">
+          {/* Solo si NO hay Hero, añadimos un espaciador para no tapar contenido debajo del notch. 
+              En iOS nativo con viewport-fit=cover, el body ocupa todo el espacio. */}
+          {/* Overlay suave estilo Apple Music para el notch cuando NO hay Hero. 
+              Es pegajoso y translúcido, permitiendo que el contenido se vea por debajo al scrollear. */}
+          {!heroPresent && (
+            <div 
+              className="absolute top-0 left-0 right-0 z-[100] md:hidden bg-transparent pointer-events-none" 
+              style={{ height: 'env(safe-area-inset-top, 20px)' }} 
+            />
+          )}
           {/* Header solo visible en desktop (md+) */}
           <Header />
           <div className="flex-1 flex overflow-hidden">

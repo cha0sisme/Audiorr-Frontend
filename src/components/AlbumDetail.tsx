@@ -173,7 +173,7 @@ export default function AlbumDetail() {
   }
 
   return (
-    <div className="space-y-8">
+    <div>
       <PageHero
         type="album"
         title={albumInfo.name}
@@ -186,6 +186,7 @@ export default function AlbumDetail() {
         isRemote={!!isRemote}
         coverArtId={albumInfo.coverArt}
         onCoverClick={handleCoverClick}
+        widePlayButton={true}
         metadata={
           <>
             <div className="mt-2 text-center md:text-left">
@@ -198,64 +199,46 @@ export default function AlbumDetail() {
               {formatDate(albumInfo.originalReleaseDate) && (
                 <>
                   <span className="whitespace-nowrap">{formatDate(albumInfo.originalReleaseDate)}</span>
-                  {albumInfo.genre && <span className="text-white/40">•</span>}
+                  {albumInfo.genre && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
                 </>
               )}
-              {albumInfo.genre && (
-                <div className="flex items-center flex-wrap justify-center md:justify-start gap-2">
-                  {albumInfo.genre.split(',').map(g => (
-                    <Link
-                      key={g}
-                      to={`/genre/${encodeURIComponent(g.trim())}`}
-                      className="px-3 py-1 bg-white/20 text-white rounded-full text-[10px] md:text-xs font-semibold transition-colors hover:bg-white/30 cursor-pointer whitespace-nowrap"
-                    >
-                      {g.trim()}
-                    </Link>
+                <div className="flex items-center flex-wrap justify-center md:justify-start gap-x-1.5">
+                  {albumInfo.genre?.split(',').map((g, idx, arr) => (
+                    <span key={g.trim()} className="flex items-center gap-x-1.5">
+                      <Link
+                        to={`/genre/${encodeURIComponent(g.trim())}`}
+                        className="text-white/80 hover:text-white hover:underline transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        {g.trim()}
+                      </Link>
+                      {idx < arr.length - 1 && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
+                    </span>
                   ))}
                 </div>
-              )}
             </div>
           </>
         }
       />
 
-      <div className="flex flex-wrap items-center gap-3 md:gap-4">
-        <button
-          onClick={handleMainPlayClick}
-          className={`flex h-11 w-11 items-center justify-center rounded-full text-white select-none active:scale-95 transition-transform focus:outline-none ${
-            isRemote
-              ? 'bg-green-700/80 dark:bg-green-500/20 border border-green-500/40 dark:border-green-500/35'
-              : 'bg-gray-700/80 dark:bg-white/[.13] border border-white/20'
-          }`}
-          style={{
-            backdropFilter: 'blur(24px) saturate(1.8)',
-            WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
-            boxShadow: '0 2px 14px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.16)',
-          }}
-          aria-label={isThisAlbumPlaying && isPlaying ? "Pausar álbum" : "Reproducir álbum"}
-        >
-          {isThisAlbumPlaying && isPlaying ? (
-            <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-            </svg>
-          ) : (
-            <svg className="w-7 h-7 -translate-x-[1px]" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          )}
-        </button>
-      </div>
+      <div className="px-5 md:px-8 lg:px-10 space-y-8 mt-6">
+        <SongTable
+          songs={songs}
+          currentSongId={currentSongId}
+          isPlaying={isPlaying && isThisAlbumPlaying}
+          onSongDoubleClick={handlePlaySong}
+          onSongContextMenu={handleContextMenu}
+          showAlbum={false}
+          showCover={false}
+          useTrackNumber={true}
+        />
 
-      <SongTable
-        songs={songs}
-        currentSongId={currentSongId}
-        isPlaying={isPlaying && isThisAlbumPlaying}
-        onSongDoubleClick={handlePlaySong}
-        onSongContextMenu={handleContextMenu}
-        showAlbum={false}
-        showCover={false}
-        useTrackNumber={true}
-      />
+        {albumInfo.recordLabels && albumInfo.recordLabels.length > 0 && (
+          <div className="mt-4 pt-2 text-xs text-gray-400 dark:text-gray-500">
+            © {albumInfo.originalReleaseDate?.year || albumInfo.year || new Date().getFullYear()}{' '}
+            {albumInfo.recordLabels.map(label => label.name).join(', ')}
+          </div>
+        )}
+      </div>
 
       {menu && (
         <SongContextMenu
@@ -267,13 +250,6 @@ export default function AlbumDetail() {
           showGoToSong={true}
           isAdmin={navidromeApi.getConfig()?.isAdmin === true}
         />
-      )}
-
-      {albumInfo.recordLabels && albumInfo.recordLabels.length > 0 && (
-        <div className="mt-4 pt-2 text-xs text-gray-400 dark:text-gray-500">
-          © {albumInfo.originalReleaseDate?.year || albumInfo.year || new Date().getFullYear()}{' '}
-          {albumInfo.recordLabels.map(label => label.name).join(', ')}
-        </div>
       )}
 
       <AlbumCoverModal

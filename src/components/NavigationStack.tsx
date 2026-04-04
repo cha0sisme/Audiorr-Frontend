@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation, useNavigationType } from 'react-r
 import { Capacitor } from '@capacitor/core'
 import Spinner from './Spinner'
 import { navidromeApi } from '../services/navidromeApi'
+import { useHeroPresence } from '../contexts/HeroPresenceContext'
 
 // Root tab pages — eager load to avoid Suspense flash on tab switch
 import HomePage from './HomePage'
@@ -93,22 +94,20 @@ const StackPage = memo(function StackPage({
   entry: StackEntry
   onAnimationComplete: (id: string) => void
 }) {
+  const { heroPresent } = useHeroPresence()
   const { id, location: loc, status } = entry
-  const showNativeSpacer = isNative && !ROOT_TABS.has(loc.pathname)
+  // El spacer nativo de 44px solo se aplica en páginas que NO son root tabs
+  // y que NO tienen un Hero (ya que el Hero se encarga del notch)
+  
   const pageRef = useRef<HTMLDivElement>(null)
   const animRef = useRef<Animation | null>(null)
   const isAnimating = status === 'entering' || status === 'exiting'
 
-  // Run Web Animations API transitions based on status changes.
-  // IMPORTANT: We keep overflow-y: auto always (via JSX style) so that
-  // findScrollableParent() in PageHero always finds this element as the
-  // scroll container — even during entering animation. We use pointer-events: none
-  // during animation to prevent scrolling instead of overflow: hidden.
+  // ... (rest of the effect stays the same) ...
   useEffect(() => {
     const el = pageRef.current
     if (!el) return
 
-    // Cancel any running animation from a previous status
     if (animRef.current) {
       animRef.current.cancel()
       animRef.current = null
@@ -135,7 +134,7 @@ const StackPage = memo(function StackPage({
       animRef.current = anim
 
       anim.onfinish = () => {
-        anim.cancel() // Removes fill-forwards → element reverts to CSS (no transform!)
+        anim.cancel()
         animRef.current = null
         el.style.boxShadow = ''
         onAnimationComplete(id)
@@ -170,12 +169,8 @@ const StackPage = memo(function StackPage({
       }
       return
     }
-
-    // Active or cached: ensure clean state
-    el.style.boxShadow = ''
   }, [status, id, onAnimationComplete])
 
-  // Cleanup animation on unmount
   useEffect(() => {
     return () => {
       if (animRef.current) {
@@ -204,10 +199,11 @@ const StackPage = memo(function StackPage({
         pointerEvents: isAnimating ? 'none' : 'auto',
       }}
     >
-      <div className="p-4 pb-[200px] md:p-6 md:pb-6 lg:p-8">
-        {showNativeSpacer && (
-          <div style={{ height: '44px' }} aria-hidden="true" />
-        )}
+      {/* 
+        Si hay un Hero, eliminamos paddings y dejamos que el hijo ocupe todo el espacio (p-0).
+        En móvil, siempre forzamos p-0 para contenido full-width si hay Hero.
+      */}
+      <div className={`${heroPresent ? 'p-0 pb-[200px] md:pb-6' : 'p-4 pt-[calc(env(safe-area-inset-top,20px)+12px)] pb-[200px] md:p-6 md:pb-6 lg:p-8'}`}>
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-64">
