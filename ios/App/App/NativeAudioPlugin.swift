@@ -75,7 +75,7 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // cancelar la descarga de la canción anterior para que no compita con la nueva.
         // Solo cancelamos si el songId cambió (misma canción = cache join, OK).
         if let prevId = activePlaySongId, prevId != songId {
-            AudioFileLoader.shared.cancelDownload(prevId)
+            AudioFileLoader.shared.cancelDownload(songId: prevId)
         }
         activePlaySongId = songId
 
