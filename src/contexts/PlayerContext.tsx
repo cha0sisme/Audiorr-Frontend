@@ -875,6 +875,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             setIsPlaying(true)
             updateMediaSession(newCurrentSong, true) // true = ahora sí está reproduciendo
 
+            // Pre-calentar caché Swift para la SIGUIENTE canción en cola.
+            // Cuando el usuario pulsa "next", AudioFileLoader devuelve el archivo en caché
+            // al instante en vez de tener que descargarlo → skip instantáneo como Spotify/Apple Music.
+            if (IS_NATIVE && webAudioPlayerRef.current instanceof NativeAudioPlayer) {
+              const currentIdx = queueRef.current.findIndex(s => s.id === song.id)
+              if (currentIdx >= 0 && currentIdx < queueRef.current.length - 1) {
+                const songToPreload = queueRef.current[currentIdx + 1]
+                const preloadUrl = navidromeApi.getStreamUrl(songToPreload.id, songToPreload.path)
+                webAudioPlayerRef.current.warmCacheFor(songToPreload.id, preloadUrl)
+              }
+            }
+
             // Sincronizar análisis de la canción actual con el WebAudioPlayer
             const cacheId = generateStableCacheId(song)
             const analysis = analysisCacheRef.current.get(cacheId)

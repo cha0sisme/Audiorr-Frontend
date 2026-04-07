@@ -112,6 +112,9 @@ interface NativeAudioPlugin {
   // Cache
   clearCache(): Promise<void>
   isCached(opts: { songId: string }): Promise<{ cached: boolean }>
+  /** Pre-warms the Swift AudioFileLoader cache for a song without setting up playerB.
+   *  Fire-and-forget — makes the next manual "skip" instant when download finishes before tap. */
+  preloadAudio(opts: { url: string; songId: string }): Promise<void>
 
   // Background automix & state
   setAutomixTrigger(opts: CrossfadeNativeConfig & { triggerTime: number }): Promise<void>

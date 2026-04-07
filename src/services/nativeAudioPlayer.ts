@@ -376,6 +376,13 @@ export class NativeAudioPlayer {
     }
   }
 
+  /** Warms the Swift AudioFileLoader cache for a future song — fire and forget.
+   *  Does NOT touch playerB or crossfade config (unlike prepareNextSong).
+   *  When the user taps "next", AudioFileLoader returns the cached file instantly. */
+  warmCacheFor(songId: string, url: string): void {
+    nativeAudio.preloadAudio({ url, songId }).catch(() => {})
+  }
+
   async prepareNextSong(song: Song, streamUrl: string, analysis?: AudioAnalysisResult): Promise<void> {
     console.log(`[NativeAudioPlayer] Preparing next: ${song.title}`)
     this.nextSong = song

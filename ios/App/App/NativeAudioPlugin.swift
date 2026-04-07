@@ -28,6 +28,7 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // Cache
         CAPPluginMethod(name: "clearCache",        returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "isCached",          returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "preloadAudio",      returnType: CAPPluginReturnPromise),
         // Background automix & state
         CAPPluginMethod(name: "setAutomixTrigger", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearAutomixTrigger", returnType: CAPPluginReturnPromise),
@@ -41,6 +42,10 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         mgr.plugin = self
         return mgr
     }()
+
+    /// ID de la última canción solicitada a play() — usado para cancelar la descarga
+    /// anterior cuando llega un nuevo play() antes de que la anterior termine.
+    private var activePlaySongId: String?
 
     // MARK: - Fase 1: Reproducción
 
@@ -66,6 +71,14 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let rgMultiplier = AudioEngineManager.computeReplayGainMultiplier(gainDb: replayGainDb, trackPeak: trackPeak)
 
+        // Rapid-tap guard: si el usuario presionó "next" varias veces rápido,
+        // cancelar la descarga de la canción anterior para que no compita con la nueva.
+        // Solo cancelamos si el songId cambió (misma canción = cache join, OK).
+        if let prevId = activePlaySongId, prevId != songId {
+            AudioFileLoader.shared.cancelDownload(prevId)
+        }
+        activePlaySongId = songId
+
         Task {
             do {
                 let fileURL = try await AudioFileLoader.shared.load(remoteURL: remoteURL, songId: songId)
@@ -88,6 +101,25 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("Download failed: \(error.localizedDescription)")
                 }
             }
+        }
+    }
+
+    /// Pre-calienta la caché Swift para una canción futura SIN configurar playerB.
+    /// Usar para el "skip instantáneo": cuando la descarga llega antes del tap en next,
+    /// AudioFileLoader devuelve la URL local inmediatamente y play() arranca al instante.
+    /// A diferencia de prepareNext, no toca AVAudioPlayerNode ni la config de crossfade.
+    @objc func preloadAudio(_ call: CAPPluginCall) {
+        guard let urlStr = call.getString("url"),
+              let remoteURL = URL(string: urlStr),
+              let songId = call.getString("songId")
+        else {
+            call.resolve() // No-crítico
+            return
+        }
+        Task {
+            // Ignorar resultado — solo nos importa que el archivo quede en caché.
+            _ = try? await AudioFileLoader.shared.load(remoteURL: remoteURL, songId: songId)
+            call.resolve()
         }
     }
 
