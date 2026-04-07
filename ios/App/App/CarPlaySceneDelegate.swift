@@ -140,11 +140,42 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
             }
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let response = json["subsonic-response"] as? [String: Any],
-                  let playlistsObj = response["playlists"] as? [String: Any],
-                  let playlistArr = playlistsObj["playlist"] as? [[String: Any]]
+                  let response = json["subsonic-response"] as? [String: Any]
             else {
                 print("[CarPlay] Error parseando respuesta de playlists")
+                DispatchQueue.main.async {
+                    let errItem = CPListItem(text: "Error cargando playlists", detailText: "Respuesta inesperada del servidor", image: nil)
+                    self.playlistsTemplate?.updateSections([CPListSection(items: [errItem])])
+                }
+                return
+            }
+
+            // Comprobar error de autenticación u otros errores Subsonic
+            if let status = response["status"] as? String, status != "ok" {
+                let errorMsg = (response["error"] as? [String: Any])?["message"] as? String ?? "Error desconocido"
+                print("[CarPlay] Error Subsonic: \(errorMsg)")
+                DispatchQueue.main.async {
+                    let errItem = CPListItem(text: "Error de acceso", detailText: errorMsg, image: nil)
+                    self.playlistsTemplate?.updateSections([CPListSection(items: [errItem])])
+                }
+                return
+            }
+
+            let playlistsObj = response["playlists"] as? [String: Any] ?? [:]
+
+            // La API devuelve array si hay >1, diccionario si hay exactamente 1, nada si hay 0
+            let playlistArr: [[String: Any]]
+            if let arr = playlistsObj["playlist"] as? [[String: Any]] {
+                playlistArr = arr
+            } else if let single = playlistsObj["playlist"] as? [String: Any] {
+                playlistArr = [single]
+            } else {
+                // Sin playlists
+                print("[CarPlay] No hay playlists")
+                DispatchQueue.main.async {
+                    let emptyItem = CPListItem(text: "Sin playlists", detailText: "Crea una playlist en tu servidor", image: nil)
+                    self.playlistsTemplate?.updateSections([CPListSection(items: [emptyItem])])
+                }
                 return
             }
 
@@ -166,7 +197,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                 let isDailyMix = normalizedName.hasPrefix("mix diario")
                 let isSpotify = normalizedName.hasPrefix("[spotify] ") || comment.contains("Spotify Synced")
 
-                guard owner == username,
+                guard owner.lowercased() == username.lowercased(),
                       !isSmartPlaylist, !isEditorial, !isDailyMix, !isSpotify
                 else { continue }
 
