@@ -145,7 +145,10 @@ export default function PlaylistDetail() {
     if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
       return null
     }
-    const hex = dominantColors.primary
+    // For flat-color albums use the accent color for buttons (e.g. Motomami: red on white bg).
+    const hex = (dominantColors.isSolid && dominantColors.accent?.startsWith('#'))
+      ? dominantColors.accent
+      : dominantColors.primary
     const r = parseInt(hex.slice(1, 3), 16)
     const g = parseInt(hex.slice(3, 5), 16)
     const b = parseInt(hex.slice(5, 7), 16)
@@ -503,7 +506,7 @@ export default function PlaylistDetail() {
                           : isCurrentPlaylistSmartMixed && smartMixStatus === 'error'
                             ? 'border border-red-400/30 bg-red-900/30 text-red-300'
                             : accentButtonStyle
-                              ? `border-none shadow-md ${isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' ? 'shimmer-premium smartmix-ready-glow' : ''}`
+                              ? `border-none shadow-md ${isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' ? 'smartmix-ready' : ''}`
                               : 'bg-white/[.15] text-white border border-white/20'
                     }`}
                     style={
@@ -523,7 +526,7 @@ export default function PlaylistDetail() {
                       <SparklesIcon className="w-4 h-4 group-hover:scale-110 transition-transform duration-300" />
                     )}
                     {isCurrentPlaylistSmartMixed && smartMixStatus === 'ready' && !isSmartMixPlaying && (
-                      <SparklesIcon className="w-4 h-4 animate-pulse" />
+                      <SparklesIcon className="w-4 h-4 smartmix-icon-ready" />
                     )}
                     {isSmartMixPlaying && <CheckIcon className="w-4 h-4" />}
                     {isCurrentPlaylistSmartMixed && smartMixStatus === 'error' && (

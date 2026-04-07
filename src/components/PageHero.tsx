@@ -14,7 +14,7 @@ interface PageHeroProps {
   title: string
   subtitle: string
   coverImageUrl: string | null
-  dominantColors: { primary: string; secondary: string; accent: string } | null
+  dominantColors: { primary: string; secondary: string; accent: string; isSolid?: boolean } | null
   
   onPlay?: () => void
   isPlaying?: boolean
@@ -165,11 +165,15 @@ export default function PageHero({
   const bounceScale = 1 + (overscroll / 1000)
   const bounceTranslate = overscroll * 0.5 // Content moves down slower than scroll to create depth
 
+  const isSolid = dominantColors?.isSolid ?? false
+
   const combinedBackgroundStyle = {
-    backgroundImage: gradientBackground,
+    // Flat-color albums (Donda, Black Album, TLOP): use solid backgroundColor.
+    // Complex artwork: use the multi-stop gradient as before.
+    ...(isSolid && dominantColors
+      ? { backgroundColor: dominantColors.primary }
+      : { backgroundImage: gradientBackground }),
     backdropFilter: 'saturate(130%)',
-    // Usamos múltiples paradas (gradient easing) para que el desvanecimiento sea mucho más suave y natural,
-    // especialmente visible en modo claro. Empieza a desvanecerse desde el 40% de la altura.
     WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
     maskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
     opacity: heroOpacity,
@@ -191,7 +195,11 @@ export default function PageHero({
     if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
       return { bg: 'rgba(255,255,255,0.15)', text: '#ffffff' }
     }
-    const hex = dominantColors.primary
+    // For flat-color albums use the accent (e.g. Motomami's red on white bg).
+    // For complex artwork keep using primary as before.
+    const hex = (isSolid && dominantColors.accent?.startsWith('#'))
+      ? dominantColors.accent
+      : dominantColors.primary
     const r = parseInt(hex.slice(1, 3), 16)
     const g = parseInt(hex.slice(3, 5), 16)
     const b = parseInt(hex.slice(5, 7), 16)
@@ -311,7 +319,8 @@ export default function PageHero({
           className="absolute inset-0"
           style={combinedBackgroundStyle}
         >
-          {(type !== 'user' && coverImageUrl) && (
+          {/* Blurred cover art — only for complex artwork; flat-color albums use the solid bg alone */}
+          {!isSolid && (type !== 'user' && coverImageUrl) && (
             <img
               src={coverImageUrl}
               alt={title}
@@ -320,7 +329,8 @@ export default function PageHero({
             />
           )}
           <div className="absolute inset-0 bg-gradient-to-br from-black/40 via-black/25 to-black/10" />
-          {dominantColors && (
+          {/* Radial color accents — only for gradient (non-solid) albums */}
+          {!isSolid && dominantColors && (
             <>
               <div
                 className="absolute inset-0 opacity-40"

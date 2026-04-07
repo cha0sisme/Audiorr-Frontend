@@ -461,44 +461,54 @@
   transform: scale(0.97);
 }
 
-/* SmartMix Ready Effects */
-.smartmix-ready-glow {
-  box-shadow: 0 4px 15px rgba(255, 255, 255, 0.15), inset 0 0 10px rgba(255, 255, 255, 0.1);
-  animation: premium-breathing 3s infinite ease-in-out;
-}
-
-.shimmer-premium {
+/* ── SmartMix Ready — Apple Music style ─────────────────────────────────── */
+/* A diagonal light sweep that crosses the button cleanly, then pauses.     */
+/* Runs entirely on GPU (transform + opacity), never triggers layout.       */
+.smartmix-ready {
   position: relative;
   overflow: hidden;
 }
 
-.shimmer-premium::after {
-  content: "";
+/* The sweeping highlight */
+.smartmix-ready::after {
+  content: '';
   position: absolute;
   top: -50%;
-  left: -200%;
-  width: 100%;
+  left: 0;
+  width: 40%;
   height: 200%;
   background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.3),
-    transparent
+    to right,
+    transparent 0%,
+    rgba(255, 255, 255, 0.52) 50%,
+    transparent 100%
   );
-  transform: rotate(20deg);
-  animation: shimmer-effect 4s infinite;
+  transform: translateX(-250%) skewX(-14deg);
+  animation: smartmix-sweep 3.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 
-@keyframes shimmer-effect {
-  0% { transform: translateX(-100%) rotate(20deg); }
-  20% { transform: translateX(200%) rotate(20deg); }
-  100% { transform: translateX(200%) rotate(20deg); }
+@keyframes smartmix-sweep {
+  /* Hold off-screen left for the first 30% (~1.05s) */
+  0%, 30%  { transform: translateX(-250%) skewX(-14deg); opacity: 0; }
+  /* Fade in as it enters */
+  36%      { opacity: 1; }
+  /* Fade out as it exits */
+  58%      { opacity: 0; }
+  /* Complete the crossing, sit off-screen right for remaining 40% */
+  62%, 100% { transform: translateX(320%) skewX(-14deg); opacity: 0; }
 }
 
-@keyframes premium-breathing {
-  0%, 100% { transform: scale(1); filter: brightness(1); }
-  50% { transform: scale(1.02); filter: brightness(1.15); }
+/* SparklesIcon — gentle pulse synced with the sweep entry at ~36% */
+.smartmix-icon-ready {
+  animation: smartmix-sparkle 3.5s ease-in-out infinite;
+}
+
+@keyframes smartmix-sparkle {
+  0%, 100%  { transform: scale(1);    opacity: 1;    }
+  30%        { transform: scale(1.22); opacity: 0.65; }
+  48%        { transform: scale(0.92); opacity: 1;    }
 }
 
 .smartmix-playing-btn {
