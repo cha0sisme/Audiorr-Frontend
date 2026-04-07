@@ -12,12 +12,14 @@ import PlaylistsPage from './PlaylistsPage'
 import SearchPage from './SearchPage'
 import AudiorrPage from './AudiorrPage'
 
-// Detail pages — lazy load (code splitting)
+// High-frequency detail pages — eager load to avoid Suspense flash on navigation
+import AlbumDetail from './AlbumDetail'
+import ArtistsDetail from './ArtistsDetail'
+import PlaylistDetail from './PlaylistDetail'
+import SettingsPage from './SettingsPage'
+
+// Less-frequent pages — lazy load (code splitting)
 const AlbumsPage = lazy(() => import('./AlbumsPage'))
-const AlbumDetail = lazy(() => import('./AlbumDetail'))
-const ArtistsDetail = lazy(() => import('./ArtistsDetail'))
-const PlaylistDetail = lazy(() => import('./PlaylistDetail'))
-const SettingsPage = lazy(() => import('./SettingsPage'))
 const UserProfile = lazy(() => import('./UserProfile'))
 const SongDetail = lazy(() => import('./SongDetail'))
 const GenresPage = lazy(() => import('./GenresPage'))

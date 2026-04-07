@@ -269,7 +269,7 @@ export default function PageHero({
         >
           {/* El contenido real del header pegajoso */}
           <div
-            className={`flex items-center gap-3 px-4 sm:px-6 lg:px-10 h-[60px] ${hasBackButton ? 'pl-[100px] sm:pl-[100px] lg:pl-[100px]' : ''}`}
+            className={`flex items-center gap-3 px-4 sm:px-6 lg:px-10 h-[60px] ${hasBackButton ? 'pl-[58px] sm:pl-[58px] lg:pl-[58px]' : ''}`}
           >
             <div className={`flex h-10 w-10 items-center justify-center overflow-hidden shadow-md bg-slate-800/60 ${type === 'artist' || type === 'user' ? 'rounded-full' : 'rounded-md'}`}>
               {(type !== 'user' && coverImageUrl) ? (
