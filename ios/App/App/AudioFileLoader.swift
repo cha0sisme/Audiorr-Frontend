@@ -132,6 +132,12 @@ class AudioFileLoader: @unchecked Sendable {
         FileManager.default.fileExists(atPath: localPath(for: songId).path)
     }
 
+    /// Devuelve la URL local si el archivo está cacheado, nil si no.
+    func cachedFileURL(for songId: String) -> URL? {
+        let url = localPath(for: songId)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     // MARK: - Descarga interna
 
     private func startDownload(remoteURL: URL, songId: String, attempt: Int) {

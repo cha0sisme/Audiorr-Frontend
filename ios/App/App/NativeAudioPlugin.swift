@@ -79,28 +79,44 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         activePlaySongId = songId
 
-        Task {
-            do {
-                let fileURL = try await AudioFileLoader.shared.load(remoteURL: remoteURL, songId: songId)
-                await MainActor.run {
-                    self.audioManager.play(
-                        fileURL: fileURL,
-                        startAt: startAt,
-                        replayGainMultiplier: rgMultiplier,
-                        duration: duration,
-                        title: title,
-                        artist: artist,
-                        album: album
-                    )
-                    call.resolve()
-                }
-            } catch {
-                if (error as? URLError)?.code == .cancelled {
-                    call.resolve() // Cancelación no es un error
-                } else {
-                    call.reject("Download failed: \(error.localizedDescription)")
-                }
+        // ── Fast path: archivo en caché → reproducir al instante sin descarga ──
+        if let cachedURL = AudioFileLoader.shared.cachedFileURL(for: songId) {
+            DispatchQueue.main.async {
+                self.audioManager.play(
+                    fileURL: cachedURL,
+                    startAt: startAt,
+                    replayGainMultiplier: rgMultiplier,
+                    duration: duration,
+                    title: title,
+                    artist: artist,
+                    album: album
+                )
             }
+            call.resolve()
+            return
+        }
+
+        // ── Streaming path: canción NO cacheada → AVPlayer arranca en ~500ms ──
+        // Descarga en background para cachear. La próxima vez usará el fast path.
+        DispatchQueue.main.async {
+            self.audioManager.playStreaming(
+                remoteURL: remoteURL,
+                startAt: startAt,
+                replayGainMultiplier: rgMultiplier,
+                duration: duration,
+                title: title,
+                artist: artist,
+                album: album
+            )
+        }
+        call.resolve()
+
+        // Descargar en background — silencioso, sin bloquear la UI
+        let capturedSongId = songId
+        let capturedURL = remoteURL
+        Task {
+            _ = try? await AudioFileLoader.shared.load(remoteURL: capturedURL, songId: capturedSongId)
+            print("[NativeAudioPlugin] Background cache completo: \(capturedSongId)")
         }
     }
 

@@ -86,6 +86,15 @@ class AudioEngineManager {
     private var progressTimer: Timer?
     private let progressInterval: TimeInterval = 0.25 // 4Hz
 
+    // MARK: - Streaming mode (AVPlayer para canciones no cacheadas)
+    // Cuando una canción no está en caché, usamos AVPlayer con la URL HTTP directamente
+    // para arrancar en ~500ms (como Spotify). La descarga continúa en background para
+    // cachear. La próxima vez, AVAudioEngine sirve el archivo local con crossfade completo.
+
+    private var streamPlayer: AVPlayer?
+    private var streamPlayerEndObserver: Any?
+    private var isStreamMode = false
+
     // MARK: - Plugin reference (para enviar eventos a JS)
 
     weak var plugin: CAPPlugin?
@@ -188,6 +197,9 @@ class AudioEngineManager {
         if let t = title, !t.isEmpty { currentSongTitle = t }
         if let a = artist               { currentSongArtist = a }
         if let al = album                { currentSongAlbum = al }
+        // Si estábamos en modo streaming (AVPlayer), detenerlo antes de arrancar AVAudioEngine
+        stopStreamPlayer()
+
         guard ensureEngineRunning() else {
             print("[AudioEngineManager] play() abortado: engine no arrancó")
             return
@@ -317,6 +329,18 @@ class AudioEngineManager {
 
     func pause() {
         guard isPlaying else { return }
+
+        if isStreamMode {
+            let time = currentTime()
+            streamPlayer?.pause()
+            isPlaying = false
+            stopProgressTimer()
+            updateNowPlayingPlaybackState()
+            notifyPlaybackStateChanged()
+            print("[AudioEngineManager] Stream pause en \(String(format: "%.1f", time))s")
+            return
+        }
+
         // Capturar posición y sampleTime antes de pausar
         let time = currentTime()
         playStartOffset = time
@@ -340,6 +364,17 @@ class AudioEngineManager {
 
     func resume() {
         guard !isPlaying else { return }
+
+        if isStreamMode {
+            streamPlayer?.play()
+            isPlaying = true
+            startProgressTimer()
+            updateNowPlayingPlaybackState()
+            notifyPlaybackStateChanged()
+            print("[AudioEngineManager] Stream resume")
+            return
+        }
+
         guard ensureEngineRunning() else {
             print("[AudioEngineManager] resume() abortado: engine no arrancó")
             notifyPlaybackStateChanged(reason: "engine-dead")
@@ -362,6 +397,16 @@ class AudioEngineManager {
     }
 
     func seek(to time: Double) {
+        if isStreamMode {
+            let cmTime = CMTime(seconds: max(0, time), preferredTimescale: 1000)
+            streamPlayer?.seek(to: cmTime) { [weak self] _ in
+                self?.updateNowPlayingProgress()
+                self?.notifyTimeUpdate()
+            }
+            print("[AudioEngineManager] Stream seek a \(String(format: "%.1f", time))s")
+            return
+        }
+
         guard let file = currentFile else { return }
 
         // Invalidate old completion handlers (same pattern as play())
@@ -415,6 +460,7 @@ class AudioEngineManager {
     }
 
     func stop() {
+        stopStreamPlayer()
         playerA.stop()
         playerB.stop()
         isPlaying = false
@@ -432,14 +478,95 @@ class AudioEngineManager {
         print("[AudioEngineManager] Stop")
     }
 
+    // MARK: - Streaming mode (canciones no cacheadas)
+
+    /// Arranca reproducción inmediata via AVPlayer con la URL HTTP remota.
+    /// No requiere descarga previa — iOS empieza a reproducir en ~500ms.
+    /// Sin crossfade ni EQ (la canción se cachea en background; la próxima vez
+    /// usa AVAudioEngine con todas las features).
+    func playStreaming(remoteURL: URL, startAt: Double, replayGainMultiplier: Float,
+                       duration: Double, title: String?, artist: String?, album: String?) {
+        // Detener playback anterior (ambos modos)
+        stopStreamPlayer()
+        playerA.stop()
+        playerB.stop()
+        isCrossfading = false
+        crossfadeExecutor?.cancel()
+        crossfadeExecutor = nil
+        clearAutomixTrigger()
+        cancelNativeNextFallback()
+
+        if let t = title, !t.isEmpty { currentSongTitle = t }
+        if let a = artist { currentSongArtist = a }
+        if let al = album { currentSongAlbum = al }
+
+        isPlaying = true
+        isStreamMode = true
+        currentSongDuration = duration
+        playStartOffset = startAt
+        pauseSampleTime = 0
+        playSequence += 1
+
+        let item = AVPlayerItem(url: remoteURL)
+        let player = AVPlayer(playerItem: item)
+        // AVPlayer volume es independiente de AVAudioEngine — aplicar volumen maestro
+        player.volume = volume
+        streamPlayer = player
+
+        if startAt > 0 {
+            player.seek(to: CMTime(seconds: startAt, preferredTimescale: 1000))
+        }
+        player.play()
+
+        // Notificar fin de pista
+        streamPlayerEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.isStreamMode else { return }
+            self.isPlaying = false
+            self.isStreamMode = false
+            self.stopProgressTimer()
+            self.updateNowPlayingPlaybackState()
+            self.plugin?.notifyListeners("onTrackEnd", data: [:])
+            print("[AudioEngineManager] Stream track terminado")
+        }
+
+        startProgressTimer()
+        // Actualizar NowPlaying con la nueva canción
+        updateNowPlayingMetadata(title: title ?? "", artist: artist ?? "", album: album ?? "",
+                                 duration: duration, artworkUrl: nil)
+        updateNowPlayingPlaybackState()
+        print("[AudioEngineManager] playStreaming: \(title ?? songIdFromURL(remoteURL))")
+    }
+
+    private func stopStreamPlayer() {
+        if let observer = streamPlayerEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            streamPlayerEndObserver = nil
+        }
+        streamPlayer?.pause()
+        streamPlayer = nil
+        isStreamMode = false
+    }
+
+    private func songIdFromURL(_ url: URL) -> String {
+        url.lastPathComponent
+    }
+
     func setVolume(_ vol: Float) {
         volume = max(0, min(1, vol))
         engine.mainMixerNode.outputVolume = volume
+        streamPlayer?.volume = volume
     }
 
     // MARK: - Tiempo actual
 
     func currentTime() -> Double {
+        // Modo streaming: leer posición directamente del AVPlayer
+        if isStreamMode, let player = streamPlayer {
+            let t = player.currentTime().seconds
+            return t.isNaN || t.isInfinite ? playStartOffset : t
+        }
         guard isPlaying,
               let nodeTime = playerA.lastRenderTime,
               nodeTime.isSampleTimeValid,
