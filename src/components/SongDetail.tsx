@@ -225,30 +225,30 @@ export default function SongDetail() {
         widePlayButton
         metadata={
           <>
-            <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-lg md:text-xl text-white/90">
+            <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-lg md:text-xl text-[var(--hero-text-muted)]">
               <ArtistLinks
                 artists={song.artist}
-                className="hover:text-white transition-colors inline-block font-semibold"
+                className="hover:text-[var(--hero-text)] transition-colors inline-block font-semibold"
               />
-              <span className="text-white/40">•</span>
+              <span className="text-[var(--hero-text-dim)]">•</span>
               <Link
                 to={`/albums/${song.albumId}`}
-                className="hover:text-white transition-colors font-semibold"
+                className="hover:text-[var(--hero-text)] transition-colors font-semibold"
               >
                 {song.album}
               </Link>
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-white/80">
+            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-[var(--hero-text-muted)]">
               {getReleaseTypeLabel(albumInfo?.mbReleaseType) && (
                 <>
                   <span className="whitespace-nowrap">{getReleaseTypeLabel(albumInfo?.mbReleaseType)}</span>
-                  <span className="text-white/30 text-[10px] mx-0.5">•</span>
+                  <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
                 </>
               )}
               {formatDate(albumInfo?.originalReleaseDate) && (
                 <>
                   <span className="whitespace-nowrap">{formatDate(albumInfo?.originalReleaseDate)}</span>
-                  {song.genre && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
+                  {song.genre && <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>}
                 </>
               )}
               {song.genre && (
@@ -257,11 +257,11 @@ export default function SongDetail() {
                     <span key={g.trim()} className="flex items-center gap-x-1.5">
                       <Link
                         to={`/genre/${encodeURIComponent(g.trim())}`}
-                        className="text-white/80 hover:text-white hover:underline transition-colors cursor-pointer whitespace-nowrap"
+                        className="text-[var(--hero-text-muted)] hover:text-[var(--hero-text)] hover:underline transition-colors cursor-pointer whitespace-nowrap"
                       >
                         {g.trim()}
                       </Link>
-                      {idx < arr.length - 1 && <span className="text-white/30 text-[10px] mx-0.5">•</span>}
+                      {idx < arr.length - 1 && <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>}
                     </span>
                   ))}
                 </div>

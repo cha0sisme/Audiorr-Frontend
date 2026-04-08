@@ -181,6 +181,21 @@ export default function PageHero({
   // so the clean background colour shows properly (e.g. Whole Lotta Red, Motomami).
   const solidOnLight = effectiveIsSolid && !!dominantColors && getLuminance(dominantColors.primary) > 160
 
+  // CSS custom properties that cascade to all hero children, including metadata
+  // passed from page components. This lets child elements adapt to light vs dark
+  // backgrounds without knowing about solidOnLight themselves.
+  const heroTextVars = solidOnLight ? {
+    '--hero-text':        '#111827',
+    '--hero-text-muted':  'rgba(55,65,81,0.9)',
+    '--hero-text-dim':    'rgba(107,114,128,0.6)',
+    '--hero-logo-filter': 'brightness(0)',
+  } : {
+    '--hero-text':        '#ffffff',
+    '--hero-text-muted':  'rgba(255,255,255,0.8)',
+    '--hero-text-dim':    'rgba(255,255,255,0.3)',
+    '--hero-logo-filter': 'brightness(0) invert(1)',
+  }
+
   // In light mode the hero fades into a light page background, so we need a more
   // gradual mask — the solid region stays opaque longer and the transparency sets in
   // later, preventing the hard "colour wall" effect that shows in light mode.
@@ -335,7 +350,7 @@ export default function PageHero({
       </div>
 
       <div className={`${noBottomGap ? ' -mb-14' : ''}`} style={sectionWrapperStyle}>
-      <section ref={heroRef} className={`relative overflow-hidden rounded-none md:rounded-3xl !mt-0 ${solidOnLight ? 'text-gray-900' : 'text-white'}`} style={heroSectionStyle}>
+      <section ref={heroRef} className="relative overflow-hidden rounded-none md:rounded-3xl !mt-0" style={{ ...heroSectionStyle, ...heroTextVars as React.CSSProperties, color: 'var(--hero-text)' }}>
         <div
           className="absolute inset-0"
           style={combinedBackgroundStyle}
@@ -394,11 +409,14 @@ export default function PageHero({
             initial={initial}
           />
           <div className="flex-1 min-w-0 text-center md:text-left">
-            <p className={`uppercase text-[10px] md:text-xs tracking-[0.2em] ${solidOnLight ? 'text-gray-500' : 'text-white/90'}`}>{subtitle}</p>
+            <p className="uppercase text-[10px] md:text-xs tracking-[0.2em]" style={{ color: 'var(--hero-text-muted)' }}>{subtitle}</p>
             <h1 className="font-title mt-2 md:mt-4 text-3xl md:text-6xl lg:text-7xl leading-none break-words flex flex-wrap items-center justify-center md:justify-start gap-x-4" style={{ letterSpacing: '-0.04em' }}>
               {title}
               {isExplicit && (
-                <span className={`inline-flex items-center justify-center px-2 py-1 md:px-3 md:py-1.5 text-xs md:text-sm rounded-md backdrop-blur-sm self-center mt-1 md:mt-2 ${solidOnLight ? 'bg-gray-900/10 border border-gray-900/20 text-gray-900' : 'bg-white/20 border border-white/30 text-white'}`}>
+                <span
+                  className="inline-flex items-center justify-center px-2 py-1 md:px-3 md:py-1.5 text-xs md:text-sm rounded-md backdrop-blur-sm self-center mt-1 md:mt-2"
+                  style={{ color: 'var(--hero-text)', backgroundColor: 'color-mix(in srgb, var(--hero-text) 12%, transparent)', border: '1px solid color-mix(in srgb, var(--hero-text) 25%, transparent)' }}
+                >
                   E
                 </span>
               )}

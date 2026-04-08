@@ -440,13 +440,13 @@ export default function UserProfile() {
         } : null}
         artistName={username}
         metadata={
-          <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-sm md:text-base text-white/90">
+          <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-sm md:text-base text-[var(--hero-text)]">
             <span className="font-bold">
               {playlists.length} {playlists.length === 1 ? 'playlist pública' : 'playlists públicas'}
             </span>
             {userData?.updatedAt && (
-              <span className="flex items-center gap-1.5 opacity-80 font-medium">
-                <span className="text-white/30 text-[10px] mx-0.5">•</span>
+              <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--hero-text-muted)' }}>
+                <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
                 <ClockIcon className="w-4 h-4 opacity-70" />
                 <span>Última conexión {new Date(userData.updatedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
               </span>

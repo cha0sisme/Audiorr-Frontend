@@ -448,7 +448,7 @@ export default function PlaylistDetail() {
             customCoverUrl={activeCoverUrl}
             isGeneratingCover={isGeneratingCover}
             metadata={
-              <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-white/80">
+              <div className="mt-5 flex flex-wrap items-center justify-center md:justify-start gap-x-1.5 gap-y-1 text-xs md:text-base text-[var(--hero-text-muted)]">
                 <button
                   onClick={() => navigate(`/user/${displayPlaylist?.owner || ownerName}`)}
                   className="hover:underline transition-all cursor-pointer whitespace-nowrap"
@@ -457,34 +457,35 @@ export default function PlaylistDetail() {
                 </button>
                 {!isDailyMix && (
                   <>
-                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
+                    <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
                     <span className="whitespace-nowrap">{songCountLabel}</span>
                   </>
                 )}
                 {totalDurationFormatted && (
                   <>
-                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
+                    <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
                     <span className="whitespace-nowrap">{totalDurationFormatted}</span>
                   </>
                 )}
                 {displayPlaylistComment && !isDailyMix && (
                   <>
-                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
-                    <span className="italic text-white/70">{displayPlaylistComment}</span>
+                    <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
+                    <span className="italic text-[var(--hero-text-muted)]">{displayPlaylistComment}</span>
                   </>
                 )}
                 {isDailyMix && (
                   <>
-                    <span className="text-white/30 text-[10px] mx-0.5">•</span>
-                    <span className="inline-flex items-center gap-1.5 text-white/80 whitespace-nowrap">
+                    <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
+                    <span className="inline-flex items-center gap-1.5 text-[var(--hero-text-muted)] whitespace-nowrap">
                       <img
                         src="/assets/logo-icon.svg"
                         alt="Audiorr"
-                        className="w-4 h-4 brightness-0 invert opacity-90"
+                        className="w-4 h-4 opacity-70"
+                        style={{ filter: 'var(--hero-logo-filter, brightness(0) invert(1))' }}
                       />
                       <span title={displayPlaylist?.changed ? new Date(displayPlaylist.changed).toLocaleString() : undefined}>
-                        {displayPlaylist?.changed 
-                          ? `Generado ${timeAgo(displayPlaylist.changed)}` 
+                        {displayPlaylist?.changed
+                          ? `Generado ${timeAgo(displayPlaylist.changed)}`
                           : 'Generado hace un momento'}
                       </span>
                     </span>

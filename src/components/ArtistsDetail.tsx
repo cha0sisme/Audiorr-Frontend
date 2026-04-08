@@ -225,13 +225,13 @@ export default function ArtistsDetail() {
         onImageLoaded={setArtistImage}
         widePlayButton
         metadata={
-          <div className="mt-5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm md:text-base text-white/80">
+          <div className="mt-5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm md:text-base text-[var(--hero-text-muted)]">
             {albums.length > 0 && (
               <>
                 <span className="font-semibold">
                   {albums.length} {albums.length === 1 ? 'álbum' : 'álbumes'}
                 </span>
-                <span className="text-white/30 text-[10px] mx-0.5">•</span>
+                <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>
               </>
             )}
             {totalSongs > 0 && (
