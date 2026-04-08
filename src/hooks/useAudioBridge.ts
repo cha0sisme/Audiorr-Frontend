@@ -226,4 +226,88 @@ export function useAudioBridge() {
     window.addEventListener('_carplayPlayPlaylist', handleCarPlayPlaylist)
     return () => window.removeEventListener('_carplayPlayPlaylist', handleCarPlayPlaylist)
   }, [isNative, playerActions])
+
+  // ── 8. CarPlay: reproducir álbum ───────────────────────────────────────────
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleCarPlayAlbum = async (e: Event) => {
+      const albumId = (e as CustomEvent).detail?.albumId
+      if (!albumId) return
+      console.log('[useAudioBridge] CarPlay play album:', albumId)
+      try {
+        const songs = await navidromeApi.getAlbumSongs(albumId)
+        if (songs.length > 0) {
+          playerActions.playPlaylist(songs)
+        }
+      } catch (error) {
+        console.error('[useAudioBridge] Error playing CarPlay album:', error)
+      }
+    }
+
+    window.addEventListener('_carplayPlayAlbum', handleCarPlayAlbum)
+    return () => window.removeEventListener('_carplayPlayAlbum', handleCarPlayAlbum)
+  }, [isNative, playerActions])
+
+  // ── 9. CarPlay: reproducir playlist desde canción ─────────────────────────
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleCarPlayPlaylistFromSong = async (e: Event) => {
+      const { playlistId, songId, songIndex } = (e as CustomEvent).detail ?? {}
+      if (!playlistId) return
+      console.log('[useAudioBridge] CarPlay play playlist from song:', playlistId, songIndex)
+      try {
+        const songs = await navidromeApi.getPlaylistSongs(playlistId)
+        if (songs.length === 0) return
+        const startSong = songs.find(s => s.id === songId) ?? songs[songIndex ?? 0] ?? songs[0]
+        playerActions.playPlaylistFromSong(songs, startSong, `playlist:${playlistId}`)
+      } catch (error) {
+        console.error('[useAudioBridge] Error playing CarPlay playlist from song:', error)
+      }
+    }
+
+    window.addEventListener('_carplayPlayPlaylistFromSong', handleCarPlayPlaylistFromSong)
+    return () => window.removeEventListener('_carplayPlayPlaylistFromSong', handleCarPlayPlaylistFromSong)
+  }, [isNative, playerActions])
+
+  // ── 10. CarPlay: SmartMix de playlist ──────────────────────────────────────
+  // Ref para auto-reproducir cuando la generación termine (CarPlay no puede esperar)
+  const pendingSmartMixRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!isNative) return
+    if (playerState.smartMixStatus !== 'ready') return
+    if (pendingSmartMixRef.current !== playerState.smartMixPlaylistId) return
+    pendingSmartMixRef.current = null
+    playerActions.playGeneratedSmartMix?.()
+  }, [isNative, playerState.smartMixStatus, playerState.smartMixPlaylistId, playerActions])
+
+  useEffect(() => {
+    if (!isNative) return
+
+    const handleCarPlaySmartMix = async (e: Event) => {
+      const playlistId = (e as CustomEvent).detail?.playlistId
+      if (!playlistId) return
+      console.log('[useAudioBridge] CarPlay SmartMix:', playlistId)
+      try {
+        // Si ya está lista para esta playlist, reproducir directamente
+        if (playerState.smartMixPlaylistId === playlistId && playerState.smartMixStatus === 'ready') {
+          playerActions.playGeneratedSmartMix?.()
+          return
+        }
+        // Generar y marcar para auto-reproducir cuando esté lista
+        const songs = await navidromeApi.getPlaylistSongs(playlistId)
+        if (songs.length > 0) {
+          pendingSmartMixRef.current = playlistId
+          playerActions.generateSmartMix?.(playlistId, songs)
+        }
+      } catch (error) {
+        console.error('[useAudioBridge] Error CarPlay SmartMix:', error)
+      }
+    }
+
+    window.addEventListener('_carplaySmartMix', handleCarPlaySmartMix)
+    return () => window.removeEventListener('_carplaySmartMix', handleCarPlaySmartMix)
+  }, [isNative, playerActions, playerState.smartMixPlaylistId, playerState.smartMixStatus])
 }
