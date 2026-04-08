@@ -37,6 +37,15 @@ interface PageHeroProps {
   isExplicit?: boolean
 }
 
+/** Perceived brightness of a hex color (0–255). */
+function getLuminance(hex: string): number {
+  if (!hex.startsWith('#') || hex.length < 7) return 128
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return r * 0.299 + g * 0.587 + b * 0.114
+}
+
 function findScrollableParent(element: HTMLElement | null): HTMLElement | Window {
   if (!element) return window
   let parent: HTMLElement | null = element.parentElement
@@ -77,6 +86,7 @@ export default function PageHero({
   const location = useLocation()
   const hasBackButton = isNative && !ROOT_TABS.has(location.pathname)
   const { incHero, decHero } = useHeroPresence()
+  const { isDark } = useTheme()
 
   useEffect(() => {
     incHero()
@@ -166,16 +176,29 @@ export default function PageHero({
   const bounceTranslate = overscroll * 0.5 // Content moves down slower than scroll to create depth
 
   const isSolid = dominantColors?.isSolid ?? false
+  const effectiveIsSolid = isSolid
+  // Light-background solid albums (white, cream…) need dark text and no dark overlay
+  // so the clean background colour shows properly (e.g. Whole Lotta Red, Motomami).
+  const solidOnLight = effectiveIsSolid && !!dominantColors && getLuminance(dominantColors.primary) > 160
+
+  // In light mode the hero fades into a light page background, so we need a more
+  // gradual mask — the solid region stays opaque longer and the transparency sets in
+  // later, preventing the hard "colour wall" effect that shows in light mode.
+  const maskGradient = isDark
+    ? 'linear-gradient(to bottom, black 0%, black 40%, rgba(0,0,0,0.9) 55%, rgba(0,0,0,0.7) 70%, rgba(0,0,0,0.3) 85%, transparent 100%)'
+    : 'linear-gradient(to bottom, black 0%, black 44%, rgba(0,0,0,0.93) 59%, rgba(0,0,0,0.76) 74%, rgba(0,0,0,0.38) 89%, rgba(0,0,0,0.07) 97%, transparent 100%)'
 
   const combinedBackgroundStyle = {
     // Flat-color albums (Donda, Black Album, TLOP): use solid backgroundColor.
-    // Complex artwork: use the multi-stop gradient as before.
-    ...(isSolid && dominantColors
+    // Complex artwork (or light-solid albums): use the multi-stop gradient as before.
+    ...(effectiveIsSolid && dominantColors
       ? { backgroundColor: dominantColors.primary }
       : { backgroundImage: gradientBackground }),
-    backdropFilter: 'saturate(130%)',
-    WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
-    maskImage: 'linear-gradient(to bottom, black 0%, black 40%, rgba(0, 0, 0, 0.9) 55%, rgba(0, 0, 0, 0.7) 70%, rgba(0, 0, 0, 0.3) 85%, transparent 100%)',
+    // Don't saturate behind a solid-color background — no blurred artwork is present
+    // so backdrop-filter serves no purpose and can create visual artifacts.
+    ...(!effectiveIsSolid && { backdropFilter: 'saturate(130%)' }),
+    WebkitMaskImage: maskGradient,
+    maskImage: maskGradient,
     opacity: heroOpacity,
     transform: `translateY(${heroTranslate + bounceTranslate}px) scale(${(1 + fadeProgress * 0.04) * bounceScale})`,
     transition: overscroll > 0 ? 'none' : 'opacity 120ms linear, transform 140ms linear',
@@ -218,8 +241,6 @@ export default function PageHero({
       text: brightness > 180 ? '#000000' : '#ffffff',
     }
   }, [dominantColors])
-
-  const { isDark } = useTheme()
 
   // Update iOS notch / browser chrome color
   useEffect(() => {
@@ -314,13 +335,13 @@ export default function PageHero({
       </div>
 
       <div className={`${noBottomGap ? ' -mb-14' : ''}`} style={sectionWrapperStyle}>
-      <section ref={heroRef} className="relative overflow-hidden rounded-none md:rounded-3xl text-white !mt-0" style={heroSectionStyle}>
+      <section ref={heroRef} className={`relative overflow-hidden rounded-none md:rounded-3xl !mt-0 ${solidOnLight ? 'text-gray-900' : 'text-white'}`} style={heroSectionStyle}>
         <div
           className="absolute inset-0"
           style={combinedBackgroundStyle}
         >
-          {/* Blurred cover art — only for complex artwork; flat-color albums use the solid bg alone */}
-          {!isSolid && (type !== 'user' && coverImageUrl) && (
+          {/* Blurred cover art — only for complex artwork; effective-solid albums use the solid bg alone */}
+          {!effectiveIsSolid && (type !== 'user' && coverImageUrl) && (
             <img
               src={coverImageUrl}
               alt={title}
@@ -328,9 +349,10 @@ export default function PageHero({
               aria-hidden="true"
             />
           )}
-          <div className="absolute inset-0 bg-gradient-to-br from-black/40 via-black/25 to-black/10" />
+          {/* Dark scrim — skip for light solid backgrounds so the clean colour shows */}
+          {!solidOnLight && <div className="absolute inset-0 bg-gradient-to-br from-black/40 via-black/25 to-black/10" />}
           {/* Radial color accents — only for gradient (non-solid) albums */}
-          {!isSolid && dominantColors && (
+          {!effectiveIsSolid && dominantColors && (
             <>
               <div
                 className="absolute inset-0 opacity-40"
@@ -372,11 +394,11 @@ export default function PageHero({
             initial={initial}
           />
           <div className="flex-1 min-w-0 text-center md:text-left">
-            <p className="uppercase text-[10px] md:text-xs tracking-[0.2em] text-white/90">{subtitle}</p>
+            <p className={`uppercase text-[10px] md:text-xs tracking-[0.2em] ${solidOnLight ? 'text-gray-500' : 'text-white/90'}`}>{subtitle}</p>
             <h1 className="font-title mt-2 md:mt-4 text-3xl md:text-6xl lg:text-7xl leading-none break-words flex flex-wrap items-center justify-center md:justify-start gap-x-4" style={{ letterSpacing: '-0.04em' }}>
               {title}
               {isExplicit && (
-                <span className="inline-flex items-center justify-center px-2 py-1 md:px-3 md:py-1.5 bg-white/20 text-white text-xs md:text-sm rounded-md border border-white/30 backdrop-blur-sm self-center mt-1 md:mt-2">
+                <span className={`inline-flex items-center justify-center px-2 py-1 md:px-3 md:py-1.5 text-xs md:text-sm rounded-md backdrop-blur-sm self-center mt-1 md:mt-2 ${solidOnLight ? 'bg-gray-900/10 border border-gray-900/20 text-gray-900' : 'bg-white/20 border border-white/30 text-white'}`}>
                   E
                 </span>
               )}

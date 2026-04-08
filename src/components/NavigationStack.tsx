@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo, Suspense, lazy } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, memo, Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigationType } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import Spinner from './Spinner'
@@ -98,12 +98,47 @@ const StackPage = memo(function StackPage({
 }) {
   const { heroPresent } = useHeroPresence()
   const { id, location: loc, status } = entry
-  // El spacer nativo de 44px solo se aplica en páginas que NO son root tabs
-  // y que NO tienen un Hero (ya que el Hero se encarga del notch)
-  
+
   const pageRef = useRef<HTMLDivElement>(null)
   const animRef = useRef<Animation | null>(null)
   const isAnimating = status === 'entering' || status === 'exiting'
+
+  // ── Per-page hero snapshot ────────────────────────────────────────────────
+  // heroPresent is a global counter: when navigating back, the exiting page's
+  // Hero is still mounted during the ~300ms exit animation, keeping
+  // heroPresent=true. When the animation finishes and the hero unmounts,
+  // heroPresent flips to false — changing the active page's padding and causing
+  // a visible flash.
+  //
+  // Fix: snapshot heroPresent at the exact moment THIS page transitions to
+  // 'cached'. On the way back (cached→active) we use the snapshot instead of
+  // the (still-contaminated) global value. The snapshot is only refreshed on
+  // the active/entering → cached transition, never during subsequent re-renders
+  // while the page is hidden.
+  const cachedHeroSnapshot = useRef<boolean | null>(null)
+  const prevStatusRef = useRef<PageStatus>(status)
+
+  useLayoutEffect(() => {
+    const prevStatus = prevStatusRef.current
+    prevStatusRef.current = status
+    if (status === 'cached' && prevStatus !== 'cached') {
+      cachedHeroSnapshot.current = heroPresent
+    }
+  }, [status, heroPresent])
+
+  // Use snapshot whenever it exists and the page is cached or active (came back from cache).
+  // This covers two failure modes:
+  //   1. While cached: heroPresent flips true (another page's hero mounts), shrinking
+  //      this page's content height → browser clamps scrollTop → user lands a few px
+  //      above their previous position on back-navigation.
+  //   2. On POP (cached→active): exiting page's hero is still mounted, heroPresent still
+  //      true → wrong padding visible for the duration of the exit animation (~300ms).
+  // The snapshot is frozen on the active/entering→cached transition (see useLayoutEffect
+  // above), so it accurately reflects THIS page's own hero state.
+  const effectiveHero =
+    cachedHeroSnapshot.current !== null && (status === 'cached' || status === 'active')
+      ? cachedHeroSnapshot.current
+      : heroPresent
 
   // ... (rest of the effect stays the same) ...
   useEffect(() => {
@@ -185,7 +220,7 @@ const StackPage = memo(function StackPage({
   return (
     <div
       ref={pageRef}
-      className="bg-gray-100 dark:bg-gray-800"
+      className="bg-gray-50 dark:bg-[#121212]"
       style={{
         position: 'absolute',
         top: 0,
@@ -201,11 +236,7 @@ const StackPage = memo(function StackPage({
         pointerEvents: isAnimating ? 'none' : 'auto',
       }}
     >
-      {/* 
-        Si hay un Hero, eliminamos paddings y dejamos que el hijo ocupe todo el espacio (p-0).
-        En móvil, siempre forzamos p-0 para contenido full-width si hay Hero.
-      */}
-      <div className={`${heroPresent ? 'p-0 pb-[200px] md:pb-6' : 'p-4 pt-[calc(env(safe-area-inset-top,20px)+12px)] pb-[200px] md:p-6 md:pb-6 lg:p-8'}`}>
+      <div className={effectiveHero ? 'p-0 pb-[200px] md:pb-6' : 'p-4 pt-[calc(env(safe-area-inset-top,20px)+12px)] pb-[200px] md:p-6 md:pb-6 lg:p-8'}>
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-64">

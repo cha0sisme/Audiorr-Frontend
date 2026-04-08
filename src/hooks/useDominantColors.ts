@@ -13,57 +13,75 @@ interface ColorPalette {
 type BucketEntry = { count: number; sumR: number; sumG: number; sumB: number }
 
 /**
- * Detects whether an image is dominated by a single flat color.
- * Uses RGB bucket quantization (64-step buckets = 4×4×4 = 64 possible buckets).
- * If ≥62% of sampled pixels fall in the same bucket → solid color.
+ * Detects whether an image has a solid flat background color.
  *
- * Also returns the most vibrant non-background color found (accentColor), so
- * buttons can use it instead of the background.
- * Example: Motomami (white bg, red text) → solidColor=#fff, accentColor=#e00
+ * Strategy — edge-first (same principle used by professional palette tools):
+ *   1. Sample only the border ring (~12% of the smaller dimension).
+ *      Album covers almost always show the background at the edges; the subject
+ *      (artist face, graphic) occupies the centre.  This lets us detect cases
+ *      like More Life (blue-grey border) or Starboy (black border) that a
+ *      global pixel-count approach misses because the subject brings the
+ *      background percentage below any reasonable global threshold.
+ *   2. If ≥55% of edge pixels fall in the same 64-step quantisation bucket
+ *      → solid background detected.
+ *   3. Accent search runs over ALL pixels (not just edges) so we can still
+ *      find a vibrant foreground colour (e.g. Motomami's red on white).
  */
 function detectSolidColor(
   data: Uint8ClampedArray,
   width: number,
   height: number
 ): { isSolid: boolean; solidColor: string | null; accentColor: string | null } {
-  const step = 6
-  const buckets = new Map<string, BucketEntry>()
-  let total = 0
+  const step = 4
+  // Border ring width: at least 3px, roughly 12% of the shorter side
+  const borderSize = Math.max(3, Math.floor(Math.min(width, height) * 0.12))
+
+  const allBuckets  = new Map<string, BucketEntry>()
+  const edgeBuckets = new Map<string, BucketEntry>()
+  let allTotal = 0, edgeTotal = 0
+
+  const addToBucket = (map: Map<string, BucketEntry>, key: string, r: number, g: number, b: number) => {
+    const e = map.get(key)
+    if (e) { e.count++; e.sumR += r; e.sumG += g; e.sumB += b }
+    else map.set(key, { count: 1, sumR: r, sumG: g, sumB: b })
+  }
 
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
       const idx = (y * width + x) * 4
-      // Quantize each channel into 64-step buckets (0→0, 1–63→0, 64–127→64, …)
-      const bR = Math.floor(data[idx] / 64) * 64
-      const bG = Math.floor(data[idx + 1] / 64) * 64
-      const bB = Math.floor(data[idx + 2] / 64) * 64
+      const r = data[idx], g = data[idx + 1], b = data[idx + 2]
+      // Quantise each channel into 64-step buckets
+      const bR = Math.floor(r / 64) * 64
+      const bG = Math.floor(g / 64) * 64
+      const bB = Math.floor(b / 64) * 64
       const key = `${bR},${bG},${bB}`
-      const existing = buckets.get(key)
-      if (existing) {
-        existing.count++
-        existing.sumR += data[idx]
-        existing.sumG += data[idx + 1]
-        existing.sumB += data[idx + 2]
-      } else {
-        buckets.set(key, { count: 1, sumR: data[idx], sumG: data[idx + 1], sumB: data[idx + 2] })
+
+      addToBucket(allBuckets, key, r, g, b)
+      allTotal++
+
+      const isEdge = x < borderSize || x >= width - borderSize
+                  || y < borderSize || y >= height - borderSize
+      if (isEdge) {
+        addToBucket(edgeBuckets, key, r, g, b)
+        edgeTotal++
       }
-      total++
     }
   }
 
-  if (total === 0) return { isSolid: false, solidColor: null, accentColor: null }
+  if (edgeTotal === 0) return { isSolid: false, solidColor: null, accentColor: null }
 
-  // Find the most populated bucket (background color)
+  // Find the most-populated edge bucket (background colour)
   let dominant: BucketEntry | null = null
-  for (const entry of buckets.values()) {
-    if (!dominant || entry.count > dominant.count) dominant = entry
+  let dominantKey = ''
+  for (const [key, entry] of edgeBuckets.entries()) {
+    if (!dominant || entry.count > dominant.count) { dominant = entry; dominantKey = key }
   }
 
-  if (!dominant || dominant.count / total < 0.62) {
+  // ≥55% of edge pixels must agree — lower than before because we're edge-only
+  if (!dominant || dominant.count / edgeTotal < 0.55) {
     return { isSolid: false, solidColor: null, accentColor: null }
   }
 
-  // Compute the average color within the dominant bucket for precise representation
   const bucketAvg = (e: BucketEntry) => ({
     r: Math.round(e.sumR / e.count),
     g: Math.round(e.sumG / e.count),
@@ -74,33 +92,57 @@ function detectSolidColor(
 
   const solidColor = toHex(bucketAvg(dominant))
 
-  // Find the most vibrant secondary color from the remaining buckets.
-  // Requirements: ≥3% of total pixels, saturation ≥0.25, and colorfully distinct
-  // from the background (so neutral grays/whites don't become the accent).
+  // Accent search: scan ALL pixels so foreground colours in the centre are found.
+  //
+  // Phase 1 — vibrant accent: saturation ≥0.25, ≥1.5% of total pixels.
+  //   Lower threshold than before (was 2.5%) so small but vivid elements like
+  //   the red "RED" text on Whole Lotta Red are still captured.
+  //
+  // Phase 2 — contrast fallback: if no vibrant accent exists, pick the colour
+  //   with the greatest luminance distance from the background (e.g. the dark
+  //   tones of a monochrome photo on a white background, or vice-versa).
+  //   Requires ≥3% of total pixels and a luminance gap of at least 50/255.
+  const solidLum = (() => {
+    const avg = bucketAvg(dominant)
+    return avg.r * 0.299 + avg.g * 0.587 + avg.b * 0.114
+  })()
+
   let bestAccent: BucketEntry | null = null
   let bestScore = 0
 
-  for (const entry of buckets.values()) {
-    if (entry === dominant) continue
-    if (entry.count / total < 0.03) continue  // too few pixels → likely noise
+  for (const [key, entry] of allBuckets.entries()) {
+    if (key === dominantKey) continue
+    if (entry.count / allTotal < 0.015) continue  // noise
 
     const { r, g, b } = bucketAvg(entry)
     const max = Math.max(r, g, b)
     const min = Math.min(r, g, b)
     const saturation = max === 0 ? 0 : (max - min) / max
-    if (saturation < 0.25) continue  // not colorful enough to be a useful accent
+    if (saturation < 0.25) continue
 
-    // Score = saturation × relative pixel weight (rewards vivid + present colors)
-    const score = saturation * (entry.count / total)
-    if (score > bestScore) {
-      bestScore = score
-      bestAccent = entry
+    const score = saturation * (entry.count / allTotal)
+    if (score > bestScore) { bestScore = score; bestAccent = entry }
+  }
+
+  // Contrast fallback — used when the foreground has little saturation
+  // (e.g. monochrome photo on a white or black background).
+  if (!bestAccent) {
+    let bestContrast = 0
+    for (const [key, entry] of allBuckets.entries()) {
+      if (key === dominantKey) continue
+      if (entry.count / allTotal < 0.03) continue  // needs meaningful presence
+
+      const { r, g, b } = bucketAvg(entry)
+      const lum = r * 0.299 + g * 0.587 + b * 0.114
+      const contrast = Math.abs(lum - solidLum)
+      if (contrast > 50 && contrast > bestContrast) {
+        bestContrast = contrast
+        bestAccent = entry
+      }
     }
   }
 
-  const accentColor = bestAccent ? toHex(bucketAvg(bestAccent)) : null
-
-  return { isSolid: true, solidColor, accentColor }
+  return { isSolid: true, solidColor, accentColor: bestAccent ? toHex(bucketAvg(bestAccent)) : null }
 }
 
 /**
