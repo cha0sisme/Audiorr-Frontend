@@ -678,15 +678,18 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // Comprobar si es un dispositivo LAN (cast) — esos no están en `devices`
     const isLanDevice = lanDevices.some(d => d.id === activeDeviceId);
     if (isLanDevice) return;
-    // Si el dispositivo ya no existe en la lista, limpiar
-    const stillExists = devices.some(d => d.id === activeDeviceId);
+    // Si el dispositivo ya no existe en la lista, limpiar.
+    // Excepción: si acabamos de recibir estado del dispositivo (remotePlaybackState.deviceId),
+    // está claramente vivo aunque devices_list aún no haya llegado (race con request_sync).
+    const stillExists = devices.some(d => d.id === activeDeviceId)
+      || remotePlaybackState?.deviceId === activeDeviceId;
     if (!stillExists) {
       console.log(`[Connect] Active device ${activeDeviceId} disappeared — clearing remote session`);
       activeDeviceIdRef.current = null;
       setActiveDeviceId(null);
       setRemotePlaybackState(null);
     }
-  }, [devices, lanDevices, activeDeviceId, currentDeviceId]);
+  }, [devices, lanDevices, activeDeviceId, currentDeviceId, remotePlaybackState]);
 
   // --- Sincronización Inmediata ---
   useEffect(() => {
