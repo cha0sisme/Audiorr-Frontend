@@ -56,7 +56,7 @@ const SettingCard = ({
   description: string
   children: React.ReactNode
 }) => (
-  <div className="bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-gray-200 dark:border-gray-700">
+  <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-gray-200/80 dark:border-white/[0.08]">
     <div className="flex items-center gap-3 sm:gap-4 mb-5 sm:mb-6">
       <div className="p-3 sm:p-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl sm:rounded-2xl text-white flex-shrink-0">
         {icon}
@@ -86,7 +86,7 @@ const AutomixModeSelector = () => {
       onClick={handleToggle}
       disabled={isLocked}
       className={`${
-        settings.isDjMode ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-800'
+        settings.isDjMode ? 'bg-blue-600' : 'bg-gray-200 dark:bg-[#2c2c2e]'
       } relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed`}
     >
       <span className="sr-only">Cambiar modo Automix</span>
@@ -115,7 +115,7 @@ const WebAudioToggle = () => {
       onClick={handleToggle}
       disabled={isLocked}
       className={`${
-        settings.useWebAudio ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-gray-200 dark:bg-gray-800'
+        settings.useWebAudio ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-gray-200 dark:bg-[#2c2c2e]'
       } relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed`}
     >
       <span className="sr-only">Alternar Web Audio API</span>
@@ -135,7 +135,7 @@ const ReplayGainToggle = () => {
     <button
       onClick={toggleReplayGain}
       className={`${
-        settings.useReplayGain ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-gray-200 dark:bg-gray-800'
+        settings.useReplayGain ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-gray-200 dark:bg-[#2c2c2e]'
       } relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2`}
     >
       <span className="sr-only">Activar ReplayGain</span>
@@ -267,7 +267,7 @@ export default function SettingsPage() {
         title="Apariencia"
         description="Personaliza el aspecto de la aplicación"
       >
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-gray-900 dark:text-white">Tema</p>
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
@@ -284,7 +284,7 @@ export default function SettingsPage() {
         title="Automix"
         description="Controla cómo se mezclan las canciones"
       >
-        <div className="flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-gray-900 dark:text-white mb-2">Modo DJ</p>
             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
@@ -302,7 +302,7 @@ export default function SettingsPage() {
         title="Motor de Audio"
         description="Tecnología de reproducción y mezcla de audio"
       >
-        <div className="flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+        <div className="flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-gray-900 dark:text-white mb-2">Web Audio API</p>
             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed mb-3">
@@ -312,7 +312,7 @@ export default function SettingsPage() {
               <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
                 settings.useWebAudio
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-gray-100 dark:bg-white/[0.08] text-gray-600 dark:text-white/40'
               }`}>
                 <div className={`w-2 h-2 rounded-full ${
                   settings.useWebAudio ? 'bg-green-500 dark:bg-green-400' : 'bg-gray-400'
@@ -324,7 +324,7 @@ export default function SettingsPage() {
           <WebAudioToggle />
         </div>
 
-        <div className="mt-4 flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+        <div className="mt-4 flex flex-wrap items-start justify-between gap-4 p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-gray-900 dark:text-white mb-2">ReplayGain (Normalización de Volumen)</p>
             <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed mb-3">
@@ -334,7 +334,7 @@ export default function SettingsPage() {
               <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${
                 settings.useReplayGain
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-gray-100 dark:bg-white/[0.08] text-gray-600 dark:text-white/40'
               }`}>
                 <div className={`w-2 h-2 rounded-full ${
                   settings.useReplayGain ? 'bg-green-500 dark:bg-green-400' : 'bg-gray-400'
@@ -390,7 +390,7 @@ export default function SettingsPage() {
               value={lastfmApiKey}
               onChange={handleLastFmApiKeyChange}
               placeholder="Introduce tu clave de API"
-              className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-300 dark:border-gray-600 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              className="w-full px-4 py-3 bg-gray-50 dark:bg-white/[0.06] border border-gray-300 dark:border-white/[0.15] rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
             />
             <div className="flex gap-3">
               <button
@@ -401,7 +401,7 @@ export default function SettingsPage() {
               </button>
               <button
                 onClick={handleDeleteLastFmApiKey}
-                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-semibold rounded-xl transition-colors text-sm"
+                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-white/10 dark:hover:bg-white/[0.15] text-gray-800 dark:text-white/80 font-semibold rounded-xl transition-colors text-sm"
               >
                 Eliminar clave
               </button>
@@ -413,7 +413,7 @@ export default function SettingsPage() {
             )}
           </div>
 
-          <div className="h-px bg-gray-200 dark:bg-gray-700" />
+          <div className="h-px bg-gray-200 dark:bg-white/10" />
 
           {/* Scrobbling Section */}
           <div className="space-y-4">
@@ -432,15 +432,15 @@ export default function SettingsPage() {
                   onChange={event => handleScrobbleToggle(event.target.checked)}
                   className="sr-only peer"
                 />
-                <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all dark:border-gray-600 peer-checked:bg-gradient-to-r peer-checked:from-blue-600 peer-checked:to-purple-600" />
+                <div className="w-14 h-7 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-[#2c2c2e] peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all dark:border-white/20 peer-checked:bg-gradient-to-r peer-checked:from-blue-600 peer-checked:to-purple-600" />
               </label>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+            <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl">
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Estado:</span>
                 {scrobbleStatus === 'testing' && (
-                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-200 dark:bg-gray-700 text-sm text-gray-700 dark:text-gray-300">
+                  <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-200 dark:bg-white/[0.08] text-sm text-gray-700 dark:text-white/60">
                     <div className="w-2 h-2 bg-gray-500 rounded-full animate-pulse" />
                     Probando…
                   </span>
@@ -461,7 +461,7 @@ export default function SettingsPage() {
                   <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm ${
                     scrobbleEnabled 
                       ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' 
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                      : 'bg-gray-100 dark:bg-white/[0.08] text-gray-600 dark:text-white/40'
                   }`}>
                     <div className={`w-2 h-2 rounded-full ${scrobbleEnabled ? 'bg-blue-500 dark:bg-blue-400' : 'bg-gray-400'}`} />
                     {scrobbleEnabled ? 'Activo' : 'Inactivo'}
@@ -473,7 +473,7 @@ export default function SettingsPage() {
                 <button
                   onClick={testScrobble}
                   disabled={!scrobbleEnabled || scrobbleStatus === 'testing'}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200 dark:border-gray-600"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-white/70 bg-white dark:bg-white/[0.08] rounded-xl hover:bg-gray-50 dark:hover:bg-white/[0.13] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-200 dark:border-white/[0.12]"
                 >
                   Probar scrobble
                 </button>
@@ -510,13 +510,13 @@ export default function SettingsPage() {
           <div className="space-y-4">
             {/* Stats row */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl text-center">
+              <div className="p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl text-center">
                 <p className="text-2xl font-bold text-gray-900 dark:text-white">
                   {audioCache.loading ? '…' : audioCache.entries.length}
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">canciones</p>
               </div>
-              <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-2xl text-center">
+              <div className="p-4 bg-gray-50 dark:bg-white/[0.04] rounded-2xl text-center">
                 <p className="text-2xl font-bold text-gray-900 dark:text-white">
                   {audioCache.loading ? '…' : audioCache.formatSize(audioCache.totalSize)}
                 </p>
@@ -538,7 +538,7 @@ export default function SettingsPage() {
                   {audioCache.entries.map(entry => (
                     <div
                       key={entry.songId}
-                      className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-gray-900/40"
+                      className="flex items-center gap-3 px-4 py-3 bg-white dark:bg-white/[0.03]"
                     >
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
@@ -586,7 +586,7 @@ export default function SettingsPage() {
       )}
 
       {/* Logout */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-gray-200 dark:border-gray-700">
+      <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-gray-200/80 dark:border-white/[0.08]">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-1">Cerrar sesión</h2>

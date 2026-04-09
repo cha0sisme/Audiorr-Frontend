@@ -45,18 +45,18 @@ export function Header() {
   }, [showDropdown])
 
   return (
-    <header className="hidden md:flex flex-shrink-0 bg-gray-100 dark:bg-gray-800 p-4 items-center gap-4 relative z-50" style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}>
+    <header className="hidden md:flex flex-shrink-0 bg-gray-100 dark:bg-[#1a1a1a] p-4 items-center gap-4 relative z-50" style={{ paddingTop: 'max(1rem, env(safe-area-inset-top))' }}>
       <div className="hidden md:flex items-center gap-2">
         <button
           onClick={() => navigate(-1)}
-          className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+          className="p-2 rounded-full bg-gray-200 dark:bg-white/[0.08] hover:bg-gray-300 dark:hover:bg-white/[0.14] transition-colors"
           aria-label="Go back"
         >
           <ChevronLeftIcon className="h-6 w-6 text-gray-700 dark:text-gray-200" />
         </button>
         <button
           onClick={() => navigate(1)}
-          className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+          className="p-2 rounded-full bg-gray-200 dark:bg-white/[0.08] hover:bg-gray-300 dark:hover:bg-white/[0.14] transition-colors"
           aria-label="Go forward"
         >
           <ChevronRightIcon className="h-6 w-6 text-gray-700 dark:text-gray-200" />
@@ -84,11 +84,11 @@ export function Header() {
             {username ? getInitial(username) : '?'}
           </button>
           {showDropdown && (
-            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50">
+            <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-[#1c1c1e] border border-gray-200 dark:border-white/[0.08] rounded-lg shadow-xl z-50">
               <Link
                 to="/profile"
                 onClick={() => setShowDropdown(false)}
-                className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-t-lg"
+                className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-white/70 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors rounded-t-lg"
               >
                 <svg
                   className="w-5 h-5"
@@ -109,7 +109,7 @@ export function Header() {
               <Link
                 to="/settings"
                 onClick={() => setShowDropdown(false)}
-                className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-white/70 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors"
               >
                 <Cog6ToothIcon className="w-5 h-5" />
                 <span>Configuración</span>
@@ -120,7 +120,7 @@ export function Header() {
                   setShowDropdown(false)
                   setShowAboutModal(true)
                 }}
-                className={`flex w-full items-center gap-3 px-4 py-3 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${!isAdmin ? 'rounded-b-lg' : ''}`}
+                className={`flex w-full items-center gap-3 px-4 py-3 text-gray-700 dark:text-white/70 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors ${!isAdmin ? 'rounded-b-lg' : ''}`}
               >
                 <svg
                   className="w-5 h-5"
@@ -142,7 +142,7 @@ export function Header() {
                 <Link
                   to="/admin"
                   onClick={() => setShowDropdown(false)}
-                  className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors rounded-b-lg border-t border-gray-100 dark:border-gray-700"
+                  className="flex items-center gap-3 px-4 py-3 text-gray-700 dark:text-white/70 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors rounded-b-lg border-t border-gray-100 dark:border-white/[0.08]"
                 >
                   <WrenchScrewdriverIcon className="w-5 h-5" />
                   <span>Gestión</span>

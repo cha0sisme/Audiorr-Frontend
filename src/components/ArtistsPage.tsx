@@ -297,7 +297,7 @@ export default function ArtistsPage() {
             </div>
             <button
               onClick={handleChangeGenre}
-              className="text-sm text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 font-medium transition-colors"
+              className="text-sm font-medium text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90 transition-colors"
             >
               Cambiar género →
             </button>

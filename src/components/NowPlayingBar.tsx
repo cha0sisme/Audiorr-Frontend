@@ -266,7 +266,7 @@ export default function NowPlayingBar({
   return (
     // Móvil: fixed encima del TabBar (49px + safe area)
     // Desktop (md+): estático en el flujo del documento
-    <footer className="fixed left-4 right-4 md:static md:bg-gray-100 md:dark:bg-gray-800 md:border-t md:border-gray-200 md:dark:border-gray-700 md:p-4 z-50" style={{ bottom: 'calc(57px + env(safe-area-inset-bottom) + 0.5rem)' }}>
+    <footer className="fixed left-4 right-4 md:static md:bg-gray-100 md:dark:bg-[#1a1a1a] md:border-t md:border-gray-200 md:dark:border-white/[0.08] md:p-4 z-50" style={{ bottom: 'calc(57px + env(safe-area-inset-bottom) + 0.5rem)' }}>
 
       {/* Layout móvil: iOS Liquid Glass style */}
       <div className="flex md:hidden flex-col rounded-[26px] relative z-[100] overflow-hidden bg-white/55 dark:bg-[#1c1c1e]/80 backdrop-blur-3xl backdrop-saturate-200 backdrop-brightness-105 border border-white/50 dark:border-white/10 shadow-[0_8px_32px_-4px_rgba(0,0,0,0.18),0_2px_8px_-2px_rgba(0,0,0,0.10),inset_0_1px_0_rgba(255,255,255,0.65)] dark:shadow-[0_8px_32px_-4px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.07)]">
@@ -380,7 +380,7 @@ export default function NowPlayingBar({
               <AlbumCover coverArtId={currentSong.coverArt} size={200} className="rounded-md" />
             )
           ) : (
-            <div className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-md flex items-center justify-center">
+            <div className="w-full h-full bg-gray-200 dark:bg-white/10 rounded-md flex items-center justify-center">
               <MusicalNoteIcon className="w-8 h-8 text-gray-400" />
             </div>
           )}

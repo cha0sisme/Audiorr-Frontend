@@ -22,7 +22,7 @@ const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
     <Link
       to={`/playlists/${playlist.id}`}
       state={{ playlist }}
-      className="group bg-gray-50 dark:bg-gray-800/40 rounded-2xl border border-gray-200/50 dark:border-white/5 overflow-hidden hover:bg-white dark:hover:bg-gray-800 transition-all duration-300 relative block"
+      className="group bg-gray-50 dark:bg-white/[0.04] rounded-2xl border border-gray-200/50 dark:border-white/[0.06] overflow-hidden hover:bg-white dark:hover:bg-white/[0.07] transition-all duration-300 relative block"
     >
       <div className="relative aspect-square">
         <PlaylistCover 
@@ -40,7 +40,7 @@ const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
              </div>
           )}
           {isEditorial && (
-             <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm p-1 rounded-full shadow-lg flex items-center justify-center" title="Hecho por Audiorr">
+             <div className="bg-white/90 dark:bg-black/70 backdrop-blur-sm p-1 rounded-full shadow-lg flex items-center justify-center" title="Hecho por Audiorr">
                <img src="/assets/logo-icon.svg" alt="Audiorr" className="w-3 h-3 object-contain brightness-0 dark:invert" />
              </div>
           )}
@@ -258,7 +258,7 @@ export default function ArtistsDetail() {
               {songs.length > 5 && (
                 <button
                   onClick={() => setShowAllSongs(!showAllSongs)}
-                  className="text-sm font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                  className="text-sm font-semibold text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90 transition-colors"
                 >
                   {showAllSongs ? 'Ver menos' : 'Ver más'}
                 </button>
@@ -283,7 +283,7 @@ export default function ArtistsDetail() {
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Álbumes</h2>
               <button
                 onClick={() => setShowAllAlbums(!showAllAlbums)}
-                className="text-sm font-semibold text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                className="text-sm font-semibold text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90 transition-colors"
               >
                 {showAllAlbums ? 'Ver menos' : 'Ver más'}
               </button>
