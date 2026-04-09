@@ -230,6 +230,7 @@ export default function AlbumDetail() {
           showAlbum={false}
           showCover={false}
           useTrackNumber={true}
+          accentColor={dominantColors?.accent}
         />
 
         {albumInfo.recordLabels && albumInfo.recordLabels.length > 0 && (

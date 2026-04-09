@@ -29,11 +29,13 @@
 :root {
   --progress-bar-color: #3b82f6; /* blue-500 */
   --progress-bar-bg: #d1d5db; /* gray-300 */
+  --bg-base: #f9fafb; /* gray-50 — main page background (light) */
 }
 
 .dark {
   --progress-bar-color: #ffffff; /* white */
   --progress-bar-bg: #4b5563; /* gray-600 */
+  --bg-base: #121212; /* main page background (dark) */
 }
 
 @layer base {

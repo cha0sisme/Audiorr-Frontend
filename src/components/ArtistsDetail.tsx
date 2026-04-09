@@ -272,6 +272,7 @@ export default function ArtistsDetail() {
               onSongContextMenu={handleContextMenu}
               showAlbum={false}
               showCover={true}
+              accentColor={dominantColors?.accent}
             />
           </section>
         )}

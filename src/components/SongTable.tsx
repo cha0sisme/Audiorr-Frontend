@@ -8,6 +8,14 @@ import { ArtistLinks } from './ArtistLinks'
 // True if the device has a touch screen (iOS/Android native or mobile browser)
 const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
 
+function hexToRgba(hex: string, alpha: number): string {
+  if (!hex || !hex.startsWith('#') || hex.length < 7) return `rgba(59,130,246,${alpha})`
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
 export interface SongTableProps {
   songs: Song[]
   currentSongId?: string | null
@@ -21,6 +29,7 @@ export interface SongTableProps {
   showArtist?: boolean
   showIndex?: boolean
   useTrackNumber?: boolean // Si true, usa song.track en lugar del índice
+  accentColor?: string // Color de acento dinámico (del álbum/playlist) para la fila activa
   className?: string
 }
 
@@ -47,6 +56,7 @@ const SongRow = memo(({
   showArtist = true,
   showIndex = true,
   useTrackNumber = false,
+  accentColor,
 }: {
   song: Song
   index: number
@@ -59,6 +69,7 @@ const SongRow = memo(({
   showArtist?: boolean
   showIndex?: boolean
   useTrackNumber?: boolean
+  accentColor?: string
 }) => {
   const gridTemplate = getGridTemplate(showIndex, showAlbum)
 
@@ -66,14 +77,21 @@ const SongRow = memo(({
   // Re-tapping/clicking the currently playing song always restarts it.
   const handlePlay = () => onDoubleClick(song, index)
 
+  const playingRowStyle = isPlaying && accentColor
+    ? { backgroundColor: hexToRgba(accentColor, 0.14) }
+    : undefined
+
   return (
     <div
       className={`grid items-center gap-2 md:gap-3 px-3 md:px-4 py-2 text-sm transition-colors duration-75 cursor-pointer select-none
         ${gridTemplate} ${
         isPlaying
-          ? 'bg-blue-500/15 hover:bg-blue-500/10 active:bg-blue-500/25 dark:bg-blue-500/25 dark:hover:bg-blue-500/20 dark:active:bg-blue-500/40'
+          ? accentColor
+            ? 'hover:brightness-110 active:brightness-125'
+            : 'bg-blue-500/15 hover:bg-blue-500/10 active:bg-blue-500/25 dark:bg-blue-500/25 dark:hover:bg-blue-500/20 dark:active:bg-blue-500/40'
           : 'hover:bg-gray-100/80 active:bg-gray-200 dark:hover:bg-white/5 dark:active:bg-white/15'
       }`}
+      style={playingRowStyle}
       onClick={isTouchDevice ? handlePlay : undefined}
       onDoubleClick={!isTouchDevice ? handlePlay : undefined}
       onContextMenu={e => onContextMenu(e, song)}
@@ -84,7 +102,8 @@ const SongRow = memo(({
           {isPlaying ? (
             <EqualizerIcon
               isPlaying={true}
-              colorClass="fill-blue-500 dark:fill-blue-400"
+              colorClass={accentColor ? undefined : 'fill-blue-500 dark:fill-blue-400'}
+              color={accentColor}
               className="w-3.5 h-3.5 md:w-4 md:h-4"
             />
           ) : isAnalyzingSong ? (
@@ -103,9 +122,12 @@ const SongRow = memo(({
           </div>
         )}
         <div className="min-w-0">
-          <p className={`truncate text-sm md:text-base font-semibold leading-tight ${
-            isPlaying ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'
-          }`}>
+          <p
+            className={`truncate text-sm md:text-base font-semibold leading-tight ${
+              isPlaying && !accentColor ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'
+            }`}
+            style={isPlaying && accentColor ? { color: accentColor } : undefined}
+          >
             {song.title}
           </p>
           {showArtist && (
@@ -113,7 +135,7 @@ const SongRow = memo(({
               <ArtistLinks
                 artists={song.artist}
                 className={`text-xs md:text-sm leading-tight ${
-                  isPlaying
+                  isPlaying && !accentColor
                     ? 'text-blue-500/80 hover:text-blue-500 dark:text-blue-400/80 dark:hover:text-blue-400'
                     : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                 }`}
@@ -172,7 +194,8 @@ const SongRow = memo(({
     prev.showCover === next.showCover &&
     prev.showArtist === next.showArtist &&
     prev.showIndex === next.showIndex &&
-    prev.useTrackNumber === next.useTrackNumber
+    prev.useTrackNumber === next.useTrackNumber &&
+    prev.accentColor === next.accentColor
   )
 })
 
@@ -191,6 +214,7 @@ export function SongTable({
   showArtist = true,
   showIndex = true,
   useTrackNumber = false,
+  accentColor,
   className = "",
 }: SongTableProps) {
   const gridTemplate = getGridTemplate(showIndex, showAlbum)
@@ -227,6 +251,7 @@ export function SongTable({
             showArtist={showArtist}
             showIndex={showIndex}
             useTrackNumber={useTrackNumber}
+            accentColor={accentColor}
           />
         ))}
       </div>

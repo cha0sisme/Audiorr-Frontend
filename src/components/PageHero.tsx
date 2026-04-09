@@ -385,6 +385,17 @@ export default function PageHero({
           )}
         </div>
 
+        {/* Color bridge: blends the hero seamlessly into the page background,
+            preventing harsh contrast edges (e.g. white album → dark page bg).
+            Sits above the masked background layer but behind the content. */}
+        <div
+          className="absolute bottom-0 left-0 right-0 pointer-events-none"
+          style={{
+            height: '38%',
+            background: 'linear-gradient(to bottom, transparent, var(--bg-base, #121212))',
+          }}
+        />
+
         <div
           className="relative flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pt-6 pb-9 md:pt-14 md:pb-9"
           style={{

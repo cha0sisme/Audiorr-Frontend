@@ -594,6 +594,7 @@ export default function PlaylistDetail() {
             onSongContextMenu={handleContextMenu}
             showAlbum={true}
             showCover={true}
+            accentColor={dominantColors?.accent}
           />
         </div>
 

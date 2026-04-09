@@ -281,6 +281,7 @@ export default function SongDetail() {
           showAlbum={false}
           showCover={false}
           showIndex={false}
+          accentColor={dominantColors?.accent}
         />
 
         {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
@@ -319,6 +320,7 @@ export default function SongDetail() {
               showAlbum={false}
               showCover={true}
               showIndex={false}
+              accentColor={dominantColors?.accent}
             />
           )}
         </div>
