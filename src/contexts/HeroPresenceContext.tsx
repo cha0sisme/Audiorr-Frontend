@@ -5,12 +5,16 @@ interface HeroPresenceContextType {
   heroCount: number
   incHero: () => void
   decHero: () => void
+  /** true cuando hay un hero con colores dominantes (fondo oscuro inmersivo activo) */
+  heroDark: boolean
+  setHeroDark: (dark: boolean) => void
 }
 
 const HeroPresenceContext = createContext<HeroPresenceContextType | undefined>(undefined)
 
 export function HeroPresenceProvider({ children }: { children: ReactNode }) {
   const countRef = useRef(0)
+  const heroDarkRef = useRef(false)
   const listenersRef = useRef(new Set<() => void>())
 
   const subscribe = useCallback((cb: () => void) => {
@@ -20,9 +24,11 @@ export function HeroPresenceProvider({ children }: { children: ReactNode }) {
 
   const getSnapshot = useCallback(() => countRef.current > 0, [])
   const getCountSnapshot = useCallback(() => countRef.current, [])
+  const getHeroDarkSnapshot = useCallback(() => heroDarkRef.current, [])
 
   const heroPresent = useSyncExternalStore(subscribe, getSnapshot)
   const heroCount = useSyncExternalStore(subscribe, getCountSnapshot)
+  const heroDark = useSyncExternalStore(subscribe, getHeroDarkSnapshot)
 
   const notify = useCallback(() => {
     listenersRef.current.forEach(cb => cb())
@@ -30,9 +36,10 @@ export function HeroPresenceProvider({ children }: { children: ReactNode }) {
 
   const incHero = useCallback(() => { countRef.current++; notify() }, [notify])
   const decHero = useCallback(() => { countRef.current = Math.max(0, countRef.current - 1); notify() }, [notify])
+  const setHeroDark = useCallback((dark: boolean) => { heroDarkRef.current = dark; notify() }, [notify])
 
   return (
-    <HeroPresenceContext.Provider value={{ heroPresent, heroCount, incHero, decHero }}>
+    <HeroPresenceContext.Provider value={{ heroPresent, heroCount, incHero, decHero, heroDark, setHeroDark }}>
       {children}
     </HeroPresenceContext.Provider>
   )

@@ -4,6 +4,7 @@ import { nativeNowPlaying, isNative } from '../services/nativeNowPlaying'
 import { navidromeApi } from '../services/navidromeApi'
 import { useConnect } from './useConnect'
 import { useTheme } from '../contexts/ThemeContext'
+import { useHeroPresence } from '../contexts/HeroPresenceContext'
 
 export function useNativeNowPlaying() {
   const playerState    = usePlayerState()
@@ -11,6 +12,9 @@ export function useNativeNowPlaying() {
   const playerActions  = usePlayerActions()
   const { isConnected, activeDeviceId, currentDeviceId, devices, remotePlaybackState } = useConnect()
   const { isDark } = useTheme()
+  const { heroDark } = useHeroPresence()
+  // isDark del tema de la app + heroDark cuando la página tiene fondo inmersivo oscuro
+  const effectiveIsDark = isDark || heroDark
 
   // --- Estado efectivo: remoto vs local (misma lógica que NowPlayingBar) ---
   const isRemote = isConnected && !!activeDeviceId && activeDeviceId !== currentDeviceId
@@ -108,12 +112,15 @@ export function useNativeNowPlaying() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative, effectivePlaying, effectiveSongId])
 
-  // Actualizar subtitle cuando cambia AutoMix o dispositivo activo
+  // Actualizar cuando cambia el tema o el fondo de la página (hero inmersivo).
+  // Pasar effectiveIsDark directamente (no via isDarkRef): el effect que actualiza
+  // isDarkRef se declara después y corre después, así que isDarkRef.current aún
+  // tendría el valor anterior — causando un desfase de un ciclo.
   useEffect(() => {
     if (!isNative || !effectiveSong) return
-    sendUpdate()
+    sendUpdate({ isDark: effectiveIsDark })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isNative, playerState.isCrossfading, activeDeviceId, isDark])
+  }, [isNative, playerState.isCrossfading, activeDeviceId, effectiveIsDark])
 
   // Actualizar cuando cambia el estado remoto (posición, metadata, etc.)
   useEffect(() => {
@@ -132,8 +139,8 @@ export function useNativeNowPlaying() {
   const effectiveDurationRef = useRef(effectiveDuration)
   useEffect(() => { effectiveDurationRef.current = effectiveDuration }, [effectiveDuration])
 
-  const isDarkRef = useRef(isDark)
-  useEffect(() => { isDarkRef.current = isDark }, [isDark])
+  const isDarkRef = useRef(effectiveIsDark)
+  useEffect(() => { isDarkRef.current = effectiveIsDark }, [effectiveIsDark])
 
   // Cuando el lado nativo termina de registrar los message handlers,
   // re-enviamos el estado actual del player. Esto resuelve el race condition

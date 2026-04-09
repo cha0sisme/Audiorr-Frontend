@@ -93,7 +93,7 @@ class AudioEngineManager {
 
     private var streamPlayer: AVPlayer?
     private var streamPlayerEndObserver: Any?
-    private var isStreamMode = false
+    private(set) var isStreamMode = false
 
     // MARK: - Plugin reference (para enviar eventos a JS)
 
@@ -523,6 +523,7 @@ class AudioEngineManager {
         isStreamMode = true
         currentSongDuration = duration
         playStartOffset = startAt
+        replayGainMultiplierA = replayGainMultiplier
         pauseSampleTime = 0
         playSequence += 1
 
@@ -566,6 +567,67 @@ class AudioEngineManager {
         streamPlayer?.pause()
         streamPlayer = nil
         isStreamMode = false
+    }
+
+    /// Traspasa la reproducción de AVPlayer → AVAudioEngine cuando la descarga completa,
+    /// reanudando en la posición actual. Preserva automixTrigger y nextFile intactos
+    /// para que el crossfade funcione normalmente tras el handoff.
+    func handoffStreamToEngine(fileURL: URL) {
+        guard isStreamMode, isPlaying else { return }
+
+        let currentPos = currentTime()
+        playSequence += 1
+        let thisPlaySeq = playSequence
+
+        stopStreamPlayer()   // isStreamMode = false; AVPlayer detenido
+
+        guard ensureEngineRunning() else {
+            print("[AudioEngineManager] handoffStreamToEngine: engine no arrancó")
+            return
+        }
+
+        do {
+            let file = try AVAudioFile(forReading: fileURL)
+            currentFile = file
+
+            let sampleRate = file.processingFormat.sampleRate
+            let startFrame = AVAudioFramePosition(max(0, currentPos) * sampleRate)
+            let totalFrames = file.length
+            let framesToPlay = AVAudioFrameCount(max(0, totalFrames - startFrame))
+
+            guard framesToPlay > 0 else {
+                print("[AudioEngineManager] handoffStreamToEngine: sin frames en \(String(format: "%.1f", currentPos))s")
+                return
+            }
+
+            mixerA.outputVolume = replayGainMultiplierA
+            eqA.bands[0].bypass = true
+            eqA.bands[1].bypass = true
+            engine.mainMixerNode.outputVolume = volume
+
+            playStartOffset = currentPos
+            pauseSampleTime = 0
+
+            let activePlayer = playerA
+            playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self = self,
+                          self.isPlaying,
+                          !self.isCrossfading,
+                          self.playerA === activePlayer,
+                          self.playSequence == thisPlaySeq else { return }
+                    self.isPlaying = false
+                    self.stopProgressTimer()
+                    self.updateNowPlayingPlaybackState()
+                    self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                }
+            }
+
+            playerA.play()
+            print("[AudioEngineManager] Handoff stream→engine en \(String(format: "%.1f", currentPos))s")
+        } catch {
+            print("[AudioEngineManager] handoffStreamToEngine error: \(error)")
+        }
     }
 
     private func songIdFromURL(_ url: URL) -> String {
@@ -631,6 +693,19 @@ class AudioEngineManager {
         guard !isCrossfading else {
             print("[AudioEngineManager] Crossfade ya en curso")
             return .alreadyCrossfading
+        }
+
+        // Safety net: si el handoff stream→engine no completó todavía (descarga lenta o
+        // red inestable), detener AVPlayer y activar el engine aquí mismo.
+        // En condiciones normales el handoff ocurre mucho antes del trigger y este bloque
+        // no se ejecuta. Resultado: cut-A + fade-in-B en vez de no hacer ninguna transición.
+        if isStreamMode {
+            print("[AudioEngineManager] executeCrossfade: handoff no completó aún — cut A + fade in B")
+            stopStreamPlayer()
+            guard ensureEngineRunning() else {
+                print("[AudioEngineManager] executeCrossfade: engine no arrancó tras cut streaming")
+                return .noNextFile
+            }
         }
 
         isCrossfading = true

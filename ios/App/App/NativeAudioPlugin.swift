@@ -111,12 +111,19 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         call.resolve()
 
-        // Descargar en background — silencioso, sin bloquear la UI
+        // Descargar en background y hacer handoff AVPlayer → AVAudioEngine al completar.
+        // El handoff preserva automixTrigger y nextFile para que el crossfade funcione.
         let capturedSongId = songId
         let capturedURL = remoteURL
         Task {
-            _ = try? await AudioFileLoader.shared.load(remoteURL: capturedURL, songId: capturedSongId)
-            print("[NativeAudioPlugin] Background cache completo: \(capturedSongId)")
+            guard let fileURL = try? await AudioFileLoader.shared.load(remoteURL: capturedURL, songId: capturedSongId) else { return }
+            await MainActor.run {
+                // Solo hacer handoff si todavía estamos reproduciendo esta misma canción en streaming
+                guard self.activePlaySongId == capturedSongId,
+                      self.audioManager.isStreamMode else { return }
+                self.audioManager.handoffStreamToEngine(fileURL: fileURL)
+                print("[NativeAudioPlugin] Handoff completado: \(capturedSongId)")
+            }
         }
     }
 

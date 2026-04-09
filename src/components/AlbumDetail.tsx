@@ -291,11 +291,14 @@ export default function AlbumDetail() {
 
         {albumNotes && (
           <section className={`mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500 ${pageBgColor ? 'bg-white/[0.08] border border-white/10' : 'bg-gray-50 dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.08]'}`}>
-            <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-6">
+            <h2
+              className={`text-2xl font-extrabold mb-6 ${pageBgColor && dominantColors?.accent ? '' : 'text-gray-900 dark:text-white'}`}
+              style={pageBgColor && dominantColors?.accent ? { color: dominantColors.accent } : undefined}
+            >
               Acerca de {albumInfo.name}
             </h2>
             <div
-              className="prose prose-sm md:prose-base dark:prose-invert max-w-none text-gray-600 dark:text-gray-300 leading-relaxed font-normal"
+              className={`prose prose-sm md:prose-base max-w-none leading-relaxed font-normal ${pageBgColor ? 'prose-invert text-white/70' : 'dark:prose-invert text-gray-600 dark:text-gray-300'}`}
               dangerouslySetInnerHTML={{
                 __html: albumNotes
                   .replace(/<a[^>]*>.*?Read more on Last\.fm.*?<\/a>/gi, '')

@@ -86,13 +86,18 @@ export default function PageHero({
 }: PageHeroProps) {
   const location = useLocation()
   const hasBackButton = isNative && !ROOT_TABS.has(location.pathname)
-  const { incHero, decHero } = useHeroPresence()
+  const { incHero, decHero, setHeroDark } = useHeroPresence()
   const { isDark } = useTheme()
 
   useEffect(() => {
     incHero()
-    return () => decHero()
-  }, [incHero, decHero])
+    return () => { decHero(); setHeroDark(false) }
+  }, [incHero, decHero, setHeroDark])
+
+  // Activar heroDark cuando hay colores dominantes (fondo inmersivo oscuro activo)
+  useEffect(() => {
+    setHeroDark(!!dominantColors)
+  }, [dominantColors, setHeroDark])
 
   const [heroProgress, setHeroProgress] = useState(0)
   const [overscroll, setOverscroll] = useState(0)

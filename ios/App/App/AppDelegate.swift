@@ -492,7 +492,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
         // Jerarquía
         container.addSubview(blur)
-        blur.contentView.addSubview(colorOverlay)
+        // colorOverlay en container (no en blur.contentView): dentro del contentView de
+        // UIVisualEffectView el traitCollection puede quedar aislado por el efecto, impidiendo
+        // que UIColor dinámicos se reevalúen al cambiar overrideUserInterfaceStyle. Fuera del
+        // contentView el overlay hereda los traits del shadow/container correctamente.
+        container.addSubview(colorOverlay)
         container.addSubview(track)
         container.addSubview(fill)
         container.addSubview(artwork)
@@ -519,11 +523,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             blur.topAnchor.constraint(equalTo: container.topAnchor),
             blur.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            // Color overlay llena el contentView del blur
-            colorOverlay.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor),
-            colorOverlay.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor),
-            colorOverlay.topAnchor.constraint(equalTo: blur.contentView.topAnchor),
-            colorOverlay.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor),
+            // Color overlay llena el container (encima del blur, debajo de los controles)
+            colorOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            colorOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            colorOverlay.topAnchor.constraint(equalTo: container.topAnchor),
+            colorOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
             // Progress track
             track.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -607,9 +611,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
     private func updateNowPlaying(title: String, artist: String, artworkUrl: String?,
                                   isPlaying: Bool, progress: Double, duration: Double,
                                   isVisible: Bool, isDark: Bool = false, subtitle: String? = nil) {
-        // NO forzar overrideUserInterfaceStyle: dejar que el mini-player siga
-        // el modo del sistema (igual que UITabBar). Así obtiene la misma animación
-        // de transición dark↔light y los mismos colores de material/blur.
+        // Forzar el modo dark/light enviado por JS para que el mini-player siga el
+        // tema de la app (igual que UITabBar sigue el sistema). Sin esto, colorOverlay
+        // y UIBlurEffect quedan fijados al modo del sistema iOS, ignorando el theme switcher.
+        miniPlayerShadow?.overrideUserInterfaceStyle = isDark ? .dark : .light
 
         miniPlayerShouldShow = isVisible
         if isVisible && !viewerIsOpen {
