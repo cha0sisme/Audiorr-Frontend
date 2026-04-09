@@ -165,6 +165,22 @@ export default function PlaylistDetail() {
     ? computePageBgColor(dominantColors.primary)
     : null
 
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    let parent: HTMLElement | null = el.parentElement
+    while (parent) {
+      const ov = window.getComputedStyle(parent).overflowY
+      if (ov === 'auto' || ov === 'scroll') {
+        parent.style.backgroundColor = pageBgColor ?? ''
+        const captured = parent
+        return () => { captured.style.backgroundColor = '' }
+      }
+      parent = parent.parentElement
+    }
+  }, [pageBgColor])
+
   const accentButtonStyle = useMemo<{ backgroundColor: string; color: string } | null>(() => {
     if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
       return null
@@ -451,7 +467,7 @@ export default function PlaylistDetail() {
 
 
   return (
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
+    <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
       {loading && !pinnedFallback ? (
         <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-500 dark:text-gray-400">
           <div className="w-10 h-10 border-2 border-current border-t-transparent rounded-full animate-spin" />

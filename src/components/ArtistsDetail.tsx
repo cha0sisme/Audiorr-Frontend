@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, memo, useCallback } from 'react'
+import { useState, useEffect, useMemo, memo, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Album, Song, Playlist, ArtistInfo } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
@@ -107,6 +107,22 @@ export default function ArtistsDetail() {
   const pageBgColor = dominantColors && !solidOnLight
     ? computePageBgColor(dominantColors.primary)
     : null
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    let parent: HTMLElement | null = el.parentElement
+    while (parent) {
+      const ov = window.getComputedStyle(parent).overflowY
+      if (ov === 'auto' || ov === 'scroll') {
+        parent.style.backgroundColor = pageBgColor ?? ''
+        const captured = parent
+        return () => { captured.style.backgroundColor = '' }
+      }
+      parent = parent.parentElement
+    }
+  }, [pageBgColor])
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -234,7 +250,7 @@ export default function ArtistsDetail() {
   const displayedSongs = showAllSongs ? songs : songs.slice(0, 5)
 
   return (
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
+    <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
       <PageHero
         type="artist"
         title={decodedName}

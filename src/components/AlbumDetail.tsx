@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerState, usePlayerActions } from '../contexts/PlayerContext'
@@ -63,6 +63,25 @@ export default function AlbumDetail() {
   const pageBgColor = dominantColors && !solidOnLight
     ? computePageBgColor(dominantColors.primary)
     : null
+
+  // Paint the StackPage scrollable container with the album color so the
+  // background fills the full viewport (including the 200px bottom padding)
+  // without adding any fake scroll height.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    let parent: HTMLElement | null = el.parentElement
+    while (parent) {
+      const ov = window.getComputedStyle(parent).overflowY
+      if (ov === 'auto' || ov === 'scroll') {
+        parent.style.backgroundColor = pageBgColor ?? ''
+        const captured = parent
+        return () => { captured.style.backgroundColor = '' }
+      }
+      parent = parent.parentElement
+    }
+  }, [pageBgColor])
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -201,9 +220,9 @@ export default function AlbumDetail() {
   }
 
   return (
-    // pageBgColor: full-page album-tinted background (Apple Music style).
-    // --bg-base is read by PageHero's color bridge so it fades into this color.
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
+    // --bg-base is read by PageHero's color bridge so it fades into the album color.
+    // backgroundColor is set on the StackPage scrollable container via the ref effect above.
+    <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
       <PageHero
         type="album"
         title={albumInfo.name}
