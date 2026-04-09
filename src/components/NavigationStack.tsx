@@ -96,25 +96,47 @@ const StackPage = memo(function StackPage({
   entry: StackEntry
   onAnimationComplete: (id: string) => void
 }) {
-  const { heroPresent } = useHeroPresence()
+  const { heroPresent, heroCount } = useHeroPresence()
   const { id, location: loc, status } = entry
 
   const pageRef = useRef<HTMLDivElement>(null)
   const animRef = useRef<Animation | null>(null)
   const isAnimating = status === 'entering' || status === 'exiting'
 
-  // ── Per-page hero snapshot ────────────────────────────────────────────────
-  // heroPresent is a global counter: when navigating back, the exiting page's
-  // Hero is still mounted during the ~300ms exit animation, keeping
-  // heroPresent=true. When the animation finishes and the hero unmounts,
-  // heroPresent flips to false — changing the active page's padding and causing
-  // a visible flash.
+  // ── Per-page hero baseline ────────────────────────────────────────────────
+  // Problem A (exiting page contamination): when navigating back, the exiting
+  // page's Hero stays mounted for ~300ms. heroPresent stays true, so the
+  // revealed page (no hero) gets p-0 and content starts at the notch.
   //
-  // Fix: snapshot heroPresent at the exact moment THIS page transitions to
-  // 'cached'. On the way back (cached→active) we use the snapshot instead of
-  // the (still-contaminated) global value. The snapshot is only refreshed on
-  // the active/entering → cached transition, never during subsequent re-renders
-  // while the page is hidden.
+  // Problem B (cached page contamination): when GenreDetail is pushed from
+  // AlbumDetail, AlbumDetail's hero is still mounted in the cache. heroPresent=true
+  // globally → GenreDetail's new StackPage (cachedHeroSnapshot=null) falls back
+  // to heroPresent=true → effectiveHero=true → p-0 → content at notch.
+  //
+  // Fix: record heroCount at the exact moment THIS page starts entering
+  // (heroBaseline). A page has its own hero only when heroCount > heroBaseline.
+  // PageHero's incHero runs in useEffect (async, after paint), so baseline
+  // is always captured BEFORE this page's own hero is counted.
+  // useState (not useRef) so setHeroBaseline in useLayoutEffect triggers a
+  // synchronous re-render before the browser paints.
+  const [heroBaseline, setHeroBaseline] = useState<number | null>(null)
+
+  useLayoutEffect(() => {
+    if (status === 'entering' && heroBaseline === null) {
+      setHeroBaseline(heroCount)
+    }
+  }, [status, heroCount, heroBaseline])
+
+  // localHeroPresent: true only when THIS page has its own hero registered.
+  // Excludes heroes from cached pages below and from the exiting page above.
+  const localHeroPresent = heroBaseline !== null
+    ? heroCount > heroBaseline
+    : heroPresent  // safe fallback for pages that start as 'active' (initial load)
+
+  // ── Per-page cached snapshot ──────────────────────────────────────────────
+  // Snapshot localHeroPresent at the moment this page becomes cached so that
+  // back-navigation reveals the correct padding even while the exiting page's
+  // hero is still mounted.
   const cachedHeroSnapshot = useRef<boolean | null>(null)
   const prevStatusRef = useRef<PageStatus>(status)
 
@@ -122,23 +144,14 @@ const StackPage = memo(function StackPage({
     const prevStatus = prevStatusRef.current
     prevStatusRef.current = status
     if (status === 'cached' && prevStatus !== 'cached') {
-      cachedHeroSnapshot.current = heroPresent
+      cachedHeroSnapshot.current = localHeroPresent
     }
-  }, [status, heroPresent])
+  }, [status, localHeroPresent])
 
-  // Use snapshot whenever it exists and the page is cached or active (came back from cache).
-  // This covers two failure modes:
-  //   1. While cached: heroPresent flips true (another page's hero mounts), shrinking
-  //      this page's content height → browser clamps scrollTop → user lands a few px
-  //      above their previous position on back-navigation.
-  //   2. On POP (cached→active): exiting page's hero is still mounted, heroPresent still
-  //      true → wrong padding visible for the duration of the exit animation (~300ms).
-  // The snapshot is frozen on the active/entering→cached transition (see useLayoutEffect
-  // above), so it accurately reflects THIS page's own hero state.
   const effectiveHero =
     cachedHeroSnapshot.current !== null && (status === 'cached' || status === 'active')
       ? cachedHeroSnapshot.current
-      : heroPresent
+      : localHeroPresent
 
   // On native, non-root pages show the back button (bottom edge at safe-area + 48px).
   // Increase top padding to clear it; root tabs hide the button so +12px is fine there.

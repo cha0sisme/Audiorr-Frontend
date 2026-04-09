@@ -2,6 +2,7 @@ import { createContext, useContext, useCallback, useRef, useSyncExternalStore, R
 
 interface HeroPresenceContextType {
   heroPresent: boolean
+  heroCount: number
   incHero: () => void
   decHero: () => void
 }
@@ -18,8 +19,10 @@ export function HeroPresenceProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const getSnapshot = useCallback(() => countRef.current > 0, [])
+  const getCountSnapshot = useCallback(() => countRef.current, [])
 
   const heroPresent = useSyncExternalStore(subscribe, getSnapshot)
+  const heroCount = useSyncExternalStore(subscribe, getCountSnapshot)
 
   const notify = useCallback(() => {
     listenersRef.current.forEach(cb => cb())
@@ -29,7 +32,7 @@ export function HeroPresenceProvider({ children }: { children: ReactNode }) {
   const decHero = useCallback(() => { countRef.current = Math.max(0, countRef.current - 1); notify() }, [notify])
 
   return (
-    <HeroPresenceContext.Provider value={{ heroPresent, incHero, decHero }}>
+    <HeroPresenceContext.Provider value={{ heroPresent, heroCount, incHero, decHero }}>
       {children}
     </HeroPresenceContext.Provider>
   )
