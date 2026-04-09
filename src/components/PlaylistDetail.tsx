@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { springPress } from '../utils/springPress'
 import { createPortal } from 'react-dom'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
@@ -539,7 +540,8 @@ export default function PlaylistDetail() {
                   <button
                     onClick={handleSmartMixClick}
                     disabled={isSmartMixPlaying || (isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing')}
-                    className={`group inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none active:scale-[0.98] ${
+                    {...springPress}
+                    className={`group inline-flex h-11 items-center justify-center gap-2 rounded-full px-4 text-sm font-semibold transition-all duration-200 focus:outline-none select-none ${
                       isSmartMixPlaying
                         ? 'smartmix-playing-btn text-gray-900 dark:text-white'
                         : isCurrentPlaylistSmartMixed && smartMixStatus === 'analyzing'
@@ -597,7 +599,8 @@ export default function PlaylistDetail() {
                         comment: displayPlaylist?.comment,
                       })
                     }
-                    className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full select-none active:scale-95 transition-transform focus:outline-none ${
+                    {...springPress}
+                    className={`flex-shrink-0 flex h-11 w-11 items-center justify-center rounded-full select-none focus:outline-none ${
                       accentButtonStyle ? 'border-none shadow-md' : 'text-white bg-white/[.15] border border-white/20'
                     }`}
                     style={{

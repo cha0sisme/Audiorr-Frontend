@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react'
+import { springPress } from '../utils/springPress'
 import { PlayIcon } from '@heroicons/react/24/solid'
 import UniversalCover from './UniversalCover'
 import { useLocation } from 'react-router-dom'
@@ -333,7 +334,8 @@ export default function PageHero({
             {onPlay && (
               <button
                 onClick={onPlay}
-                className={`hidden sm:flex p-2.5 items-center justify-center rounded-full ${isRemote ? 'bg-green-500 hover:bg-green-400' : 'bg-blue-500 dark:bg-gray-700 hover:bg-blue-400 dark:hover:bg-gray-600'} text-white shadow-sm transition pointer-events-auto active:scale-95`}
+                {...springPress}
+                className={`hidden sm:flex p-2.5 items-center justify-center rounded-full ${isRemote ? 'bg-green-500 hover:bg-green-400' : 'bg-blue-500 dark:bg-gray-700 hover:bg-blue-400 dark:hover:bg-gray-600'} text-white shadow-sm transition pointer-events-auto`}
                 aria-label={isPlaying ? "Pausar" : "Reproducir"}
               >
                 {isPlaying ? (
@@ -438,7 +440,8 @@ export default function PageHero({
                 {onPlay && (
                   <button
                     onClick={onPlay}
-                    className={`flex-shrink-0 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-transform focus:outline-none select-none ${widePlayButton ? 'h-11 px-6 gap-2' : 'w-12 h-12'}`}
+                    {...springPress}
+                    className={`flex-shrink-0 rounded-full flex items-center justify-center shadow-lg focus:outline-none select-none ${widePlayButton ? 'h-11 px-6 gap-2' : 'w-12 h-12'}`}
                     style={{ backgroundColor: buttonColors.bg, color: buttonColors.text }}
                     aria-label={isPlaying ? 'Pausar' : 'Reproducir'}
                   >
