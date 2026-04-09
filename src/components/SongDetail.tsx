@@ -21,13 +21,6 @@ function computePageBgColor(hex: string): string {
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
-function getLuminance(hex: string): number {
-  if (!hex.startsWith('#') || hex.length < 7) return 128
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return r * 0.299 + g * 0.587 + b * 0.114
-}
 
 export default function SongDetail() {
   const { id } = useParams<{ id: string }>()
@@ -50,8 +43,7 @@ export default function SongDetail() {
 
   const dominantColors = useDominantColors(coverImageUrl)
 
-  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
-  const pageBgColor = dominantColors && !solidOnLight
+  const pageBgColor = dominantColors
     ? computePageBgColor(dominantColors.primary)
     : null
 
@@ -326,7 +318,7 @@ export default function SongDetail() {
         />
 
         {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
-          <div className="mt-6 pt-2 text-xs text-gray-400 dark:text-gray-500">
+          <div className={`mt-6 pt-2 text-xs ${pageBgColor ? 'text-white/35' : 'text-gray-400 dark:text-gray-500'}`}>
             ©{' '}
             {albumInfo.originalReleaseDate?.year ||
               albumInfo.year ||
@@ -338,7 +330,7 @@ export default function SongDetail() {
 
         {/* --- Sección de Canciones Similares --- */}
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
+          <h2 className={`text-2xl font-bold mb-6 ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>
             Canciones Similares
           </h2>
           {loadingSimilar && (
@@ -347,7 +339,7 @@ export default function SongDetail() {
             </div>
           )}
           {!loadingSimilar && similarSongs.length === 0 && (
-            <p className="text-center py-8 text-gray-500 dark:text-gray-400">
+            <p className={`text-center py-8 ${pageBgColor ? 'text-white/50' : 'text-gray-500 dark:text-gray-400'}`}>
               No se encontraron canciones similares en tu biblioteca.
             </p>
           )}

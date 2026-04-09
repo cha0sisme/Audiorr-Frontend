@@ -31,13 +31,7 @@ function computePageBgColor(hex: string): string {
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
-function getLuminance(hex: string): number {
-  if (!hex.startsWith('#') || hex.length < 7) return 128
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return r * 0.299 + g * 0.587 + b * 0.114
-}
+
 import { API_BASE_URL } from '../services/backendApi'
 import { useConnect } from '../hooks/useConnect'
 import { useBackendAvailable } from '../contexts/BackendAvailableContext'
@@ -161,8 +155,7 @@ export default function PlaylistDetail() {
 
   const dominantColors = useDominantColors(activeCoverUrl)
 
-  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
-  const pageBgColor = dominantColors && !solidOnLight
+  const pageBgColor = dominantColors
     ? computePageBgColor(dominantColors.primary)
     : null
 
