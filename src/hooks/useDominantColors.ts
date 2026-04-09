@@ -12,6 +12,12 @@ interface ColorPalette {
 
 type BucketEntry = { count: number; sumR: number; sumG: number; sumB: number }
 
+// Module-level palette cache: imageUrl → final ColorPalette.
+// Survives re-renders and page-stack navigations (cached pages, back nav).
+// On a cache hit the useState initializer returns the palette synchronously,
+// so PageHero renders with the correct colors on the very first paint — no flash.
+const paletteCache = new Map<string, ColorPalette>()
+
 /**
  * Detects whether an image has a solid flat background color.
  *
@@ -207,11 +213,22 @@ function extractCanvasPalette(
 
 /**
  * Hook to extract dominant colors from an image.
- * Runs canvas analysis and backend extraction in parallel.
- * Canvas analysis also detects flat/solid-color albums (isSolid flag).
+ *
+ * Two-stage pipeline:
+ *   Stage 1 — Canvas (local, fast): loads the image into an offscreen canvas,
+ *     runs solid-color detection + palette extraction, and calls setColors
+ *     immediately — no network wait.
+ *   Stage 2 — Backend (higher quality): the HTTP request runs in parallel;
+ *     when it arrives it overwrites the canvas palette and the result is cached.
+ *
+ * Module-level paletteCache: on a cache hit the useState initializer returns
+ * the palette synchronously so there is zero flash on revisits (back navigation,
+ * tab switching back to a page, etc.).
  */
 export function useDominantColors(imageUrl: string | null): ColorPalette | null {
-  const [colors, setColors] = useState<ColorPalette | null>(null)
+  const [colors, setColors] = useState<ColorPalette | null>(() =>
+    imageUrl ? (paletteCache.get(imageUrl) ?? null) : null
+  )
 
   useEffect(() => {
     if (!imageUrl) {
@@ -219,11 +236,22 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
       return
     }
 
+    // Synchronous cache hit — nothing to do, useState initializer already set it.
+    const cached = paletteCache.get(imageUrl)
+    if (cached) {
+      setColors(cached)
+      return
+    }
+
+    let cancelled = false
+
     const extractColors = async () => {
       try {
-        // Load image into canvas for solid detection + fallback palette extraction.
-        // Runs in parallel with the backend request.
-        const canvasPromise = new Promise<{
+        // Kick off backend request immediately (runs in parallel with canvas).
+        const backendPromise = backendApi.extractImageColors(imageUrl).catch(() => null)
+
+        // Stage 1: canvas analysis — resolves as soon as the image is decoded.
+        const canvasResult = await new Promise<{
           data: Uint8ClampedArray
           width: number
           height: number
@@ -250,9 +278,7 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
           img.src = imageUrl
         })
 
-        const backendPromise = backendApi.extractImageColors(imageUrl).catch(() => null)
-
-        const [canvasResult, backendColors] = await Promise.all([canvasPromise, backendPromise])
+        if (cancelled) return
 
         let isSolid = false
         let solidColor: string | null = null
@@ -264,21 +290,27 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
           isSolid = solidResult.isSolid
           solidColor = solidResult.solidColor
           accentColor = solidResult.accentColor
-
-          if (!backendColors) {
-            canvasPalette = extractCanvasPalette(canvasResult.data, canvasResult.width, canvasResult.height)
-          }
+          canvasPalette = extractCanvasPalette(canvasResult.data, canvasResult.width, canvasResult.height)
         }
+
+        // Emit canvas colors immediately — no backend wait.
+        if (canvasPalette && !cancelled) {
+          const primary = isSolid && solidColor ? solidColor : canvasPalette.primary
+          const accent  = isSolid && accentColor ? accentColor : canvasPalette.accent
+          setColors({ ...canvasPalette, primary, accent, isSolid })
+        }
+
+        // Stage 2: refine with backend palette (better quality) when it arrives.
+        const backendColors = await backendPromise
+        if (cancelled) return
 
         const palette = backendColors ?? canvasPalette
         if (palette) {
-          // When solid:
-          //   primary  → exact background color (dominant bucket)
-          //   accent   → most vibrant non-background color found (e.g. red on Motomami's white)
-          //              falls back to palette.accent if no vivid secondary color was detected
           const primary = isSolid && solidColor ? solidColor : palette.primary
-          const accent = isSolid && accentColor ? accentColor : palette.accent
-          setColors({ ...palette, primary, accent, isSolid })
+          const accent  = isSolid && accentColor ? accentColor : palette.accent
+          const final: ColorPalette = { ...palette, primary, accent, isSolid }
+          setColors(final)
+          paletteCache.set(imageUrl, final)
         }
       } catch (error) {
         console.error('Error extracting colors:', error)
@@ -287,6 +319,7 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
     }
 
     extractColors()
+    return () => { cancelled = true }
   }, [imageUrl])
 
   return colors

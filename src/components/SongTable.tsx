@@ -152,7 +152,7 @@ const SongRow = memo(({
         )}
         <div className="min-w-0">
           <p
-            className={`truncate text-sm md:text-base font-semibold leading-tight ${
+            className={`truncate text-base md:text-[17px] font-semibold leading-tight ${
               isPlaying && !safeAccent ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'
             }`}
             style={isPlaying && safeAccent ? { color: safeAccent } : undefined}
@@ -163,18 +163,13 @@ const SongRow = memo(({
             <div className="flex items-center gap-1 mt-0.5">
               <ArtistLinks
                 artists={song.artist}
-                className={`text-xs md:text-sm leading-tight ${
+                className={`text-sm leading-tight ${
                   isPlaying && !accentColor
                     ? 'text-blue-500/80 hover:text-blue-500 dark:text-blue-400/80 dark:hover:text-blue-400'
                     : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                 }`}
               />
             </div>
-          )}
-          {!showArtist && !showAlbum && (
-             <p className="text-xs md:text-sm text-gray-500 dark:text-gray-400 truncate mt-0.5">
-               {song.album}
-             </p>
           )}
         </div>
       </div>
@@ -185,19 +180,19 @@ const SongRow = memo(({
           {song.albumId ? (
             <Link
               to={`/albums/${song.albumId}`}
-              className="truncate text-xs md:text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+              className="truncate text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
               onClick={(e) => e.stopPropagation()}
             >
               {song.album || 'Sin álbum'}
             </Link>
           ) : (
-            <span className="truncate text-xs md:text-sm text-gray-500 dark:text-gray-400">{song.album || 'Sin álbum'}</span>
+            <span className="truncate text-sm text-gray-500 dark:text-gray-400">{song.album || 'Sin álbum'}</span>
           )}
         </div>
       )}
 
       {/* Duration + three-dots (mobile) */}
-      <div className="flex items-center justify-end gap-1.5 text-xs md:text-sm tabular-nums text-gray-400 dark:text-gray-500">
+      <div className="flex items-center justify-end gap-1.5 text-sm tabular-nums text-gray-400 dark:text-gray-500">
         {`${Math.floor(song.duration / 60)}:${String(song.duration % 60).padStart(2, '0')}`}
         <button
           className="md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 touch-manipulation transition-colors"
@@ -250,21 +245,6 @@ export function SongTable({
 
   return (
     <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`}>
-      {/* Column header */}
-      <div className={`grid items-center gap-2 md:gap-3 px-3 md:px-4 py-2 border-b border-gray-100 dark:border-white/5
-        ${gridTemplate}
-        text-[10px] md:text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500`}>
-        {showIndex && <span className="text-center">#</span>}
-        <span>Título</span>
-        {showAlbum && <span className="hidden md:block">Álbum</span>}
-        <span className="flex items-center justify-end gap-1.5">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 md:w-4 md:h-4">
-            <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm.75-13a.75.75 0 0 0-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 0 0 0-1.5h-3.25V5Z" clipRule="evenodd" />
-          </svg>
-          {/* spacer matching the mobile 3-dots button so clock aligns with duration */}
-          <span className="md:hidden w-7 flex-shrink-0" />
-        </span>
-      </div>
       <div className="divide-y divide-gray-100/80 dark:divide-white/[0.04]">
         {songs.map((song, index) => (
           <SongRow

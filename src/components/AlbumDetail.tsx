@@ -195,23 +195,23 @@ export default function AlbumDetail() {
                 className="text-lg md:text-xl text-[var(--hero-text-muted)] hover:text-[var(--hero-text)] transition-colors inline-block font-semibold"
               />
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-2 md:gap-x-3 gap-y-1 text-xs md:text-base text-[var(--hero-text-muted)]">
+            <div className="mt-4 flex flex-wrap items-center justify-center md:justify-start gap-x-1 gap-y-1 text-xs md:text-base text-[var(--hero-text-muted)]">
               {formatDate(albumInfo.originalReleaseDate) && (
                 <>
                   <span className="whitespace-nowrap">{formatDate(albumInfo.originalReleaseDate)}</span>
-                  {albumInfo.genre && <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>}
+                  {albumInfo.genre && <span className="text-[var(--hero-text-dim)] text-[8px]">·</span>}
                 </>
               )}
-                <div className="flex items-center flex-wrap justify-center md:justify-start gap-x-1.5">
+                <div className="flex items-center flex-wrap justify-center md:justify-start gap-x-1">
                   {albumInfo.genre?.split(',').map((g, idx, arr) => (
-                    <span key={g.trim()} className="flex items-center gap-x-1.5">
+                    <span key={g.trim()} className="flex items-center gap-x-1">
                       <Link
                         to={`/genre/${encodeURIComponent(g.trim())}`}
                         className="text-[var(--hero-text-muted)] hover:text-[var(--hero-text)] hover:underline transition-colors cursor-pointer whitespace-nowrap"
                       >
                         {g.trim()}
                       </Link>
-                      {idx < arr.length - 1 && <span className="text-[var(--hero-text-dim)] text-[10px] mx-0.5">•</span>}
+                      {idx < arr.length - 1 && <span className="text-[var(--hero-text-dim)] text-[8px]">·</span>}
                     </span>
                   ))}
                 </div>
@@ -228,6 +228,7 @@ export default function AlbumDetail() {
           onSongDoubleClick={handlePlaySong}
           onSongContextMenu={handleContextMenu}
           showAlbum={false}
+          showArtist={false}
           showCover={false}
           useTrackNumber={true}
           accentColor={dominantColors?.accent}
