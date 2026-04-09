@@ -111,7 +111,7 @@ const SongRow = memo(({
   const safeAccent = accentColor ? ensureAccentContrast(accentColor) : undefined
 
   const playingRowStyle = isPlaying && accentColor
-    ? { backgroundColor: hexToRgba(accentColor, 0.14) }
+    ? { backgroundColor: hexToRgba(accentColor, 0.28) }
     : undefined
 
   return (
@@ -251,7 +251,7 @@ export function SongTable({
       {accentColor && (
         <div
           className="absolute inset-0 pointer-events-none"
-          style={{ backgroundColor: hexToRgba(accentColor, 0.07) }}
+          style={{ backgroundColor: hexToRgba(accentColor, 0.14) }}
         />
       )}
       <div className="relative divide-y divide-gray-100/80 dark:divide-white/[0.04]">
