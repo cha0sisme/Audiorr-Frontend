@@ -234,7 +234,7 @@ export default function ArtistsDetail() {
   const displayedSongs = showAllSongs ? songs : songs.slice(0, 5)
 
   return (
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
       <PageHero
         type="artist"
         title={decodedName}

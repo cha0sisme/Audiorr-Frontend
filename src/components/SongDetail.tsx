@@ -10,6 +10,25 @@ import { useDominantColors } from '../hooks/useDominantColors'
 import { useConnect } from '../hooks/useConnect'
 import { SongTable } from './SongTable'
 
+function computePageBgColor(hex: string): string {
+  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const nr = Math.round(r * 0.30 + 14 * 0.70)
+  const ng = Math.round(g * 0.30 + 14 * 0.70)
+  const nb = Math.round(b * 0.30 + 14 * 0.70)
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+}
+
+function getLuminance(hex: string): number {
+  if (!hex.startsWith('#') || hex.length < 7) return 128
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return r * 0.299 + g * 0.587 + b * 0.114
+}
+
 export default function SongDetail() {
   const { id } = useParams<{ id: string }>()
   const [song, setSong] = useState<Song | null>(null)
@@ -30,6 +49,11 @@ export default function SongDetail() {
   const { isConnected, activeDeviceId, currentDeviceId, remotePlaybackState, sendRemoteCommand } = useConnect()
 
   const dominantColors = useDominantColors(coverImageUrl)
+
+  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
+  const pageBgColor = dominantColors && !solidOnLight
+    ? computePageBgColor(dominantColors.primary)
+    : null
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -210,7 +234,7 @@ export default function SongDetail() {
   }
 
   return (
-    <div>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
       <PageHero
         type="song"
         title={song.title}
@@ -282,6 +306,7 @@ export default function SongDetail() {
           showCover={false}
           showIndex={false}
           accentColor={dominantColors?.accent}
+          immersive={!!pageBgColor}
         />
 
         {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
@@ -321,6 +346,7 @@ export default function SongDetail() {
               showCover={true}
               showIndex={false}
               accentColor={dominantColors?.accent}
+              immersive={!!pageBgColor}
             />
           )}
         </div>

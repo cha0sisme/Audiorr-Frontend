@@ -451,7 +451,7 @@ export default function PlaylistDetail() {
 
 
   return (
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
       {loading && !pinnedFallback ? (
         <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-500 dark:text-gray-400">
           <div className="w-10 h-10 border-2 border-current border-t-transparent rounded-full animate-spin" />

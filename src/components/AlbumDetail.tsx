@@ -203,7 +203,7 @@ export default function AlbumDetail() {
   return (
     // pageBgColor: full-page album-tinted background (Apple Music style).
     // --bg-base is read by PageHero's color bridge so it fades into this color.
-    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor, minHeight: '200vh' } : undefined}>
       <PageHero
         type="album"
         title={albumInfo.name}
