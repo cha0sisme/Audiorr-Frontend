@@ -24,13 +24,6 @@ function computePageBgColor(hex: string): string {
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
-function getLuminance(hex: string): number {
-  if (!hex.startsWith('#') || hex.length < 7) return 128
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return r * 0.299 + g * 0.587 + b * 0.114
-}
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
@@ -48,6 +41,7 @@ export default function AlbumDetail() {
     explicitStatus?: string
   } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [albumNotes, setAlbumNotes] = useState<string | null>(null)
   const [showCoverModal, setShowCoverModal] = useState(false)
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null)
   const playerActions = usePlayerActions()
@@ -57,10 +51,8 @@ export default function AlbumDetail() {
 
   const dominantColors = useDominantColors(coverImageUrl)
 
-  // White/cream solid albums: keep the normal page bg + dark text (no immersive mode).
-  // All other albums: compute a dark tinted bg from the primary color (Apple Music style).
-  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
-  const pageBgColor = dominantColors && !solidOnLight
+
+  const pageBgColor = dominantColors
     ? computePageBgColor(dominantColors.primary)
     : null
 
@@ -158,7 +150,13 @@ export default function AlbumDetail() {
     fetchAlbumSongs()
   }, [id])
 
-
+  useEffect(() => {
+    if (!id) return
+    setAlbumNotes(null)
+    navidromeApi.getAlbumNotes(id).then(notes => {
+      if (notes) setAlbumNotes(notes)
+    })
+  }, [id])
 
   if (loading) {
     return (
@@ -289,6 +287,24 @@ export default function AlbumDetail() {
             © {albumInfo.originalReleaseDate?.year || albumInfo.year || new Date().getFullYear()}{' '}
             {albumInfo.recordLabels.map(label => label.name).join(', ')}
           </div>
+        )}
+
+        {albumNotes && (
+          <section className={`mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500 ${pageBgColor ? 'bg-white/[0.08] border border-white/10' : 'bg-gray-50 dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.08]'}`}>
+            <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-6">
+              Acerca de {albumInfo.name}
+            </h2>
+            <div
+              className="prose prose-sm md:prose-base dark:prose-invert max-w-none text-gray-600 dark:text-gray-300 leading-relaxed font-normal"
+              dangerouslySetInnerHTML={{
+                __html: albumNotes
+                  .replace(/<a[^>]*>.*?Read more on Last\.fm.*?<\/a>/gi, '')
+                  .replace(/Read more on Last\.fm/gi, '')
+                  .replace(/<a[^>]*>(.*?)<\/a>/gi, '<span class="text-blue-500 hover:underline cursor-pointer">$1</span>')
+                  .trim(),
+              }}
+            />
+          </section>
         )}
       </div>
 

@@ -84,7 +84,7 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
 
   if (loading) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-3xl p-8 border border-gray-200 dark:border-gray-700">
+      <div className="bg-white dark:bg-gray-900/40 rounded-3xl p-8 border border-gray-200/80 dark:border-white/5">
         <div className="flex justify-center items-center h-64">
           <Spinner size="lg" />
         </div>
@@ -94,7 +94,7 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
 
   if (error || !stats || stats.total_plays === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-3xl p-8 border border-gray-200 dark:border-gray-700">
+      <div className="bg-white dark:bg-gray-900/40 rounded-3xl p-8 border border-gray-200/80 dark:border-white/5">
       <div className="text-center py-8">
         <MusicalNoteIcon className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4 opacity-20" />
         <p className="text-gray-500 dark:text-gray-400 font-medium">
@@ -198,7 +198,7 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
       {/* Top Canciones y Artistas */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Canciones */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-gray-900/40 rounded-2xl p-6 border border-gray-200/80 dark:border-white/5">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Top Canciones
           </h3>
@@ -206,14 +206,14 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
             {topSongs.map((song, index) => (
               <div
                 key={`${song.title}-${song.artist}-${index}`}
-                className="flex items-center gap-3 group hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-xl p-2 transition-colors"
+                className="flex items-center gap-3 group hover:bg-gray-50 dark:hover:bg-white/[0.05] rounded-xl p-2 transition-colors"
               >
                 <div className="flex-shrink-0 w-8 text-center">
                   <span className="text-lg font-bold text-gray-400 dark:text-gray-500">
                     {index + 1}
                   </span>
                 </div>
-                <div className="w-12 h-12 flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-700 shadow-sm">
+                <div className="w-12 h-12 flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 dark:bg-white/[0.07] shadow-sm">
                   {song.cover_art ? (
                     <img
                       src={navidromeApi.getCoverUrl(song.cover_art)}
@@ -254,7 +254,7 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
         </div>
 
         {/* Top Artistas */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-200 dark:border-gray-700">
+        <div className="bg-white dark:bg-gray-900/40 rounded-2xl p-6 border border-gray-200/80 dark:border-white/5">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Top Artistas
           </h3>
@@ -262,7 +262,7 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
             {topArtists.map((artist, index) => (
               <div
                 key={`${artist.artist}-${index}`}
-                className="flex items-center gap-3 group hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-xl p-2 transition-colors"
+                className="flex items-center gap-3 group hover:bg-gray-50 dark:hover:bg-white/[0.05] rounded-xl p-2 transition-colors"
               >
                 <div className="flex-shrink-0 w-8 text-center">
                   <span className="text-lg font-bold text-gray-400 dark:text-gray-500">
@@ -305,7 +305,7 @@ const PlaylistCard = ({ playlist, onClick }: { playlist: Playlist; onClick: () =
       onClick={onClick}
       className="group w-full text-left transition-all duration-300 relative"
     >
-      <div className="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 relative">
+      <div className="bg-gray-50 dark:bg-white/[0.04] rounded-2xl overflow-hidden border border-gray-200/50 dark:border-white/[0.06] relative">
         <PlaylistCover
           playlistId={playlist.id}
           name={playlist.name}

@@ -552,6 +552,7 @@ export default function NowPlayingViewer({
                       className="w-full max-w-[420px] aspect-square rounded-[22px] overflow-hidden"
                       style={{
                         boxShadow: '0 36px 90px -8px rgba(0,0,0,0.72), 0 12px 32px -4px rgba(0,0,0,0.45)',
+                        willChange: 'transform',
                       }}
                     >
                       <AlbumCover

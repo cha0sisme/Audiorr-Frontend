@@ -49,14 +49,14 @@ export function ArtistLinks({ artists, className = '', maxArtists }: ArtistLinks
             {artist}
           </Link>
           {index < displayedArtists.length - 1 && (
-            <span className="text-gray-500 dark:text-gray-400">, </span>
+            <span className="opacity-50">, </span>
           )}
         </span>
       ))}
       {shouldTruncate && remainingCount > 0 && (
-        <span className="text-gray-500 dark:text-gray-400">
+        <span className="opacity-50">
           {' '}
-          y {remainingCount} {remainingCount === 1 ? 'más' : 'más'}
+          y {remainingCount} más
         </span>
       )}
     </span>

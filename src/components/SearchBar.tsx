@@ -236,7 +236,7 @@ export default function SearchBar() {
           onChange={e => setQuery(e.target.value)}
           onFocus={handleFocus}
           placeholder="Buscar artistas, álbumes, canciones..."
-          className="w-full pl-10 pr-10 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-2xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent transition-all"
+          className="w-full pl-10 pr-10 py-2 bg-white dark:bg-white/[0.07] border border-gray-300/80 dark:border-white/10 rounded-2xl text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-white/20 focus:border-transparent transition-all"
         />
         {query && (
           <button
@@ -252,7 +252,7 @@ export default function SearchBar() {
       {/* Dropdown de historial */}
       {showHistory && searchHistory.length > 0 && !query.trim() && (
         <div
-          className="absolute top-full mt-2 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl z-50 max-h-96 overflow-y-auto"
+          className="absolute top-full mt-2 w-full bg-white dark:bg-gray-900/95 border border-gray-200/50 dark:border-white/[0.08] rounded-2xl shadow-xl z-50 max-h-96 overflow-y-auto backdrop-blur-md"
           style={{ animation: 'fadeIn 0.2s ease-in-out forwards' }}
         >
           <div className="p-2">
@@ -263,7 +263,7 @@ export default function SearchBar() {
             {searchHistory.map((historyItem, index) => (
               <div
                 key={index}
-                className="w-full px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-3 group"
+                className="w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-white/[0.06] rounded-xl transition-colors flex items-center gap-3 group"
               >
                 <button
                   onClick={() => handleHistoryClick(historyItem)}
@@ -299,7 +299,7 @@ export default function SearchBar() {
       {/* Dropdown de resultados */}
       {isOpen && (hasResults || isSearching) && (
         <div
-          className="absolute top-full mt-2 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl z-50 max-h-96 overflow-y-auto"
+          className="absolute top-full mt-2 w-full bg-white dark:bg-gray-900/95 border border-gray-200/50 dark:border-white/[0.08] rounded-2xl shadow-xl z-50 max-h-96 overflow-y-auto backdrop-blur-md"
           style={{ animation: 'fadeIn 0.2s ease-in-out forwards' }}
         >
           {isSearching ? (
@@ -320,9 +320,9 @@ export default function SearchBar() {
                       <button
                         key={artist.id}
                         onClick={() => handleArtistClick(artist.name)}
-                        className="w-full px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-3 group"
+                        className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] rounded-xl transition-colors flex items-center gap-3 group"
                       >
-                        <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-400 group-hover:bg-gray-300 dark:group-hover:bg-gray-600 transition-colors overflow-hidden flex-shrink-0">
+                        <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-white/[0.08] flex items-center justify-center text-gray-600 dark:text-gray-400 group-hover:bg-gray-300 dark:group-hover:bg-white/[0.12] transition-colors overflow-hidden flex-shrink-0">
                           {shouldShowImage ? (
                             <img
                               src={avatarUrl}
@@ -352,7 +352,7 @@ export default function SearchBar() {
 
               {/* Álbumes */}
               {results.albums.length > 0 && (
-                <div className="p-2 border-t border-gray-200 dark:border-gray-700">
+                <div className="p-2 border-t border-gray-100/80 dark:border-white/[0.05]">
                   <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                     Álbumes
                   </div>
@@ -360,9 +360,9 @@ export default function SearchBar() {
                     <button
                       key={album.id}
                       onClick={() => handleAlbumClick(album.id)}
-                      className="w-full px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-3 group"
+                      className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] rounded-xl transition-colors flex items-center gap-3 group"
                     >
-                      <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-700 flex-shrink-0 overflow-hidden">
+                      <div className="w-10 h-10 rounded bg-gray-200 dark:bg-white/[0.08] flex-shrink-0 overflow-hidden">
                         {album.coverArt ? (
                           <img
                             src={navidromeApi.getCoverUrl(album.coverArt)}
@@ -385,7 +385,7 @@ export default function SearchBar() {
                           {album.artist}
                         </div>
                       </div>
-                      <div className="text-xs text-gray-400 dark:text-gray-500 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">
+                      <div className="text-xs text-gray-400 dark:text-gray-500 px-2 py-1 bg-gray-100 dark:bg-white/[0.06] rounded">
                         Álbum
                       </div>
                     </button>
@@ -395,7 +395,7 @@ export default function SearchBar() {
 
               {/* Canciones */}
               {results.songs.length > 0 && (
-                <div className="p-2 border-t border-gray-200 dark:border-gray-700">
+                <div className="p-2 border-t border-gray-100/80 dark:border-white/[0.05]">
                   <div className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                     Canciones
                   </div>
@@ -403,9 +403,9 @@ export default function SearchBar() {
                     <button
                       key={song.id}
                       onClick={() => handleSongClick(song)}
-                      className="w-full px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors flex items-center gap-3 group"
+                      className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] rounded-xl transition-colors flex items-center gap-3 group"
                     >
-                      <div className="w-10 h-10 rounded bg-gray-200 dark:bg-gray-700 flex-shrink-0 overflow-hidden">
+                      <div className="w-10 h-10 rounded bg-gray-200 dark:bg-white/[0.08] flex-shrink-0 overflow-hidden">
                         {song.coverArt ? (
                           <img
                             src={navidromeApi.getCoverUrl(song.coverArt)}
@@ -428,7 +428,7 @@ export default function SearchBar() {
                           {song.artist} • {song.album}
                         </div>
                       </div>
-                      <div className="text-xs text-gray-400 dark:text-gray-500 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">
+                      <div className="text-xs text-gray-400 dark:text-gray-500 px-2 py-1 bg-gray-100 dark:bg-white/[0.06] rounded">
                         Canción
                       </div>
                     </button>

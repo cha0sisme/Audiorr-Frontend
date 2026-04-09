@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, memo, useCallback, useRef } from 'react'
+import { useState, useEffect, memo, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Album, Song, Playlist, ArtistInfo } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
@@ -15,13 +15,7 @@ function computePageBgColor(hex: string): string {
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
-function getLuminance(hex: string): number {
-  if (!hex.startsWith('#') || hex.length < 7) return 128
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return r * 0.299 + g * 0.587 + b * 0.114
-}
+
 import { useContextMenu } from '../hooks/useContextMenu'
 import { useConnect } from '../hooks/useConnect'
 import SongContextMenu from './SongContextMenu'
@@ -33,15 +27,15 @@ import UniversalCover from './UniversalCover'
 import { PlaylistCover } from './PlaylistCover'
 import PageHero from './PageHero'
 
-const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
+const ArtistPlaylistItem = memo(({ playlist, immersive = false }: { playlist: Playlist; immersive?: boolean }) => {
   const isEditorial = playlist.comment?.includes('[Editorial]')
   const isSpotify = playlist.name.startsWith('[Spotify] ') || playlist.comment?.includes('Spotify Synced')
-  
+
   return (
     <Link
       to={`/playlists/${playlist.id}`}
       state={{ playlist }}
-      className="group bg-gray-50 dark:bg-white/[0.04] rounded-2xl border border-gray-200/50 dark:border-white/[0.06] overflow-hidden hover:bg-white dark:hover:bg-white/[0.07] transition-all duration-300 relative block"
+      className={`group rounded-2xl border overflow-hidden transition-all duration-300 relative block ${immersive ? 'bg-white/[0.08] border-white/10 hover:bg-white/[0.13]' : 'bg-gray-50 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] hover:bg-white dark:hover:bg-white/[0.07]'}`}
     >
       <div className="relative aspect-square active:scale-95 transition-transform duration-150">
         <PlaylistCover
@@ -49,6 +43,7 @@ const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
           name={playlist.name}
           className="w-full h-full object-cover"
           rounded={false}
+          fallbackUrl={navidromeApi.getCoverUrl(playlist.coverArt)}
         />
         <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
           {isSpotify && (
@@ -67,12 +62,12 @@ const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
       </div>
       <div className="p-3">
         <h3
-          className="font-sans font-bold text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-500 transition-colors"
+          className={`font-sans font-bold text-sm truncate group-hover:text-blue-400 transition-colors ${immersive ? 'text-white' : 'text-gray-900 dark:text-gray-100'}`}
           title={playlist.name.replace('[Spotify] ', '')}
         >
           {playlist.name.replace('[Spotify] ', '')}
         </h3>
-        <p className="font-sans text-[10px] uppercase tracking-wider font-medium text-gray-500 dark:text-gray-400 mt-1">
+        <p className={`font-sans text-[10px] uppercase tracking-wider font-medium mt-1 ${immersive ? 'text-white/50' : 'text-gray-500 dark:text-gray-400'}`}>
           {playlist.songCount} {playlist.songCount === 1 ? 'canción' : 'canciones'}
         </p>
       </div>
@@ -103,8 +98,7 @@ export default function ArtistsDetail() {
 
   const dominantColors = useDominantColors(artistImage)
 
-  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
-  const pageBgColor = dominantColors && !solidOnLight
+  const pageBgColor = dominantColors
     ? computePageBgColor(dominantColors.primary)
     : null
 
@@ -146,14 +140,6 @@ export default function ArtistsDetail() {
     }
   }, [isThisArtistPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, songs, name])
 
-  const biographyBgStyle = useMemo(() => {
-    if (!dominantColors) return {}
-    const { primary, secondary } = dominantColors
-    return {
-      background: `linear-gradient(140deg, ${primary}05 0%, ${secondary}08 100%)`,
-      border: `1px solid ${primary}10`,
-    }
-  }, [dominantColors])
 
   useEffect(() => {
     const fetchCriticalData = async () => {
@@ -294,11 +280,11 @@ export default function ArtistsDetail() {
         ) : songs.length > 0 && (
           <section>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Populares</h2>
+              <h2 className={`text-2xl font-bold ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>Populares</h2>
               {songs.length > 5 && (
                 <button
                   onClick={() => setShowAllSongs(!showAllSongs)}
-                  className="text-sm font-semibold text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90 transition-colors"
+                  className={`text-sm font-semibold transition-colors ${pageBgColor ? 'text-white/50 hover:text-white/90' : 'text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90'}`}
                 >
                   {showAllSongs ? 'Ver menos' : 'Ver más'}
                 </button>
@@ -322,10 +308,10 @@ export default function ArtistsDetail() {
         {albums.length > 0 && (
           <section>
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Álbumes</h2>
+              <h2 className={`text-2xl font-bold ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>Álbumes</h2>
               <button
                 onClick={() => setShowAllAlbums(!showAllAlbums)}
-                className="text-sm font-semibold text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90 transition-colors"
+                className={`text-sm font-semibold transition-colors ${pageBgColor ? 'text-white/50 hover:text-white/90' : 'text-gray-500 hover:text-gray-800 dark:text-white/50 dark:hover:text-white/90'}`}
               >
                 {showAllAlbums ? 'Ver menos' : 'Ver más'}
               </button>
@@ -335,7 +321,7 @@ export default function ArtistsDetail() {
               <HorizontalScrollSection>
                 {albums.map(album => (
                   <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                    <AlbumCard album={album} showPlayButton={true} />
+                    <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor} />
                   </div>
                 ))}
               </HorizontalScrollSection>
@@ -351,11 +337,11 @@ export default function ArtistsDetail() {
 
         {collaborations.length > 0 && (
           <section>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Aparece en</h2>
+            <h2 className={`text-2xl font-bold mb-6 ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>Aparece en</h2>
             <HorizontalScrollSection>
               {collaborations.map(album => (
                 <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                  <AlbumCard album={album} showPlayButton={true} />
+                  <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor} />
                 </div>
               ))}
             </HorizontalScrollSection>
@@ -364,18 +350,19 @@ export default function ArtistsDetail() {
 
         {!playlistsLoading && playlists.length > 0 && (
           <section>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Playlists con {decodedName}</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 md:gap-6">
+            <HorizontalScrollSection title={`Playlists con ${decodedName}`} immersive={!!pageBgColor}>
               {playlists.map(playlist => (
-                <ArtistPlaylistItem key={playlist.id} playlist={playlist} />
+                <div key={playlist.id} className="flex-shrink-0 w-36 md:w-44">
+                  <ArtistPlaylistItem playlist={playlist} immersive={!!pageBgColor} />
+                </div>
               ))}
-            </div>
+            </HorizontalScrollSection>
           </section>
         )}
 
         {artistInfo && artistInfo.similarArtists.length > 0 && (
           <section>
-            <HorizontalScrollSection title="Fans también escuchan">
+            <HorizontalScrollSection title="Fans también escuchan" immersive={!!pageBgColor}>
               {artistInfo.similarArtists.slice(0, 15).map(artist => (
                 <Link
                   key={artist.id}
@@ -385,7 +372,7 @@ export default function ArtistsDetail() {
                   <div className="w-32 h-32 mx-auto mb-3 active:scale-95 transition-transform duration-150">
                     <UniversalCover type="artist" artistName={artist.name} context="grid" />
                   </div>
-                  <p className="font-bold text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-500 transition-colors text-sm">
+                  <p className={`font-bold truncate group-hover:text-blue-400 transition-colors text-sm ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-gray-100'}`}>
                     {artist.name}
                   </p>
                 </Link>
@@ -395,12 +382,12 @@ export default function ArtistsDetail() {
         )}
 
         {artistInfo?.biography && (
-          <section className="mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500" style={biographyBgStyle}>
-            <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white mb-6">
+          <section className={`mt-12 rounded-3xl p-6 md:p-10 transition-all duration-500 ${pageBgColor ? 'bg-white/[0.08] border border-white/10' : 'bg-gray-50 dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.08]'}`}>
+            <h2 className={`text-2xl font-extrabold mb-6 ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>
               Acerca de {decodedName}
             </h2>
-            <div 
-              className="prose prose-sm md:prose-base dark:prose-invert max-w-none text-gray-600 dark:text-gray-300 leading-relaxed font-normal"
+            <div
+              className={`prose prose-sm md:prose-base max-w-none leading-relaxed font-normal ${pageBgColor ? 'prose-invert text-white/70' : 'dark:prose-invert text-gray-600 dark:text-gray-300'}`}
               dangerouslySetInnerHTML={{ 
                 __html: artistInfo.biography
                   .replace(/<a[^>]*>.*?Read more on Last\.fm.*?<\/a>/gi, '')

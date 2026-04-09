@@ -135,7 +135,7 @@ export default function SearchPage() {
       </h1>
 
       {/* Search bar estilo UISearchBar nativa */}
-      <div className="sticky top-0 pb-4 bg-gray-100 dark:bg-gray-800 z-10">
+      <div className="sticky top-0 pb-4 bg-gray-100 dark:bg-gray-900 z-10">
         <div className="relative">
           <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-[17px] w-[17px] text-gray-500 dark:text-gray-400 pointer-events-none" />
           <input
@@ -149,7 +149,7 @@ export default function SearchPage() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Artistas, álbumes, canciones..."
-            className="w-full pl-9 pr-9 py-[8px] bg-[rgba(118,118,128,0.12)] dark:bg-[rgba(118,118,128,0.24)] rounded-[10px] text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-500 focus:outline-none text-[17px]"
+            className="w-full pl-9 pr-9 py-[8px] bg-[rgba(118,118,128,0.12)] dark:bg-[rgba(118,118,128,0.24)] rounded-[10px] text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none text-[17px]"
           />
           {query && (
             <button
@@ -169,7 +169,7 @@ export default function SearchPage() {
           <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
             Búsquedas recientes
           </p>
-          <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+          <div className="bg-white dark:bg-gray-900/40 rounded-2xl overflow-hidden border border-gray-200/80 dark:border-white/5 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
             {searchHistory.map((item, i) => (
               <div key={i} className="flex items-center group">
                 <button
@@ -195,13 +195,13 @@ export default function SearchPage() {
       {/* Buscando… */}
       {isSearching && (
         <div className="flex justify-center py-12">
-          <div className="w-6 h-6 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+          <div className="w-6 h-6 border-2 border-gray-300 dark:border-gray-600 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin" />
         </div>
       )}
 
       {/* Sin resultados */}
       {showEmpty && (
-        <div className="flex flex-col items-center py-16 text-gray-400 dark:text-gray-500">
+        <div className="flex flex-col items-center py-16 text-gray-400 dark:text-gray-400">
           <MagnifyingGlassIcon className="w-14 h-14 mb-4 opacity-40" />
           <p className="text-base">Sin resultados para «{query}»</p>
         </div>
@@ -216,7 +216,7 @@ export default function SearchPage() {
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
                 Artistas
               </p>
-              <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+              <div className="bg-white dark:bg-gray-900/40 rounded-2xl overflow-hidden border border-gray-200/80 dark:border-white/5 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
                 {results.artists.map(artist => {
                   const av = artistAvatars.get(artist.id)
                   const failed = failedAvatars.has(artist.id)
@@ -224,9 +224,9 @@ export default function SearchPage() {
                     <button
                       key={artist.id}
                       onClick={() => goArtist(artist.name)}
-                      className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                      className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-colors"
                     >
-                      <div className="w-11 h-11 rounded-full overflow-hidden bg-gray-200 dark:bg-gray-600 flex-shrink-0 flex items-center justify-center text-gray-400">
+                      <div className="w-11 h-11 rounded-full overflow-hidden bg-gray-200 dark:bg-white/[0.08] flex-shrink-0 flex items-center justify-center text-gray-400">
                         {av && !failed ? (
                           <img src={av} alt={artist.name} className="w-full h-full object-cover" onError={() => setFailedAvatars(p => new Set(p).add(artist.id))} />
                         ) : (
@@ -252,12 +252,12 @@ export default function SearchPage() {
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
                 Álbumes
               </p>
-              <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+              <div className="bg-white dark:bg-gray-900/40 rounded-2xl overflow-hidden border border-gray-200/80 dark:border-white/5 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
                 {results.albums.map(album => (
                   <button
                     key={album.id}
                     onClick={() => goAlbum(album.id)}
-                    className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                    className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-colors"
                   >
                     <div className="w-11 h-11 rounded-lg overflow-hidden flex-shrink-0">
                       <AlbumCover coverArtId={album.coverArt} size={100} className="w-full h-full" />
@@ -278,12 +278,12 @@ export default function SearchPage() {
               <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
                 Canciones
               </p>
-              <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+              <div className="bg-white dark:bg-gray-900/40 rounded-2xl overflow-hidden border border-gray-200/80 dark:border-white/5 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
                 {results.songs.map(song => (
                   <button
                     key={song.id}
                     onClick={() => playSong(song)}
-                    className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                    className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-colors"
                   >
                     <div className="w-11 h-11 rounded-lg overflow-hidden flex-shrink-0">
                       <AlbumCover coverArtId={song.coverArt} size={100} className="w-full h-full" />

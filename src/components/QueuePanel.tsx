@@ -159,13 +159,13 @@ export default function QueuePanel({
             transition={{ type: 'spring', stiffness: 350, damping: 35 }}
             className="absolute top-0 right-0 h-full w-full sm:max-w-md bg-white dark:bg-gray-900 shadow-lg pointer-events-auto flex flex-col"
           >
-            <div className="flex items-center justify-between p-3 sm:p-4 border-b border-gray-200 dark:border-gray-800 flex-shrink-0" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
+            <div className="flex items-center justify-between p-3 sm:p-4 border-b border-gray-200/80 dark:border-white/[0.08] flex-shrink-0" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
               <h2 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white">
                 A continuación
               </h2>
               <button
                 onClick={onClose}
-                className="p-1.5 sm:p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700/50 touch-manipulation"
+                className="p-1.5 sm:p-2 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.08] touch-manipulation"
                 aria-label="Cerrar cola"
               >
                 <XMarkIcon className="w-5 h-5 sm:w-6 sm:h-6 text-gray-900 dark:text-white" />

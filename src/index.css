@@ -442,7 +442,7 @@
   border: 1px solid rgba(0, 0, 0, 0.08) !important;
   backdrop-filter: blur(24px) saturate(1.8);
   -webkit-backdrop-filter: blur(24px) saturate(1.8);
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 }
 
 .dark .smartmix-premium-btn {

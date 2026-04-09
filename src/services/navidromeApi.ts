@@ -705,6 +705,27 @@ class NavidromeAPI {
   }
 
   /**
+   * Obtener notas/biografía de un álbum desde el endpoint getAlbumInfo
+   */
+  async getAlbumNotes(albumId: string): Promise<string | null> {
+    if (!this.config) return null
+    try {
+      const config = this.config
+      const key = `albumNotes_${albumId}`
+      return this.withCache(key, async () => {
+        const url = `${config.serverUrl}/rest/getAlbumInfo.view?${this.getAuthParams()}&id=${albumId}`
+        const response = await fetch(url)
+        const data = await response.json()
+        const notes = data['subsonic-response']?.albumInfo?.notes
+        return notes ? String(notes) : null
+      }, 600000)
+    } catch (error) {
+      console.error('Get album notes failed:', error)
+      return null
+    }
+  }
+
+  /**
    * Obtener detalles de una playlist (nombre, portada, etc.)
    */
   async getPlaylist(playlistId: string): Promise<{ 

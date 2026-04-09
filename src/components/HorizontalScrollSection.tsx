@@ -6,6 +6,7 @@ interface HorizontalScrollSectionProps {
   children: React.ReactNode
   className?: string
   itemWidth?: string // tailwind class, default 'w-36 md:w-40'
+  immersive?: boolean
 }
 
 /**
@@ -17,13 +18,14 @@ export default function HorizontalScrollSection({
   action,
   children,
   className = '',
+  immersive = false,
 }: HorizontalScrollSectionProps) {
   return (
     <div className={className}>
       {(title || action) && (
         <div className="flex items-center justify-between mb-4">
           {title && (
-            <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white">{title}</h2>
+            <h2 className={`text-2xl md:text-3xl font-bold ${immersive ? 'text-white' : 'text-gray-900 dark:text-white'}`}>{title}</h2>
           )}
           {action && <div className="flex-shrink-0">{action}</div>}
         </div>

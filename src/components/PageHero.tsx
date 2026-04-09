@@ -104,20 +104,22 @@ export default function PageHero({
 
     const scrollable = findScrollableParent(heroEl)
 
+    let rafId = 0
     const handleScroll = () => {
-      const rect = heroEl.getBoundingClientRect()
-      const height = rect.height || heroEl.offsetHeight || 1
-      
-      // Progress calculation for fading/sticky (going up)
-      // We subtract the overscroll from rect.top to get the "clean" scroll position
-      const scrollPos = -Math.min(0, rect.top)
-      const progress = Math.min(Math.max(scrollPos / height, 0), 1)
-      setHeroProgress(progress)
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => {
+        const rect = heroEl.getBoundingClientRect()
+        const height = rect.height || heroEl.offsetHeight || 1
 
-      // Overscroll calculation for bounce (pulling down)
-      // In some browsers/scrolling modes, rect.top will be positive when overscrolling
-      const os = Math.max(0, rect.top)
-      setOverscroll(os)
+        // Progress calculation for fading/sticky (going up)
+        const scrollPos = -Math.min(0, rect.top)
+        const progress = Math.min(Math.max(scrollPos / height, 0), 1)
+        setHeroProgress(progress)
+
+        // Overscroll calculation for bounce (pulling down)
+        const os = Math.max(0, rect.top)
+        setOverscroll(os)
+      })
     }
 
     handleScroll()
@@ -132,6 +134,7 @@ export default function PageHero({
     resizeObserver.observe(heroEl)
 
     return () => {
+      cancelAnimationFrame(rafId)
       target.removeEventListener('scroll', handleScroll)
       if (scrollable !== window) {
         window.removeEventListener('scroll', handleScroll)
