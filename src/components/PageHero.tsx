@@ -386,12 +386,13 @@ export default function PageHero({
         </div>
 
         {/* Color bridge: blends the hero seamlessly into the page background,
-            preventing harsh contrast edges (e.g. white album → dark page bg).
-            Sits above the masked background layer but behind the content. */}
+            preventing harsh contrast edges (e.g. white album → dark bg, dark album → light bg).
+            Dark mode: 38% — more aggressive, needed to swallow white/light-solid album edges.
+            Light mode: 22% — subtler, starts well below the cover to avoid bleeding into it. */}
         <div
           className="absolute bottom-0 left-0 right-0 pointer-events-none"
           style={{
-            height: '38%',
+            height: isDark ? '38%' : '22%',
             background: 'linear-gradient(to bottom, transparent, var(--bg-base, #121212))',
           }}
         />

@@ -140,6 +140,13 @@ const StackPage = memo(function StackPage({
       ? cachedHeroSnapshot.current
       : heroPresent
 
+  // On native, non-root pages show the back button (bottom edge at safe-area + 48px).
+  // Increase top padding to clear it; root tabs hide the button so +12px is fine there.
+  const isRootTabPage = ROOT_TABS.has(loc.pathname)
+  const topPad = isNative && !isRootTabPage
+    ? 'pt-[calc(env(safe-area-inset-top,20px)+60px)]'
+    : 'pt-[calc(env(safe-area-inset-top,20px)+12px)]'
+
   // ... (rest of the effect stays the same) ...
   useEffect(() => {
     const el = pageRef.current
@@ -236,7 +243,7 @@ const StackPage = memo(function StackPage({
         pointerEvents: isAnimating ? 'none' : 'auto',
       }}
     >
-      <div className={effectiveHero ? 'p-0 pb-[200px] md:pb-6' : 'p-4 pt-[calc(env(safe-area-inset-top,20px)+12px)] pb-[200px] md:p-6 md:pb-6 lg:p-8'}>
+      <div className={effectiveHero ? 'p-0 pb-[200px] md:pb-6' : `p-4 ${topPad} pb-[200px] md:p-6 md:pb-6 lg:p-8`}>
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-64">
@@ -311,11 +318,29 @@ export default function NavigationStack() {
       }
 
       if (navigationType === 'POP') {
-        // Clean up any pages still animating in (rapid navigation)
-        let updated = prev.filter(e => e.status !== 'entering')
+        // Clean up any pages still animating (entering or exiting) so that
+        // rapid back presses or mid-animation POPs always operate on a clean stack.
+        // Previously only 'entering' was filtered, causing a second POP to be a
+        // no-op when an 'exiting' page was still in the stack.
+        let updated = prev.filter(e => e.status !== 'entering' && e.status !== 'exiting')
 
         if (updated.length <= 1) {
           // No cached page to reveal — render fresh
+          return [
+            {
+              id: location.key || String(Date.now()),
+              location,
+              status: 'active' as PageStatus,
+            },
+          ]
+        }
+
+        // Verify the candidate cached page actually matches the POP destination.
+        // If the stack has drifted out of sync with router history (e.g. rapid nav,
+        // tab switch race, or a redirect mid-transition), reveal a fresh page
+        // instead of showing the wrong cached content.
+        const candidate = updated[updated.length - 2]
+        if (candidate.location.pathname !== location.pathname) {
           return [
             {
               id: location.key || String(Date.now()),

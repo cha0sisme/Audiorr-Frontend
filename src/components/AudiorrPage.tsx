@@ -33,7 +33,7 @@ const libraryItems = [
 
 function RowArrow() {
   return (
-    <svg className="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <svg className="w-4 h-4 text-gray-300 dark:text-white/20 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
     </svg>
   )
@@ -89,14 +89,14 @@ export default function AudiorrPage() {
         <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
           Biblioteca
         </p>
-        <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+        <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/[0.06]">
           {libraryItems.map(item => {
             const Icon = item.icon
             return (
               <Link
                 key={item.to}
                 to={item.to}
-                className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-white/[0.07] transition-colors"
               >
                 <div className={`w-10 h-10 rounded-xl ${item.bg} flex items-center justify-center flex-shrink-0`}>
                   <Icon className="w-5 h-5 text-white" />
@@ -115,12 +115,12 @@ export default function AudiorrPage() {
           <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
             Playlists ancladas
           </p>
-          <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+          <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/[0.06]">
             {pinnedPlaylists.map(pl => (
               <Link
                 key={pl.id}
                 to={`/playlists/${pl.id}`}
-                className="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+                className="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 dark:hover:bg-white/[0.07] transition-colors"
               >
                 <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0">
                   <PlaylistCover playlistId={pl.id} name={pl.name} className="w-full h-full" rounded={false} />
@@ -143,10 +143,10 @@ export default function AudiorrPage() {
         <p className="text-xs font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-3">
           General
         </p>
-        <div className="bg-white dark:bg-gray-700 rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-gray-600">
+        <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl overflow-hidden divide-y divide-gray-100 dark:divide-white/[0.06]">
           <Link
             to="/settings"
-            className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+            className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-white/[0.07] transition-colors"
           >
             <div className="w-10 h-10 rounded-xl bg-gray-500 flex items-center justify-center flex-shrink-0">
               <Cog6ToothIcon className="w-5 h-5 text-white" />
@@ -157,7 +157,7 @@ export default function AudiorrPage() {
 
           <button
             onClick={() => setShowAbout(true)}
-            className="w-full flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors text-left"
+            className="w-full flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-white/[0.07] transition-colors text-left"
           >
             <div className="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center flex-shrink-0">
               <InformationCircleIcon className="w-5 h-5 text-white" />
@@ -168,7 +168,7 @@ export default function AudiorrPage() {
           {isAdmin && backendAvailable && (
             <Link
               to="/admin"
-              className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
+              className="flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 dark:hover:bg-white/[0.07] transition-colors"
             >
               <div className="w-10 h-10 rounded-xl bg-orange-500 flex items-center justify-center flex-shrink-0">
                 <WrenchScrewdriverIcon className="w-5 h-5 text-white" />

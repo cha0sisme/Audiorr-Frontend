@@ -24,8 +24,8 @@ const ArtistPlaylistItem = memo(({ playlist }: { playlist: Playlist }) => {
       state={{ playlist }}
       className="group bg-gray-50 dark:bg-white/[0.04] rounded-2xl border border-gray-200/50 dark:border-white/[0.06] overflow-hidden hover:bg-white dark:hover:bg-white/[0.07] transition-all duration-300 relative block"
     >
-      <div className="relative aspect-square">
-        <PlaylistCover 
+      <div className="relative aspect-square active:scale-95 transition-transform duration-150">
+        <PlaylistCover
           playlistId={playlist.id}
           name={playlist.name}
           className="w-full h-full object-cover"
@@ -340,7 +340,7 @@ export default function ArtistsDetail() {
                   to={`/artists/${encodeURIComponent(artist.name)}`}
                   className="flex-shrink-0 w-32 text-center group"
                 >
-                  <div className="w-32 h-32 mx-auto mb-3">
+                  <div className="w-32 h-32 mx-auto mb-3 active:scale-95 transition-transform duration-150">
                     <UniversalCover type="artist" artistName={artist.name} context="grid" />
                   </div>
                   <p className="font-bold text-gray-900 dark:text-gray-100 truncate group-hover:text-blue-500 transition-colors text-sm">

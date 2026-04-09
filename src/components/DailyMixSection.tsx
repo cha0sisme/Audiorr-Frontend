@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { backendApi, DailyMix } from '../services/backendApi'
 import { navidromeApi } from '../services/navidromeApi'
 import { ArrowPathIcon } from '@heroicons/react/24/outline'
-import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
+import { usePlayerState } from '../contexts/PlayerContext'
 import { useBackendAvailable } from '../contexts/BackendAvailableContext'
 import { usePinnedPlaylists } from '../hooks/usePinnedPlaylists'
 import { PlaylistItem } from './PlaylistsPage'
@@ -26,19 +26,10 @@ export default function DailyMixSection({ format = 'home' }: { format?: 'home' |
   const [error, setError] = useState<string | null>(null)
 
   const playerState = usePlayerState()
-  const playerActions = usePlayerActions()
+
   const backendAvailable = useBackendAvailable()
   const hasFetched = useRef(false)
   const { isPinned, togglePinnedPlaylist } = usePinnedPlaylists()
-
-  const handlePlayPlaylist = async (e: React.MouseEvent, playlistId: string) => {
-    e.stopPropagation()
-    e.preventDefault()
-    const songs = await navidromeApi.getPlaylistSongs(playlistId)
-    if (songs.length > 0) {
-      playerActions.playPlaylist(songs)
-    }
-  }
 
   const loadAndMaybeGenerate = async () => {
     try {
@@ -189,7 +180,7 @@ export default function DailyMixSection({ format = 'home' }: { format?: 'home' |
                     <PlaylistItem
                       playlist={playlistObj}
                       isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
-                      handlePlayPlaylist={handlePlayPlaylist}
+
                       isPinned={isPinned(playlistObj.id)}
                       onTogglePin={() => togglePinnedPlaylist(playlistObj)}
                     />

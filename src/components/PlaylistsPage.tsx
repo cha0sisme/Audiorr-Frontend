@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { navidromeApi, Playlist } from '../services/navidromeApi'
 import { backendApi, SyncedPlaylist } from '../services/backendApi'
 
-import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
+import { usePlayerState } from '../contexts/PlayerContext'
 import EqualizerIcon from './EqualizerIcon'
 import Spinner from './Spinner'
 import { usePinnedPlaylists } from '../hooks/usePinnedPlaylists'
@@ -37,14 +37,12 @@ export const PlaylistItem = memo(
   ({
     playlist,
     isPlayingFromThisPlaylist,
-    handlePlayPlaylist,
     isPinned,
     onTogglePin,
     isSpotifySynced,
   }: {
     playlist: Playlist
     isPlayingFromThisPlaylist: boolean
-    handlePlayPlaylist: (e: React.MouseEvent, playlistId: string) => void
     isPinned: boolean
     onTogglePin: (playlist: Playlist) => void
     isSpotifySynced?: boolean
@@ -64,31 +62,13 @@ export const PlaylistItem = memo(
         state={{ playlist: effectivePlaylist }}
         className="group relative block"
       >
-        <div className="relative">
+        <div className="relative active:scale-95 transition-transform duration-150">
           <PlaylistCover
             playlistId={playlist.id}
             name={playlist.name}
             className="w-full h-full"
             rounded={true}
           />
-          <div
-            className="absolute inset-0 bg-black transition-opacity duration-200 opacity-0 group-hover:opacity-40 rounded-xl"
-            style={{ transform: 'translateZ(0)' }}
-          />
-          {!isPlayingFromThisPlaylist && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <button
-                onClick={e => handlePlayPlaylist(e, playlist.id)}
-                className="relative z-10 opacity-0 scale-90 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 bg-white/90 hover:bg-white text-gray-900 rounded-full p-3 shadow-lg backdrop-blur-sm pointer-events-auto hover:will-change-transform"
-                aria-label={`Reproducir ${playlist.name}`}
-                style={{ transform: 'translateZ(0)' }}
-              >
-                <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-            </div>
-          )}
           <div className="absolute top-2 right-2 z-20 flex items-center gap-2">
             {isSpotifySynced && (
                <div className="bg-[#1DB954] text-white p-1 rounded-full shadow-lg" title="Sincronizado con Spotify">
@@ -149,7 +129,7 @@ export default function PlaylistsPage() {
   })
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const playerState = usePlayerState()
-  const playerActions = usePlayerActions()
+
   const { pinnedPlaylists, togglePinnedPlaylist, isPinned } = usePinnedPlaylists()
   const navidromeConfig = navidromeApi.getConfig()
   const navigate = useNavigate()
@@ -204,18 +184,6 @@ export default function PlaylistsPage() {
     const intervalId = setInterval(() => { fetchData() }, 2 * 60 * 1000)
     return () => clearInterval(intervalId)
   }, [fetchData])
-
-  const handlePlayPlaylist = useCallback(
-    async (e: React.MouseEvent, playlistId: string) => {
-      e.stopPropagation()
-      e.preventDefault()
-      const songs = await navidromeApi.getPlaylistSongs(playlistId)
-      if (songs.length > 0) {
-        playerActions.playPlaylist(songs)
-      }
-    },
-    [playerActions]
-  )
 
   const sortedPlaylists = useMemo(() => {
     let sorted = [...playlists]
@@ -341,7 +309,6 @@ export default function PlaylistsPage() {
                 key={playlist.id}
                 playlist={playlist}
                 isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
-                handlePlayPlaylist={handlePlayPlaylist}
                 isPinned={isPinned(playlist.id)}
                 onTogglePin={handleTogglePinned}
               />
@@ -367,7 +334,6 @@ export default function PlaylistsPage() {
                     <PlaylistItem
                       playlist={playlist}
                       isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
-                      handlePlayPlaylist={handlePlayPlaylist}
                       isPinned={isPinned(playlist.id)}
                       onTogglePin={handleTogglePinned}
                     />
@@ -390,7 +356,6 @@ export default function PlaylistsPage() {
                     <PlaylistItem
                       playlist={playlist}
                       isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
-                      handlePlayPlaylist={handlePlayPlaylist}
                       isPinned={isPinned(playlist.id)}
                       onTogglePin={handleTogglePinned}
                     />
@@ -419,7 +384,6 @@ export default function PlaylistsPage() {
                     <PlaylistItem
                       playlist={playlist}
                       isPlayingFromThisPlaylist={isPlayingFromThisPlaylist}
-                      handlePlayPlaylist={handlePlayPlaylist}
                       isPinned={isPinned(playlist.id)}
                       onTogglePin={handleTogglePinned}
                       isSpotifySynced={isSpotify}
