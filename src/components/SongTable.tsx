@@ -246,8 +246,15 @@ export function SongTable({
   className = "",
 }: SongTableProps) {
   return (
-    <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`}>
-      <div className="divide-y divide-gray-100/80 dark:divide-white/[0.04]">
+    <div className={`relative overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`}>
+      {/* Subtle accent tint — gives the table visual connection to the album palette */}
+      {accentColor && (
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ backgroundColor: hexToRgba(accentColor, 0.07) }}
+        />
+      )}
+      <div className="relative divide-y divide-gray-100/80 dark:divide-white/[0.04]">
         {songs.map((song, index) => (
           <SongRow
             key={song.id}
