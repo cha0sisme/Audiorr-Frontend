@@ -328,6 +328,21 @@ class AudioEngineManager {
     }
 
     func pause() {
+        // Garantizar ejecución en main thread: el progress timer corre en main y lee
+        // isPlaying. Si pause() llega desde el hilo Capacitor (background), existe una
+        // ventana ARM64 donde el timer ve isPlaying=true (stale) y publica playbackRate=1.0
+        // al lock screen justo antes de que stopProgressTimer() / updateNowPlayingPlaybackState()
+        // se ejecuten. Forzar main thread elimina esa race condition por completo.
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.pause() }
+            return
+        }
+
+        // Siempre actualizar el lock screen al salir, incluso si el guard corta el flujo.
+        // Esto cubre el caso donde isPlaying ya es false (p.ej. interrupción previa) pero
+        // MPNowPlayingInfoCenter quedó desincronizado.
+        defer { updateNowPlayingPlaybackState() }
+
         guard isPlaying else { return }
 
         if isStreamMode {
@@ -335,7 +350,6 @@ class AudioEngineManager {
             streamPlayer?.pause()
             isPlaying = false
             stopProgressTimer()
-            updateNowPlayingPlaybackState()
             notifyPlaybackStateChanged()
             print("[AudioEngineManager] Stream pause en \(String(format: "%.1f", time))s")
             return
@@ -356,13 +370,18 @@ class AudioEngineManager {
         isPlaying = false
 
         stopProgressTimer()
-        updateNowPlayingPlaybackState()
         notifyPlaybackStateChanged()
 
         print("[AudioEngineManager] Pause en \(String(format: "%.1f", time))s")
     }
 
     func resume() {
+        // Mismo motivo que pause(): forzar main thread para evitar race con el progress timer.
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { self.resume() }
+            return
+        }
+
         guard !isPlaying else { return }
 
         if isStreamMode {
