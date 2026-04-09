@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerState, usePlayerActions } from '../contexts/PlayerContext'
@@ -10,7 +10,27 @@ import AlbumCoverModal from './AlbumCoverModal'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { useConnect } from '../hooks/useConnect'
 import { SongTable } from './SongTable'
-import { useTheme } from '../contexts/ThemeContext'
+
+/** Returns a darkened page background color derived from the album's primary color.
+ *  Blends 30% primary + 70% near-black so the result is clearly dark but tinted. */
+function computePageBgColor(hex: string): string {
+  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const nr = Math.round(r * 0.30 + 14 * 0.70)
+  const ng = Math.round(g * 0.30 + 14 * 0.70)
+  const nb = Math.round(b * 0.30 + 14 * 0.70)
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+}
+
+function getLuminance(hex: string): number {
+  if (!hex.startsWith('#') || hex.length < 7) return 128
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return r * 0.299 + g * 0.587 + b * 0.114
+}
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
@@ -36,15 +56,13 @@ export default function AlbumDetail() {
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
   const dominantColors = useDominantColors(coverImageUrl)
-  const { isDark } = useTheme()
 
-  // Light solid-color albums (white, cream, yellow…) in dark mode: extend the solid
-  // color as the page background so the hero flows into it instead of cutting to black.
-  const solidPrimary = dominantColors?.isSolid ? dominantColors.primary : null
-  const solidLum = solidPrimary
-    ? (() => { const r=parseInt(solidPrimary.slice(1,3),16),g=parseInt(solidPrimary.slice(3,5),16),b=parseInt(solidPrimary.slice(5,7),16); return r*0.299+g*0.587+b*0.114 })()
-    : 0
-  const isLightSolid = isDark && !!solidPrimary && solidLum > 160
+  // White/cream solid albums: keep the normal page bg + dark text (no immersive mode).
+  // All other albums: compute a dark tinted bg from the primary color (Apple Music style).
+  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
+  const pageBgColor = dominantColors && !solidOnLight
+    ? computePageBgColor(dominantColors.primary)
+    : null
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -183,9 +201,9 @@ export default function AlbumDetail() {
   }
 
   return (
-    <div style={isLightSolid ? {
-      background: `linear-gradient(to bottom, ${solidPrimary} 0%, ${solidPrimary} 30%, #121212 480px)`,
-    } as React.CSSProperties : undefined}>
+    // pageBgColor: full-page album-tinted background (Apple Music style).
+    // --bg-base is read by PageHero's color bridge so it fades into this color.
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
       <PageHero
         type="album"
         title={albumInfo.name}
@@ -244,6 +262,7 @@ export default function AlbumDetail() {
           showCover={false}
           useTrackNumber={true}
           accentColor={dominantColors?.accent}
+          immersive={!!pageBgColor}
         />
 
         {albumInfo.recordLabels && albumInfo.recordLabels.length > 0 && (

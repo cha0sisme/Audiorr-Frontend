@@ -18,7 +18,25 @@ import { usePinnedPlaylists } from '../hooks/usePinnedPlaylists'
 import { PinFilledIcon, PinOutlinedIcon } from './icons/PinIcons'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { SongTable } from './SongTable'
-import { useTheme } from '../contexts/ThemeContext'
+
+function computePageBgColor(hex: string): string {
+  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const nr = Math.round(r * 0.30 + 14 * 0.70)
+  const ng = Math.round(g * 0.30 + 14 * 0.70)
+  const nb = Math.round(b * 0.30 + 14 * 0.70)
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+}
+
+function getLuminance(hex: string): number {
+  if (!hex.startsWith('#') || hex.length < 7) return 128
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return r * 0.299 + g * 0.587 + b * 0.114
+}
 import { API_BASE_URL } from '../services/backendApi'
 import { useConnect } from '../hooks/useConnect'
 import { useBackendAvailable } from '../contexts/BackendAvailableContext'
@@ -141,13 +159,11 @@ export default function PlaylistDetail() {
   }, [coverImageUrl])
 
   const dominantColors = useDominantColors(activeCoverUrl)
-  const { isDark } = useTheme()
 
-  const solidPrimary = dominantColors?.isSolid ? dominantColors.primary : null
-  const solidLum = solidPrimary
-    ? (() => { const r=parseInt(solidPrimary.slice(1,3),16),g=parseInt(solidPrimary.slice(3,5),16),b=parseInt(solidPrimary.slice(5,7),16); return r*0.299+g*0.587+b*0.114 })()
-    : 0
-  const isLightSolid = isDark && !!solidPrimary && solidLum > 160
+  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
+  const pageBgColor = dominantColors && !solidOnLight
+    ? computePageBgColor(dominantColors.primary)
+    : null
 
   const accentButtonStyle = useMemo<{ backgroundColor: string; color: string } | null>(() => {
     if (!dominantColors || !dominantColors.primary.startsWith('#') || dominantColors.primary.length < 7) {
@@ -435,9 +451,7 @@ export default function PlaylistDetail() {
 
 
   return (
-    <div style={isLightSolid ? {
-      background: `linear-gradient(to bottom, ${solidPrimary} 0%, ${solidPrimary} 30%, #121212 480px)`,
-    } : undefined}>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
       {loading && !pinnedFallback ? (
         <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-500 dark:text-gray-400">
           <div className="w-10 h-10 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -605,6 +619,7 @@ export default function PlaylistDetail() {
             showAlbum={true}
             showCover={true}
             accentColor={dominantColors?.accent}
+            immersive={!!pageBgColor}
           />
         </div>
 

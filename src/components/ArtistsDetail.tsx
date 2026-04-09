@@ -3,7 +3,25 @@ import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Album, Song, Playlist, ArtistInfo } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
 import { useDominantColors } from '../hooks/useDominantColors'
-import { useTheme } from '../contexts/ThemeContext'
+
+function computePageBgColor(hex: string): string {
+  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  const nr = Math.round(r * 0.30 + 14 * 0.70)
+  const ng = Math.round(g * 0.30 + 14 * 0.70)
+  const nb = Math.round(b * 0.30 + 14 * 0.70)
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+}
+
+function getLuminance(hex: string): number {
+  if (!hex.startsWith('#') || hex.length < 7) return 128
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return r * 0.299 + g * 0.587 + b * 0.114
+}
 import { useContextMenu } from '../hooks/useContextMenu'
 import { useConnect } from '../hooks/useConnect'
 import SongContextMenu from './SongContextMenu'
@@ -84,13 +102,11 @@ export default function ArtistsDetail() {
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
   const dominantColors = useDominantColors(artistImage)
-  const { isDark } = useTheme()
 
-  const solidPrimary = dominantColors?.isSolid ? dominantColors.primary : null
-  const solidLum = solidPrimary
-    ? (() => { const r=parseInt(solidPrimary.slice(1,3),16),g=parseInt(solidPrimary.slice(3,5),16),b=parseInt(solidPrimary.slice(5,7),16); return r*0.299+g*0.587+b*0.114 })()
-    : 0
-  const isLightSolid = isDark && !!solidPrimary && solidLum > 160
+  const solidOnLight = dominantColors?.isSolid && getLuminance(dominantColors.primary) > 160
+  const pageBgColor = dominantColors && !solidOnLight
+    ? computePageBgColor(dominantColors.primary)
+    : null
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -218,9 +234,7 @@ export default function ArtistsDetail() {
   const displayedSongs = showAllSongs ? songs : songs.slice(0, 5)
 
   return (
-    <div style={isLightSolid ? {
-      background: `linear-gradient(to bottom, ${solidPrimary} 0%, ${solidPrimary} 30%, #121212 480px)`,
-    } : undefined}>
+    <div style={pageBgColor ? { backgroundColor: pageBgColor, ['--bg-base' as string]: pageBgColor } : undefined}>
       <PageHero
         type="artist"
         title={decodedName}
@@ -284,6 +298,7 @@ export default function ArtistsDetail() {
               showArtist={false}
               showCover={true}
               accentColor={dominantColors?.accent}
+              immersive={!!pageBgColor}
             />
           </section>
         )}

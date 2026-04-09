@@ -385,17 +385,14 @@ export default function PageHero({
           )}
         </div>
 
-        {/* Color bridge: blends the hero seamlessly into the page background.
-            For light-solid albums in dark mode, fade TO the solid color (set via
-            --bg-base on the page container) so the hero flows into the tinted
-            page background rather than cutting hard to black. */}
+        {/* Color bridge: blends the hero into the page background.
+            --bg-base is set by the parent page to the album-tinted dark color
+            (Apple Music style). Falls back to the theme's base color. */}
         <div
           className="absolute bottom-0 left-0 right-0 pointer-events-none"
           style={{
             height: isDark ? '38%' : '22%',
-            background: isDark && solidOnLight && dominantColors
-              ? `linear-gradient(to bottom, transparent, ${dominantColors.primary})`
-              : 'linear-gradient(to bottom, transparent, var(--bg-base, #121212))',
+            background: `linear-gradient(to bottom, transparent, var(--bg-base, ${isDark ? '#121212' : '#f9fafb'}))`,
           }}
         />
 
