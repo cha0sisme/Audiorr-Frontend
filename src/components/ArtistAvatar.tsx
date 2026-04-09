@@ -105,11 +105,11 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
   return (
     <div
       ref={ref}
-      className={`w-full h-full rounded-full overflow-hidden bg-gray-200 dark:bg-gray-800 flex items-center justify-center relative ${className}`}
+      className={`w-full h-full rounded-full overflow-hidden bg-gray-200 dark:bg-white/[0.08] flex items-center justify-center relative ${className}`}
     >
       {/* Placeholder / Skeleton */}
       {(loading || !imageUrl) && (
-        <div className="absolute inset-0 z-10 bg-gray-200 dark:bg-gray-800 animate-pulse flex items-center justify-center">
+        <div className="absolute inset-0 z-10 bg-gray-200 dark:bg-white/[0.08] animate-pulse flex items-center justify-center">
           {!imageUrl && !loading && (
              <span className="font-bold text-5xl text-gray-500 dark:text-gray-400 select-none">
                {artistName.charAt(0).toUpperCase()}

@@ -65,10 +65,10 @@ export default function AlbumCover({ coverArtId, customCoverUrl, alt, className,
   const showPlaceholder = isLoading || !imageUrl || !isLoaded
 
   return (
-    <div className={`aspect-square relative overflow-hidden bg-gray-200 dark:bg-gray-800 ${className}`}>
+    <div className={`aspect-square relative overflow-hidden bg-gray-200 dark:bg-white/[0.08] ${className}`}>
       {/* Placeholder / Skeleton */}
       {showPlaceholder && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-200 dark:bg-gray-800 animate-pulse">
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-200 dark:bg-white/[0.08] animate-pulse">
           {!imageUrl && (
             <svg className="w-1/3 h-1/3 text-gray-400 dark:text-gray-600" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />

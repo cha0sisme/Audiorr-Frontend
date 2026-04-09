@@ -48,7 +48,7 @@ export const PlaylistCover: React.FC<PlaylistCoverProps> = ({ playlistId, name, 
       {/* Skeleton / Fallback — shown while loading OR on error with retry */}
       {(!isLoaded || hasError) && (
         <div
-          className="absolute inset-0 z-10 bg-gray-200 dark:bg-gray-800 flex items-center justify-center font-bold text-gray-500 dark:text-gray-400 uppercase text-center"
+          className="absolute inset-0 z-10 bg-gray-200 dark:bg-white/[0.08] flex items-center justify-center font-bold text-gray-500 dark:text-gray-400 uppercase text-center"
         >
           {/* Pulse overlay while loading (not error) */}
           {!hasError && (

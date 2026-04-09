@@ -53,6 +53,8 @@ export default function TabBar() {
   if (isNative) return null
 
   const isSearchActive = location.pathname === '/search'
+  // Paths that logically belong to the Audiorr tab (settings, profile)
+  const audiorr_affiliated = ['/settings', '/profile', '/admin']
 
   return (
     <nav
@@ -70,9 +72,11 @@ export default function TabBar() {
           <div className="flex items-stretch" style={{ height: 49 }}>
             {mainTabs.map((tab) => {
               const Icon = tab.icon
-              const isActive = tab.exact
-                ? location.pathname === tab.to
-                : location.pathname.startsWith(tab.to)
+              const isActive = tab.to === '/audiorr'
+                ? location.pathname === '/audiorr' || audiorr_affiliated.some(p => location.pathname.startsWith(p))
+                : tab.exact
+                  ? location.pathname === tab.to
+                  : location.pathname.startsWith(tab.to)
 
               return (
                 <NavLink
