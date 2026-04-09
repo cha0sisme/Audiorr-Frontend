@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Album, Song, Playlist, ArtistInfo } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
 import { useDominantColors } from '../hooks/useDominantColors'
+import { useTheme } from '../contexts/ThemeContext'
 import { useContextMenu } from '../hooks/useContextMenu'
 import { useConnect } from '../hooks/useConnect'
 import SongContextMenu from './SongContextMenu'
@@ -83,6 +84,13 @@ export default function ArtistsDetail() {
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
   const dominantColors = useDominantColors(artistImage)
+  const { isDark } = useTheme()
+
+  const solidPrimary = dominantColors?.isSolid ? dominantColors.primary : null
+  const solidLum = solidPrimary
+    ? (() => { const r=parseInt(solidPrimary.slice(1,3),16),g=parseInt(solidPrimary.slice(3,5),16),b=parseInt(solidPrimary.slice(5,7),16); return r*0.299+g*0.587+b*0.114 })()
+    : 0
+  const isLightSolid = isDark && !!solidPrimary && solidLum > 160
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -210,7 +218,9 @@ export default function ArtistsDetail() {
   const displayedSongs = showAllSongs ? songs : songs.slice(0, 5)
 
   return (
-    <div>
+    <div style={isLightSolid ? {
+      background: `linear-gradient(to bottom, ${solidPrimary} 0%, ${solidPrimary} 30%, #121212 480px)`,
+    } : undefined}>
       <PageHero
         type="artist"
         title={decodedName}

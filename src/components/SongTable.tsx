@@ -38,7 +38,11 @@ function ensureAccentContrast(hex: string): string {
 
   const factor = (lum < MIN ? MIN : MAX) / Math.max(lum, 1)
   const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v * factor)))
-  return `#${clamp(r).toString(16).padStart(2, '0')}${clamp(g).toString(16).padStart(2, '0')}${clamp(b).toString(16).padStart(2, '0')}`
+  const nr = clamp(r), ng = clamp(g), nb = clamp(b)
+  // If scaling can't fix the range (e.g. pure black r=g=b=0 stays 0), fall back to a neutral
+  const newLum = nr * 0.299 + ng * 0.587 + nb * 0.114
+  if (newLum < MIN || newLum > MAX) return lum < MIN ? '#aaaaaa' : '#555555'
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
 export interface SongTableProps {
@@ -241,8 +245,6 @@ export function SongTable({
   accentColor,
   className = "",
 }: SongTableProps) {
-  const gridTemplate = getGridTemplate(showIndex, showAlbum)
-
   return (
     <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`}>
       <div className="divide-y divide-gray-100/80 dark:divide-white/[0.04]">

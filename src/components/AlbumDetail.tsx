@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerState, usePlayerActions } from '../contexts/PlayerContext'
@@ -10,6 +10,7 @@ import AlbumCoverModal from './AlbumCoverModal'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { useConnect } from '../hooks/useConnect'
 import { SongTable } from './SongTable'
+import { useTheme } from '../contexts/ThemeContext'
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
@@ -35,6 +36,15 @@ export default function AlbumDetail() {
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
   const dominantColors = useDominantColors(coverImageUrl)
+  const { isDark } = useTheme()
+
+  // Light solid-color albums (white, cream, yellow…) in dark mode: extend the solid
+  // color as the page background so the hero flows into it instead of cutting to black.
+  const solidPrimary = dominantColors?.isSolid ? dominantColors.primary : null
+  const solidLum = solidPrimary
+    ? (() => { const r=parseInt(solidPrimary.slice(1,3),16),g=parseInt(solidPrimary.slice(3,5),16),b=parseInt(solidPrimary.slice(5,7),16); return r*0.299+g*0.587+b*0.114 })()
+    : 0
+  const isLightSolid = isDark && !!solidPrimary && solidLum > 160
 
   // Lógica de reproducción remota vs local
   const isRemote = isConnected && activeDeviceId && activeDeviceId !== currentDeviceId
@@ -173,7 +183,9 @@ export default function AlbumDetail() {
   }
 
   return (
-    <div>
+    <div style={isLightSolid ? {
+      background: `linear-gradient(to bottom, ${solidPrimary} 0%, ${solidPrimary} 30%, #121212 480px)`,
+    } as React.CSSProperties : undefined}>
       <PageHero
         type="album"
         title={albumInfo.name}

@@ -19,6 +19,21 @@ type BucketEntry = { count: number; sumR: number; sumG: number; sumB: number }
 const paletteCache = new Map<string, ColorPalette>()
 
 /**
+ * For solid-color albums with no detected foreground accent (e.g. pure black Donda,
+ * pure white album), derive a contrasting neutral so the SongTable playing-row
+ * highlight is always visible. Dark solid → light gray; Light solid → dark gray.
+ */
+function deriveContrastAccent(solidHex: string): string {
+  const r = parseInt(solidHex.slice(1, 3), 16)
+  const g = parseInt(solidHex.slice(3, 5), 16)
+  const b = parseInt(solidHex.slice(5, 7), 16)
+  const lum = r * 0.299 + g * 0.587 + b * 0.114
+  // Pick a neutral that sits comfortably on the opposite side of the luminance range
+  const val = lum < 128 ? 170 : 70
+  return `#${val.toString(16).padStart(2, '0').repeat(3)}`
+}
+
+/**
  * Detects whether an image has a solid flat background color.
  *
  * Strategy — edge-first (same principle used by professional palette tools):
@@ -296,7 +311,11 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
         // Emit canvas colors immediately — no backend wait.
         if (canvasPalette && !cancelled) {
           const primary = isSolid && solidColor ? solidColor : canvasPalette.primary
-          const accent  = isSolid && accentColor ? accentColor : canvasPalette.accent
+          // For solid albums with no detected accent, derive a contrasting neutral
+          // so the SongTable playing-row is always visible (pure black → #aaaaaa, etc.)
+          const accent = isSolid
+            ? (accentColor ?? deriveContrastAccent(solidColor ?? canvasPalette.primary))
+            : canvasPalette.accent
           setColors({ ...canvasPalette, primary, accent, isSolid })
         }
 
@@ -307,7 +326,9 @@ export function useDominantColors(imageUrl: string | null): ColorPalette | null 
         const palette = backendColors ?? canvasPalette
         if (palette) {
           const primary = isSolid && solidColor ? solidColor : palette.primary
-          const accent  = isSolid && accentColor ? accentColor : palette.accent
+          const accent = isSolid
+            ? (accentColor ?? deriveContrastAccent(solidColor ?? palette.primary))
+            : palette.accent
           const final: ColorPalette = { ...palette, primary, accent, isSolid }
           setColors(final)
           paletteCache.set(imageUrl, final)
