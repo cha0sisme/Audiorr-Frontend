@@ -213,36 +213,44 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Logic for LAN devices (Google Cast, etc)
       if (action === 'play_song') {
         const payload = value as { song: Song, queue: Song[] };
-        const streamUrl = navidromeApi.getStreamUrl(payload.song.id, payload.song.path);
-        const coverArtUrl = navidromeApi.getCoverUrl(payload.song.coverArt) || undefined;
+        const startIndex = Math.max(0, payload.queue.findIndex(s => s.id === payload.song.id));
+        const queueItems = payload.queue.map(s => ({
+          url: navidromeApi.getStreamUrl(s.id, s.path),
+          metadata: {
+            title: s.title,
+            artist: s.artist,
+            album: s.album,
+            coverArtUrl: navidromeApi.getCoverUrl(s.coverArt) || undefined,
+          },
+        }));
 
-        console.log(`[Connect] Casting "${payload.song.title}" to ${targetDevice.name} -> ${streamUrl}`);
+        console.log(`[Connect] Casting queue (${queueItems.length} songs, start ${startIndex}: "${payload.song.title}") to ${targetDevice.name}`);
         socket.emit('cast_to_device', {
           deviceId: targetDevice.id,
-          url: streamUrl,
-          metadata: {
-            title: payload.song.title,
-            artist: payload.song.artist,
-            album: payload.song.album,
-            coverArtUrl,
-          },
+          url: queueItems[startIndex].url,
+          metadata: queueItems[startIndex].metadata,
+          queue: queueItems,
+          startIndex,
         });
       } else if (action === 'play_playlist') {
-        // Cast first song of the playlist
         const songs = value as Song[];
         if (songs.length > 0) {
-          const streamUrl = navidromeApi.getStreamUrl(songs[0].id, songs[0].path);
-          const coverArtUrl = navidromeApi.getCoverUrl(songs[0].coverArt) || undefined;
-          console.log(`[Connect] Casting playlist first song "${songs[0].title}" to ${targetDevice.name}`);
+          const queueItems = songs.map(s => ({
+            url: navidromeApi.getStreamUrl(s.id, s.path),
+            metadata: {
+              title: s.title,
+              artist: s.artist,
+              album: s.album,
+              coverArtUrl: navidromeApi.getCoverUrl(s.coverArt) || undefined,
+            },
+          }));
+          console.log(`[Connect] Casting playlist (${queueItems.length} songs) to ${targetDevice.name}`);
           socket.emit('cast_to_device', {
             deviceId: targetDevice.id,
-            url: streamUrl,
-            metadata: {
-              title: songs[0].title,
-              artist: songs[0].artist,
-              album: songs[0].album,
-              coverArtUrl,
-            },
+            url: queueItems[0].url,
+            metadata: queueItems[0].metadata,
+            queue: queueItems,
+            startIndex: 0,
           });
         }
       } else if (action === 'pause') {
@@ -613,23 +621,39 @@ export const ConnectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!socket) return;
     console.log(`[Connect] Connecting to LAN device: ${device.name} (${device.ip})`);
 
-    // Si hay una canción en reproducción, castearla inmediatamente
     if (playerState.currentSong) {
       const song = playerState.currentSong;
+      const queue = playerState.queue;
+      const startIndex = Math.max(0, queue.findIndex(s => s.id === song.id));
       const streamUrl = navidromeApi.getStreamUrl(song.id, song.path);
       const coverArtUrl = navidromeApi.getCoverUrl(song.coverArt) || undefined;
 
-      console.log(`[Connect] Casting current song "${song.title}" to ${device.name} -> ${streamUrl}`);
-      socket.emit('cast_to_device', {
-        deviceId: device.id,
-        url: streamUrl,
-        metadata: {
-          title: song.title,
-          artist: song.artist,
-          album: song.album,
-          coverArtUrl,
-        },
-      });
+      if (queue.length > 1) {
+        const queueItems = queue.map(s => ({
+          url: navidromeApi.getStreamUrl(s.id, s.path),
+          metadata: {
+            title: s.title,
+            artist: s.artist,
+            album: s.album,
+            coverArtUrl: navidromeApi.getCoverUrl(s.coverArt) || undefined,
+          },
+        }));
+        console.log(`[Connect] Casting queue (${queueItems.length} songs, start ${startIndex}: "${song.title}") to ${device.name}`);
+        socket.emit('cast_to_device', {
+          deviceId: device.id,
+          url: streamUrl,
+          metadata: { title: song.title, artist: song.artist, album: song.album, coverArtUrl },
+          queue: queueItems,
+          startIndex,
+        });
+      } else {
+        console.log(`[Connect] Casting "${song.title}" to ${device.name} -> ${streamUrl}`);
+        socket.emit('cast_to_device', {
+          deviceId: device.id,
+          url: streamUrl,
+          metadata: { title: song.title, artist: song.artist, album: song.album, coverArtUrl },
+        });
+      }
     }
 
     // Registrar remote handlers y pausar reproducción local

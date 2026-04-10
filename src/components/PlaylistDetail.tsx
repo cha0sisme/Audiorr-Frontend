@@ -404,8 +404,8 @@ export default function PlaylistDetail() {
   const handlePlaySong = useCallback((song: Song) => {
     // La lógica de reproducción ahora se gestiona globalmente
     // El contexto decidirá si usar la cola normal o la de smart mix
-    playerActions.playPlaylistFromSong(songsRef.current, song)
-  }, [playerActions])
+    playerActions.playPlaylistFromSong(songsRef.current, song, undefined, displayPlaylist?.name ?? null)
+  }, [playerActions, displayPlaylist?.name])
 
   const handleMainPlayClick = useCallback(() => {
     if (isThisPlaylistPlaying) {
@@ -415,9 +415,9 @@ export default function PlaylistDetail() {
         playerActions.togglePlayPause()
       }
     } else {
-      playerActions.playPlaylist(songsRef.current)
+      playerActions.playPlaylist(songsRef.current, undefined, displayPlaylist?.name ?? null)
     }
-  }, [isThisPlaylistPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions])
+  }, [isThisPlaylistPlaying, isRemote, isPlaying, sendRemoteCommand, activeDeviceId, playerActions, displayPlaylist?.name])
 
   const handleDeletePlaylist = async () => {
     if (!id || !playlist) return

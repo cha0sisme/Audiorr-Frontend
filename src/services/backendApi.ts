@@ -338,6 +338,7 @@ export const backendApi = {
     alpha?: number
     beta?: number
     contextUri?: string | null
+    contextName?: string | null
   }) {
     const response = await fetch(`${API_BASE_URL}/api/scrobble/scrobble`, {
       method: 'POST',

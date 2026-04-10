@@ -84,8 +84,8 @@ interface PlayerActionsType {
   setVolume: (volume: number) => void
   playSong: (song: Song, keepPosition?: boolean) => void
   playAlbum: (albumId: string) => void
-  playPlaylist: (songs: Song[], contextUri?: string | null) => void
-  playPlaylistFromSong: (songs: Song[], startSong: Song, contextUri?: string | null) => void
+  playPlaylist: (songs: Song[], contextUri?: string | null, contextName?: string | null) => void
+  playPlaylistFromSong: (songs: Song[], startSong: Song, contextUri?: string | null, contextName?: string | null) => void
   playSongAtPosition: (songs: Song[], startSong: Song, position: number, autoPlay?: boolean) => void
   removeFromQueue: (songId: string) => void
   clearQueue: () => void
@@ -119,6 +119,7 @@ export interface ScrobbleEventData {
   year?: number
   genre?: string
   contextUri?: string | null
+  contextName?: string | null
 }
 
 export interface RemoteHandlers {
@@ -329,6 +330,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const scrobblingDisabledRef = useRef(false)
   const scrobbleCallbackRef = useRef<((data: ScrobbleEventData) => void) | null>(null)
   const currentContextUriRef = useRef<string | null>(null)
+  const currentContextNameRef = useRef<string | null>(null)
 
   // --- Hooks ---
   const { settings } = useSettings()
@@ -1316,7 +1318,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
 
   const playPlaylist = useCallback(
-    (songs: Song[], contextUri?: string | null) => {
+    (songs: Song[], contextUri?: string | null, contextName?: string | null) => {
       if (songs.length === 0) return
       if (remoteHandlersRef.current?.playPlaylist) {
         remoteHandlersRef.current.playPlaylist(songs)
@@ -1332,6 +1334,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       } else {
         currentContextUriRef.current = null
       }
+      currentContextNameRef.current = contextName ?? null
       // No usar await - playSong ya actualiza la UI inmediatamente
       playSong(songs[0]).catch(error => {
         console.error('Error al reproducir playlist:', error)
@@ -1457,7 +1460,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
 
   const playPlaylistFromSong = useCallback(
-    (songs: Song[], startSong: Song, contextUri?: string | null) => {
+    (songs: Song[], startSong: Song, contextUri?: string | null, contextName?: string | null) => {
       if (remoteHandlersRef.current?.playSong) {
         remoteHandlersRef.current.playSong(startSong, songs)
         return
@@ -1508,6 +1511,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             currentContextUriRef.current = null
           }
         }
+        currentContextNameRef.current = contextName ?? null
 
         // No usar await - playSong ya actualiza la UI inmediatamente
         playSong(startSong).catch(error => {
@@ -1845,6 +1849,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                           year: currentSong.year,
                           genre: currentSong.genre,
                           contextUri: currentContextUriRef.current,
+                          contextName: currentContextNameRef.current,
                         })
                       } else {
                         // Si falla, permitir intentar de nuevo
@@ -2801,6 +2806,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                           year: currentSong.year,
                           genre: currentSong.genre,
                           contextUri: currentContextUriRef.current,
+                          contextName: currentContextNameRef.current,
                         })
                       } else {
                         // Si falla, permitir intentar de nuevo
