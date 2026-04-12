@@ -20,11 +20,17 @@ import { PinFilledIcon, PinOutlinedIcon } from './icons/PinIcons'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { SongTable } from './SongTable'
 
-function computePageBgColor(hex: string): string {
-  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+function computePageBgColor(hex: string, solidOnLight = false): string {
+  if (!hex.startsWith('#') || hex.length < 7) return solidOnLight ? '#f5f5f0' : '#1a1212'
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
+  if (solidOnLight) {
+    const nr = Math.round(r * 0.65 + 255 * 0.35)
+    const ng = Math.round(g * 0.65 + 255 * 0.35)
+    const nb = Math.round(b * 0.65 + 255 * 0.35)
+    return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+  }
   const nr = Math.round(r * 0.30 + 14 * 0.70)
   const ng = Math.round(g * 0.30 + 14 * 0.70)
   const nb = Math.round(b * 0.30 + 14 * 0.70)
@@ -155,8 +161,13 @@ export default function PlaylistDetail() {
 
   const dominantColors = useDominantColors(activeCoverUrl)
 
+  const solidOnLight = !!(dominantColors?.isSolid && dominantColors.primary.startsWith('#') &&
+    parseInt(dominantColors.primary.slice(1, 3), 16) * 0.299 +
+    parseInt(dominantColors.primary.slice(3, 5), 16) * 0.587 +
+    parseInt(dominantColors.primary.slice(5, 7), 16) * 0.114 > 160)
+
   const pageBgColor = dominantColors
-    ? computePageBgColor(dominantColors.primary)
+    ? computePageBgColor(dominantColors.primary, solidOnLight)
     : null
 
   const rootRef = useRef<HTMLDivElement>(null)
@@ -631,7 +642,7 @@ export default function PlaylistDetail() {
             showAlbum={true}
             showCover={true}
             accentColor={dominantColors?.accent}
-            immersive={!!pageBgColor}
+            immersive={pageBgColor ? (solidOnLight ? 'light' : true) : false}
           />
         </div>
 

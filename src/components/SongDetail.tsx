@@ -2,19 +2,91 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
+import { Capacitor } from '@capacitor/core'
 import PageHero from './PageHero'
 import { ArtistLinks } from './ArtistLinks'
-import Spinner from './Spinner'
 import AlbumCoverModal from './AlbumCoverModal'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { useConnect } from '../hooks/useConnect'
 import { SongTable } from './SongTable'
+import { useHeroPresence } from '../contexts/HeroPresenceContext'
 
-function computePageBgColor(hex: string): string {
-  if (!hex.startsWith('#') || hex.length < 7) return '#1a1212'
+const isNativeSong = Capacitor.isNativePlatform()
+
+function SongDetailSkeleton() {
+  const { incHero, decHero } = useHeroPresence()
+  useEffect(() => {
+    incHero()
+    return () => { decHero() }
+  }, [incHero, decHero])
+
+  const rows = 5
+  const widths = ['w-3/4', 'w-1/2', 'w-2/3', 'w-4/5', 'w-2/5']
+  const artistWidths = ['w-1/3', 'w-1/4', 'w-2/5', 'w-1/3', 'w-1/4']
+  return (
+    <div className="animate-pulse">
+      {/* Hero */}
+      <div
+        className="relative overflow-hidden rounded-none md:rounded-3xl bg-gray-900 dark:bg-gray-900/80 flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9"
+        style={{ minHeight: 340, paddingTop: isNativeSong ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
+      >
+        <div className="w-[148px] h-[148px] md:w-[200px] md:h-[200px] lg:w-[232px] lg:h-[232px] flex-shrink-0 rounded-xl md:rounded-2xl bg-white/10" />
+        <div className="flex-1 min-w-0 text-center md:text-left space-y-3 w-full">
+          <div className="h-2.5 w-16 rounded-full bg-white/15 mx-auto md:mx-0" />
+          <div className="h-9 md:h-14 w-3/4 rounded-xl bg-white/15 mx-auto md:mx-0" />
+          <div className="h-5 w-1/3 rounded-full bg-white/10 mx-auto md:mx-0" />
+          <div className="flex items-center gap-2 justify-center md:justify-start mt-2">
+            <div className="h-3.5 w-20 rounded-full bg-white/10" />
+            <div className="h-2 w-1 rounded-full bg-white/8" />
+            <div className="h-3.5 w-14 rounded-full bg-white/10" />
+          </div>
+        </div>
+        <div className="absolute bottom-0 left-0 right-0 h-[30%] bg-gradient-to-b from-transparent to-gray-950/80 pointer-events-none" />
+      </div>
+      {/* Song row + similar songs */}
+      <div className="px-5 md:px-8 lg:px-10 mt-6 space-y-8">
+        <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0">
+          <div className="grid grid-cols-[1fr,auto] md:grid-cols-[1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-2">
+            <div className="min-w-0 space-y-1.5">
+              <div className="h-4 w-2/5 rounded-full bg-gray-200 dark:bg-white/10" />
+              <div className="h-3 w-1/4 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+            </div>
+            <div className="h-3 w-8 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+          </div>
+        </div>
+        <div>
+          <div className="h-7 w-44 rounded-lg mb-6 bg-gray-200 dark:bg-white/10" />
+          <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
+            {Array.from({ length: rows }).map((_, i) => (
+              <div key={i} className="grid grid-cols-[1fr,auto] md:grid-cols-[1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-2">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-md flex-shrink-0 bg-gray-200 dark:bg-white/10" />
+                  <div className="min-w-0 space-y-1.5">
+                    <div className={`h-4 ${widths[i]} rounded-full bg-gray-200 dark:bg-white/10`} />
+                    <div className={`h-3 ${artistWidths[i]} rounded-full bg-gray-100 dark:bg-white/[0.06]`} />
+                  </div>
+                </div>
+                <div className="h-3 w-8 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function computePageBgColor(hex: string, solidOnLight = false): string {
+  if (!hex.startsWith('#') || hex.length < 7) return solidOnLight ? '#f5f5f0' : '#1a1212'
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
+  if (solidOnLight) {
+    const nr = Math.round(r * 0.65 + 255 * 0.35)
+    const ng = Math.round(g * 0.65 + 255 * 0.35)
+    const nb = Math.round(b * 0.65 + 255 * 0.35)
+    return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+  }
   const nr = Math.round(r * 0.30 + 14 * 0.70)
   const ng = Math.round(g * 0.30 + 14 * 0.70)
   const nb = Math.round(b * 0.30 + 14 * 0.70)
@@ -43,8 +115,13 @@ export default function SongDetail() {
 
   const dominantColors = useDominantColors(coverImageUrl)
 
+  const solidOnLight = !!(dominantColors?.isSolid && dominantColors.primary.startsWith('#') &&
+    parseInt(dominantColors.primary.slice(1, 3), 16) * 0.299 +
+    parseInt(dominantColors.primary.slice(3, 5), 16) * 0.587 +
+    parseInt(dominantColors.primary.slice(5, 7), 16) * 0.114 > 160)
+
   const pageBgColor = dominantColors
-    ? computePageBgColor(dominantColors.primary)
+    ? computePageBgColor(dominantColors.primary, solidOnLight)
     : null
 
   const rootRef = useRef<HTMLDivElement>(null)
@@ -154,11 +231,7 @@ export default function SongDetail() {
 
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <Spinner size="lg" />
-      </div>
-    )
+    return <SongDetailSkeleton />
   }
 
   if (!song) {
@@ -314,11 +387,11 @@ export default function SongDetail() {
           showCover={false}
           showIndex={false}
           accentColor={dominantColors?.accent}
-          immersive={!!pageBgColor}
+          immersive={pageBgColor ? (solidOnLight ? 'light' : true) : false}
         />
 
         {albumInfo?.recordLabels && albumInfo.recordLabels.length > 0 && (
-          <div className={`mt-6 pt-2 text-xs ${pageBgColor ? 'text-white/35' : 'text-gray-400 dark:text-gray-500'}`}>
+          <div className={`mt-6 pt-2 text-xs ${pageBgColor ? (solidOnLight ? 'text-gray-500' : 'text-white/35') : 'text-gray-400 dark:text-gray-500'}`}>
             ©{' '}
             {albumInfo.originalReleaseDate?.year ||
               albumInfo.year ||
@@ -330,16 +403,25 @@ export default function SongDetail() {
 
         {/* --- Sección de Canciones Similares --- */}
         <div>
-          <h2 className={`text-2xl font-bold mb-6 ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-white'}`}>
+          <h2 className={`text-2xl font-bold mb-6 ${pageBgColor ? (solidOnLight ? 'text-gray-900' : 'text-white') : 'text-gray-900 dark:text-white'}`}>
             Canciones Similares
           </h2>
           {loadingSimilar && (
-            <div className="flex justify-center py-8">
-              <Spinner />
+            <div className="space-y-1">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3 px-2 py-2 rounded-lg animate-pulse">
+                  <div className={`w-10 h-10 rounded flex-shrink-0 ${pageBgColor ? (solidOnLight ? 'bg-black/10' : 'bg-white/10') : 'bg-gray-200 dark:bg-white/[0.08]'}`} />
+                  <div className="flex-1 min-w-0 space-y-2">
+                    <div className={`h-3.5 w-2/5 rounded-full ${pageBgColor ? (solidOnLight ? 'bg-black/10' : 'bg-white/10') : 'bg-gray-200 dark:bg-white/[0.08]'}`} />
+                    <div className={`h-3 w-1/4 rounded-full ${pageBgColor ? (solidOnLight ? 'bg-black/[0.06]' : 'bg-white/[0.06]') : 'bg-gray-100 dark:bg-white/[0.05]'}`} />
+                  </div>
+                  <div className={`h-3 w-8 rounded-full flex-shrink-0 ${pageBgColor ? (solidOnLight ? 'bg-black/[0.06]' : 'bg-white/[0.06]') : 'bg-gray-100 dark:bg-white/[0.05]'}`} />
+                </div>
+              ))}
             </div>
           )}
           {!loadingSimilar && similarSongs.length === 0 && (
-            <p className={`text-center py-8 ${pageBgColor ? 'text-white/50' : 'text-gray-500 dark:text-gray-400'}`}>
+            <p className={`text-center py-8 ${pageBgColor ? (solidOnLight ? 'text-gray-500' : 'text-white/50') : 'text-gray-500 dark:text-gray-400'}`}>
               No se encontraron canciones similares en tu biblioteca.
             </p>
           )}
@@ -354,7 +436,7 @@ export default function SongDetail() {
               showCover={true}
               showIndex={false}
               accentColor={dominantColors?.accent}
-              immersive={!!pageBgColor}
+              immersive={pageBgColor ? (solidOnLight ? 'light' : true) : false}
             />
           )}
         </div>

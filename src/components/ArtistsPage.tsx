@@ -1,7 +1,38 @@
 import { useState, useEffect, useRef } from 'react'
 import { navidromeApi, Artist } from '../services/navidromeApi'
 import ArtistCard from './ArtistCard'
-import Spinner from './Spinner'
+
+function ArtistsPageSkeleton() {
+  const cols = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6'
+  const ArtistCardSkeletons = ({ count }: { count: number }) => (
+    <div className={cols}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="flex flex-col items-center gap-3 animate-pulse">
+          <div className="w-full aspect-square rounded-full bg-gray-200 dark:bg-white/[0.08]" />
+          <div className="h-3.5 w-3/4 rounded-full bg-gray-200 dark:bg-white/[0.08]" />
+          <div className="h-3 w-1/2 rounded-full bg-gray-100 dark:bg-white/[0.05]" />
+        </div>
+      ))}
+    </div>
+  )
+  return (
+    <div className="space-y-12">
+      <div>
+        <div className="h-9 w-36 rounded-xl bg-gray-200 dark:bg-white/[0.08] animate-pulse mb-2" />
+        <div className="h-4 w-56 rounded-full bg-gray-100 dark:bg-white/[0.05] animate-pulse" />
+      </div>
+      {[12, 12, 12].map((count, si) => (
+        <section key={si}>
+          <div className="mb-6 space-y-1.5 animate-pulse">
+            <div className="h-7 w-48 rounded-lg bg-gray-200 dark:bg-white/[0.08]" />
+            <div className="h-3.5 w-64 rounded-full bg-gray-100 dark:bg-white/[0.05]" />
+          </div>
+          <ArtistCardSkeletons count={count} />
+        </section>
+      ))}
+    </div>
+  )
+}
 
 interface ArtistWithCount {
   name: string
@@ -196,11 +227,7 @@ export default function ArtistsPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <Spinner size="lg" />
-      </div>
-    )
+    return <ArtistsPageSkeleton />
   }
 
   // Agrupar artistas por letra (para la vista completa)

@@ -220,6 +220,11 @@ const StackPage = memo(function StackPage({
       animRef.current = anim
 
       anim.onfinish = () => {
+        // Hide before cancel(): cancel() reverts the transform to its CSS value
+        // (translateX(0)), which would flash the page back into view for one frame
+        // before React's async setState unmounts the component.
+        el.style.visibility = 'hidden'
+        el.style.boxShadow = ''
         anim.cancel()
         animRef.current = null
         onAnimationComplete(id)

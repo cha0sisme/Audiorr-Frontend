@@ -34,6 +34,11 @@ function ArtistCard({ name, albumCount }: ArtistCardProps) {
   // Verificar si este artista es el que suena
   const isThisArtistPlaying = currentSource === `artist:${name}`
 
+  const handlePrefetch = useCallback(() => {
+    navidromeApi.getArtistAlbums(name).catch(() => {})
+    navidromeApi.getArtistSongs(name, 10).catch(() => {})
+  }, [name])
+
   const handlePlayClick = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -61,6 +66,7 @@ function ArtistCard({ name, albumCount }: ArtistCardProps) {
       to={`/artists/${encodeURIComponent(name)}`}
       className="group text-center block"
       style={cardStyle}
+      onPointerDown={handlePrefetch}
     >
       <div className="relative mb-4">
         <div className="absolute inset-0 rounded-full opacity-10 blur-2xl pointer-events-none"

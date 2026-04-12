@@ -18,26 +18,27 @@ function hexToRgba(hex: string, alpha: number): string {
 
 /**
  * Scales the accent color's brightness so it falls in the range [MIN, MAX].
- * In immersive mode (dark page bg) we only enforce a lower bound so the
- * accent stays bright enough for white-text readability.
- * In normal mode we also cap the upper bound so it's readable on light bg.
+ * - normal mode: cap upper bound so it's readable on light theme bg
+ * - immersive dark: only enforce lower bound so accent stays bright on white text
+ * - immersive 'light': cap upper bound so accent is dark enough on a light page bg
  */
-function ensureAccentContrast(hex: string, immersive = false): string {
+function ensureAccentContrast(hex: string, immersive: boolean | 'light' = false): string {
   if (!hex || !hex.startsWith('#') || hex.length < 7) return hex
   const r = parseInt(hex.slice(1, 3), 16)
   const g = parseInt(hex.slice(3, 5), 16)
   const b = parseInt(hex.slice(5, 7), 16)
   const lum = r * 0.299 + g * 0.587 + b * 0.114
 
-  const MIN = immersive ? 130 : 110
-  const MAX = immersive ? 255 : 190
+  const isLight = immersive === 'light'
+  const MIN = isLight ? 0 : (immersive ? 130 : 110)
+  const MAX = isLight ? 145 : (immersive ? 255 : 190)
   if (lum >= MIN && lum <= MAX) return hex
 
   const factor = (lum < MIN ? MIN : MAX) / Math.max(lum, 1)
   const clamp = (v: number) => Math.min(255, Math.max(0, Math.round(v * factor)))
   const nr = clamp(r), ng = clamp(g), nb = clamp(b)
   const newLum = nr * 0.299 + ng * 0.587 + nb * 0.114
-  if (newLum < MIN || newLum > MAX) return lum < MIN ? (immersive ? '#cccccc' : '#aaaaaa') : '#555555'
+  if (newLum < MIN || newLum > MAX) return lum < MIN ? (isLight ? '#333333' : (immersive ? '#cccccc' : '#aaaaaa')) : '#555555'
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
 }
 
@@ -55,9 +56,11 @@ export interface SongTableProps {
   showIndex?: boolean
   useTrackNumber?: boolean
   accentColor?: string
-  /** Immersive mode: transparent bg + white text. Used when the page has a
-   *  full-bleed album-color background (Apple Music style). */
-  immersive?: boolean
+  /** Immersive mode: transparent bg + themed text. Used when the page has a
+   *  full-bleed album-color background (Apple Music style).
+   *  - `true`    = dark page bg → white text
+   *  - `'light'` = light page bg (white/yellow solid) → dark text */
+  immersive?: boolean | 'light'
   className?: string
 }
 
@@ -99,17 +102,20 @@ const SongRow = memo(({
   showIndex?: boolean
   useTrackNumber?: boolean
   accentColor?: string
-  immersive?: boolean
+  immersive?: boolean | 'light'
 }) => {
   const gridTemplate = getGridTemplate(showIndex, showAlbum)
   const handlePlay = () => onDoubleClick(song, index)
+
+  const isLight = immersive === 'light'
+  const isImmersive = !!immersive
 
   const safeAccent = accentColor ? ensureAccentContrast(accentColor, immersive) : undefined
 
   // Row background for the playing song
   const playingRowStyle = isPlaying
     ? (accentColor
-        ? { backgroundColor: hexToRgba(accentColor, immersive ? 0.30 : 0.28) }
+        ? { backgroundColor: hexToRgba(accentColor, isLight ? 0.18 : isImmersive ? 0.30 : 0.28) }
         : undefined)
     : undefined
 
@@ -117,41 +123,57 @@ const SongRow = memo(({
   const rowStateClass = isPlaying
     ? (safeAccent
         ? 'hover:brightness-110 active:brightness-125'
-        : immersive
-          ? 'bg-white/15 hover:bg-white/20 active:bg-white/30'
-          : 'bg-blue-500/15 hover:bg-blue-500/10 active:bg-blue-500/25 dark:bg-blue-500/25 dark:hover:bg-blue-500/20 dark:active:bg-blue-500/40')
-    : (immersive
-        ? 'hover:bg-white/8 active:bg-white/15'
-        : 'hover:bg-gray-100/80 active:bg-gray-200 dark:hover:bg-white/5 dark:active:bg-white/15')
+        : isLight
+          ? 'bg-black/10 hover:bg-black/15 active:bg-black/20'
+          : isImmersive
+            ? 'bg-white/15 hover:bg-white/20 active:bg-white/30'
+            : 'bg-blue-500/15 hover:bg-blue-500/10 active:bg-blue-500/25 dark:bg-blue-500/25 dark:hover:bg-blue-500/20 dark:active:bg-blue-500/40')
+    : (isLight
+        ? 'hover:bg-black/[0.06] active:bg-black/10'
+        : isImmersive
+          ? 'hover:bg-white/8 active:bg-white/15'
+          : 'hover:bg-gray-100/80 active:bg-gray-200 dark:hover:bg-white/5 dark:active:bg-white/15')
 
-  // Text colors — immersive always white, normal theme-aware
-  const indexTextClass = immersive
-    ? 'text-white/45'
-    : 'text-gray-400 dark:text-gray-500'
+  // Text colors
+  const indexTextClass = isLight
+    ? 'text-gray-400'
+    : isImmersive
+      ? 'text-white/45'
+      : 'text-gray-400 dark:text-gray-500'
 
-  const titleClass = immersive
-    ? (isPlaying && safeAccent ? '' : 'text-white')
-    : (isPlaying && !safeAccent ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100')
+  const titleClass = isLight
+    ? (isPlaying && safeAccent ? '' : 'text-gray-900')
+    : isImmersive
+      ? (isPlaying && safeAccent ? '' : 'text-white')
+      : (isPlaying && !safeAccent ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100')
 
-  const artistClass = immersive
-    ? (isPlaying && !accentColor ? 'text-white/80 hover:text-white' : 'text-white/55 hover:text-white/80')
-    : (isPlaying && !accentColor
-        ? 'text-blue-500/80 hover:text-blue-500 dark:text-blue-400/80 dark:hover:text-blue-400'
-        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200')
+  const artistClass = isLight
+    ? (isPlaying && !accentColor ? 'text-gray-700 hover:text-gray-900' : 'text-gray-500 hover:text-gray-700')
+    : isImmersive
+      ? (isPlaying && !accentColor ? 'text-white/80 hover:text-white' : 'text-white/55 hover:text-white/80')
+      : (isPlaying && !accentColor
+          ? 'text-blue-500/80 hover:text-blue-500 dark:text-blue-400/80 dark:hover:text-blue-400'
+          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200')
 
-  const durationClass = immersive ? 'text-white/45' : 'text-gray-400 dark:text-gray-500'
+  const durationClass = isLight ? 'text-gray-400' : isImmersive ? 'text-white/45' : 'text-gray-400 dark:text-gray-500'
 
-  const albumLinkClass = immersive
-    ? 'truncate text-sm text-white/55 hover:text-white/80'
-    : 'truncate text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+  const albumLinkClass = isLight
+    ? 'truncate text-sm text-gray-500 hover:text-gray-800'
+    : isImmersive
+      ? 'truncate text-sm text-white/55 hover:text-white/80'
+      : 'truncate text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
 
-  const albumSpanClass = immersive
-    ? 'truncate text-sm text-white/45'
-    : 'truncate text-sm text-gray-500 dark:text-gray-400'
+  const albumSpanClass = isLight
+    ? 'truncate text-sm text-gray-400'
+    : isImmersive
+      ? 'truncate text-sm text-white/45'
+      : 'truncate text-sm text-gray-500 dark:text-gray-400'
 
-  const dotsClass = immersive
-    ? 'md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-white/45 hover:text-white/70 active:bg-white/10 touch-manipulation transition-colors'
-    : 'md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 touch-manipulation transition-colors'
+  const dotsClass = isLight
+    ? 'md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-gray-400 hover:text-gray-600 active:bg-black/10 touch-manipulation transition-colors'
+    : isImmersive
+      ? 'md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-white/45 hover:text-white/70 active:bg-white/10 touch-manipulation transition-colors'
+      : 'md:hidden flex items-center justify-center w-7 h-7 -mr-1 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 touch-manipulation transition-colors'
 
   return (
     <div
@@ -167,7 +189,7 @@ const SongRow = memo(({
           {isPlaying ? (
             <EqualizerIcon
               isPlaying={true}
-              colorClass={safeAccent ? undefined : (immersive ? 'fill-white/70' : 'fill-blue-500 dark:fill-blue-400')}
+              colorClass={safeAccent ? undefined : (isLight ? 'fill-gray-600' : isImmersive ? 'fill-white/70' : 'fill-blue-500 dark:fill-blue-400')}
               color={safeAccent}
               className="w-3.5 h-3.5 md:w-4 md:h-4"
             />
@@ -266,14 +288,19 @@ export function SongTable({
   immersive = false,
   className = "",
 }: SongTableProps) {
-  const containerClass = immersive
-    // Transparent container: only borders/dividers visible
-    ? `overflow-hidden rounded-none md:rounded-2xl border-y md:border border-white/10 -mx-5 md:mx-0 ${className}`
-    : `overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`
+  const containerClass = immersive === 'light'
+    // Light immersive: transparent with dark borders
+    ? `overflow-hidden rounded-none md:rounded-2xl border-y md:border border-black/10 -mx-5 md:mx-0 ${className}`
+    : immersive
+      // Dark immersive: transparent with white borders
+      ? `overflow-hidden rounded-none md:rounded-2xl border-y md:border border-white/10 -mx-5 md:mx-0 ${className}`
+      : `overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 ${className}`
 
-  const dividerClass = immersive
-    ? 'divide-y divide-white/[0.08]'
-    : 'divide-y divide-gray-100/80 dark:divide-white/[0.04]'
+  const dividerClass = immersive === 'light'
+    ? 'divide-y divide-black/[0.06]'
+    : immersive
+      ? 'divide-y divide-white/[0.08]'
+      : 'divide-y divide-gray-100/80 dark:divide-white/[0.04]'
 
   return (
     <div className={containerClass}>

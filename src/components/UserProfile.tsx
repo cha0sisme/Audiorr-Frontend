@@ -2,12 +2,61 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { navidromeApi, type Playlist } from '../services/navidromeApi'
 import { MusicalNoteIcon, ClockIcon } from '@heroicons/react/24/outline'
+import { Capacitor } from '@capacitor/core'
 import { backendApi } from '../services/backendApi'
 import { PlaylistCover } from './PlaylistCover'
-import Spinner from './Spinner'
 import UniversalCover from './UniversalCover'
 import PageHero from './PageHero'
 import { getColorForUsername, getInitial } from '../utils/userUtils'
+
+const isNativeUser = Capacitor.isNativePlatform()
+
+function UserProfileSkeleton() {
+  return (
+    <div className="animate-pulse">
+      {/* Hero */}
+      <div
+        className="relative overflow-hidden rounded-none md:rounded-3xl bg-gray-200 dark:bg-gray-800/60 flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9"
+        style={{ minHeight: 340, paddingTop: isNativeUser ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
+      >
+        <div className="w-[148px] h-[148px] md:w-[200px] md:h-[200px] rounded-full bg-gray-300 dark:bg-white/10 flex-shrink-0" />
+        <div className="flex-1 min-w-0 text-center md:text-left space-y-3 w-full">
+          <div className="h-2.5 w-20 rounded-full bg-gray-300/60 dark:bg-white/10 mx-auto md:mx-0" />
+          <div className="h-10 md:h-14 w-1/2 rounded-xl bg-gray-300/60 dark:bg-white/15 mx-auto md:mx-0" />
+          <div className="h-4 w-1/3 rounded-full bg-gray-300/50 dark:bg-white/10 mx-auto md:mx-0" />
+        </div>
+      </div>
+      {/* Stats */}
+      <div className="px-5 md:px-8 lg:px-10 mt-6 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-6 border border-gray-200 dark:border-white/10 bg-gray-100 dark:bg-white/5 space-y-3">
+              <div className="h-3 w-28 rounded-full bg-gray-200 dark:bg-white/10" />
+              <div className="h-10 w-20 rounded-lg bg-gray-200 dark:bg-white/15" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-6 border border-gray-200/80 dark:border-white/5 bg-white dark:bg-gray-900/40 space-y-4">
+              <div className="h-5 w-28 rounded-lg bg-gray-200 dark:bg-white/10" />
+              {Array.from({ length: 5 }).map((_, j) => (
+                <div key={j} className="flex items-center gap-3">
+                  <div className="w-8 h-3 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+                  <div className="w-12 h-12 rounded-lg bg-gray-200 dark:bg-white/10 flex-shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3.5 w-3/4 rounded-full bg-gray-200 dark:bg-white/10" />
+                    <div className="h-3 w-1/2 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 
 
@@ -84,9 +133,31 @@ const MiniWrappedSection = ({ username }: { username: string }) => {
 
   if (loading) {
     return (
-      <div className="bg-white dark:bg-gray-900/40 rounded-3xl p-8 border border-gray-200/80 dark:border-white/5">
-        <div className="flex justify-center items-center h-64">
-          <Spinner size="lg" />
+      <div className="bg-white dark:bg-gray-900/40 rounded-3xl p-8 border border-gray-200/80 dark:border-white/5 animate-pulse space-y-4">
+        <div className="h-6 w-48 rounded-lg bg-gray-200 dark:bg-white/10" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-6 border border-gray-200 dark:border-white/10 bg-gray-100 dark:bg-white/5 space-y-3">
+              <div className="h-3 w-28 rounded-full bg-gray-200 dark:bg-white/10" />
+              <div className="h-10 w-20 rounded-lg bg-gray-200 dark:bg-white/15" />
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-6 border border-gray-200/80 dark:border-white/5 bg-white dark:bg-gray-900/40 space-y-3">
+              <div className="h-5 w-28 rounded-lg bg-gray-200 dark:bg-white/10" />
+              {Array.from({ length: 5 }).map((_, j) => (
+                <div key={j} className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-lg bg-gray-200 dark:bg-white/10 flex-shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3.5 w-3/4 rounded-full bg-gray-200 dark:bg-white/10" />
+                    <div className="h-3 w-1/2 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -393,11 +464,7 @@ export default function UserProfile() {
     }, [username])
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-4 border-gray-200 dark:border-gray-700 border-t-blue-600 dark:border-t-blue-400" />
-      </div>
-    )
+    return <UserProfileSkeleton />
   }
 
   if (!userExists) {

@@ -619,25 +619,28 @@ class NavidromeAPI {
   }
 
   /**
+   * Fetch raw getAlbum.view response, shared by getAlbumSongs and getAlbumInfo
+   * so both callers reuse a single network request and cache entry.
+   */
+  private async _getAlbumRaw(albumId: string): Promise<any> {
+    if (!this.config) return null
+    const config = this.config
+    return this.withCache(`album_raw_${albumId}`, async () => {
+      const url = `${config.serverUrl}/rest/getAlbum.view?${this.getAuthParams()}&id=${albumId}`
+      const response = await fetch(url)
+      const data = await response.json()
+      return data['subsonic-response']?.status === 'ok' ? data['subsonic-response'].album : null
+    }, 300000) // 5 minutos
+  }
+
+  /**
    * Obtener las canciones de un álbum
    */
   async getAlbumSongs(albumId: string): Promise<Song[]> {
     if (!this.config) return []
-
     try {
-      const config = this.config
-      const key = `albumSongs_${albumId}`
-      return this.withCache(key, async () => {
-        const url = `${config.serverUrl}/rest/getAlbum.view?${this.getAuthParams()}&id=${albumId}`
-        const response = await fetch(url)
-        const data = await response.json()
-
-        if (data['subsonic-response']?.status === 'ok') {
-          const album = data['subsonic-response'].album
-          return this.mapSongs(album?.song || [], albumId)
-        }
-        return []
-      }, 300000) // 5 minutos
+      const album = await this._getAlbumRaw(albumId)
+      return album ? this.mapSongs(album.song || [], albumId) : []
     } catch (error) {
       console.error('Get album songs failed:', error)
       return []
@@ -662,42 +665,31 @@ class NavidromeAPI {
     explicitStatus?: string
   } | null> {
     if (!this.config) return null
-
     try {
-      const config = this.config
-      const key = `albumInfo_${albumId}`
-      return this.withCache(key, async () => {
-        const url = `${config.serverUrl}/rest/getAlbum.view?${this.getAuthParams()}&id=${albumId}`
-        const response = await fetch(url)
-        const data = await response.json()
+      const album = await this._getAlbumRaw(albumId)
+      if (!album) return null
 
-        if (data['subsonic-response']?.status === 'ok') {
-          const album = data['subsonic-response'].album
-          let releaseType: string | undefined = undefined
+      let releaseType: string | undefined = undefined
+      if (album.releaseTypes && Array.isArray(album.releaseTypes) && album.releaseTypes.length > 0) {
+        releaseType = album.releaseTypes[0]
+      } else {
+        releaseType = album.mbReleaseType || album.type || album.albumType || album.releaseType || undefined
+      }
 
-          if (album.releaseTypes && Array.isArray(album.releaseTypes) && album.releaseTypes.length > 0) {
-            releaseType = album.releaseTypes[0]
-          } else {
-            releaseType = album.mbReleaseType || album.type || album.albumType || album.releaseType || undefined
-          }
-
-          return {
-            name: album.name || '',
-            artist: album.artist || '',
-            coverArt: album.coverArt,
-            year: album.year,
-            originalReleaseDate: album.originalReleaseDate,
-            releaseDate: album.releaseDate,
-            genre: album.genre,
-            mbReleaseType: releaseType,
-            songCount: album.songCount,
-            duration: album.duration,
-            recordLabels: album.recordLabels,
-            explicitStatus: album.explicitStatus,
-          }
-        }
-        return null
-      }, 600000) // 10 minutos
+      return {
+        name: album.name || '',
+        artist: album.artist || '',
+        coverArt: album.coverArt,
+        year: album.year,
+        originalReleaseDate: album.originalReleaseDate,
+        releaseDate: album.releaseDate,
+        genre: album.genre,
+        mbReleaseType: releaseType,
+        songCount: album.songCount,
+        duration: album.duration,
+        recordLabels: album.recordLabels,
+        explicitStatus: album.explicitStatus,
+      }
     } catch (error) {
       console.error('Get album info failed:', error)
       return null

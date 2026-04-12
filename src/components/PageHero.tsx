@@ -208,9 +208,15 @@ export default function PageHero({
   // In light mode the hero fades into a light page background, so we need a more
   // gradual mask — the solid region stays opaque longer and the transparency sets in
   // later, preventing the hard "colour wall" effect that shows in light mode.
-  const maskGradient = isDark
-    ? 'linear-gradient(to bottom, black 0%, black 40%, rgba(0,0,0,0.9) 55%, rgba(0,0,0,0.7) 70%, rgba(0,0,0,0.3) 85%, transparent 100%)'
-    : 'linear-gradient(to bottom, black 0%, black 44%, rgba(0,0,0,0.93) 59%, rgba(0,0,0,0.76) 74%, rgba(0,0,0,0.38) 89%, rgba(0,0,0,0.07) 97%, transparent 100%)'
+  // For solid-color albums the flat background needs to stay opaque even longer
+  // before fading, otherwise the gradient starts too early and breaks the aesthetic.
+  const maskGradient = effectiveIsSolid
+    ? isDark
+      ? 'linear-gradient(to bottom, black 0%, black 60%, rgba(0,0,0,0.88) 73%, rgba(0,0,0,0.65) 84%, rgba(0,0,0,0.25) 94%, transparent 100%)'
+      : 'linear-gradient(to bottom, black 0%, black 64%, rgba(0,0,0,0.9) 76%, rgba(0,0,0,0.68) 86%, rgba(0,0,0,0.28) 95%, transparent 100%)'
+    : isDark
+      ? 'linear-gradient(to bottom, black 0%, black 40%, rgba(0,0,0,0.9) 55%, rgba(0,0,0,0.7) 70%, rgba(0,0,0,0.3) 85%, transparent 100%)'
+      : 'linear-gradient(to bottom, black 0%, black 44%, rgba(0,0,0,0.93) 59%, rgba(0,0,0,0.76) 74%, rgba(0,0,0,0.38) 89%, rgba(0,0,0,0.07) 97%, transparent 100%)'
 
   const combinedBackgroundStyle = {
     // Flat-color albums (Donda, Black Album, TLOP): use solid backgroundColor.
@@ -401,7 +407,7 @@ export default function PageHero({
         <div
           className="absolute bottom-0 left-0 right-0 pointer-events-none"
           style={{
-            height: isDark ? '38%' : '22%',
+            height: effectiveIsSolid ? (isDark ? '28%' : '16%') : (isDark ? '38%' : '22%'),
             background: `linear-gradient(to bottom, transparent, var(--bg-base, ${isDark ? '#121212' : '#f9fafb'}))`,
           }}
         />

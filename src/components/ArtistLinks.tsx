@@ -1,5 +1,7 @@
+import { useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { splitArtists } from '../utils/artistUtils'
+import { navidromeApi } from '../services/navidromeApi'
 
 interface ArtistLinksProps {
   artists: string
@@ -13,6 +15,11 @@ interface ArtistLinksProps {
 export function ArtistLinks({ artists, className = '', maxArtists }: ArtistLinksProps) {
   const artistList = splitArtists(artists)
 
+  const prefetch = useCallback((name: string) => {
+    navidromeApi.getArtistAlbums(name).catch(() => {})
+    navidromeApi.getArtistSongs(name, 10).catch(() => {})
+  }, [])
+
   if (artistList.length === 0) return null
 
   if (artistList.length === 1) {
@@ -21,6 +28,7 @@ export function ArtistLinks({ artists, className = '', maxArtists }: ArtistLinks
       <Link
         to={`/artists/${encodeURIComponent(artistList[0])}`}
         onClick={e => e.stopPropagation()}
+        onPointerDown={() => prefetch(artistList[0])}
         className={className}
       >
         {artistList[0]}
@@ -44,6 +52,7 @@ export function ArtistLinks({ artists, className = '', maxArtists }: ArtistLinks
           <Link
             to={`/artists/${encodeURIComponent(artist)}`}
             onClick={e => e.stopPropagation()}
+            onPointerDown={() => prefetch(artist)}
             className={linkClassName}
           >
             {artist}

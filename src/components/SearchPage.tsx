@@ -224,6 +224,7 @@ export default function SearchPage() {
                     <button
                       key={artist.id}
                       onClick={() => goArtist(artist.name)}
+                      onPointerDown={() => { navidromeApi.getArtistAlbums(artist.name).catch(() => {}); navidromeApi.getArtistSongs(artist.name, 10).catch(() => {}) }}
                       className="w-full flex items-center gap-4 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] transition-colors"
                     >
                       <div className="w-11 h-11 rounded-full overflow-hidden bg-gray-200 dark:bg-white/[0.08] flex-shrink-0 flex items-center justify-center text-gray-400">

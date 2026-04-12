@@ -320,6 +320,7 @@ export default function SearchBar() {
                       <button
                         key={artist.id}
                         onClick={() => handleArtistClick(artist.name)}
+                        onPointerDown={() => { navidromeApi.getArtistAlbums(artist.name).catch(() => {}); navidromeApi.getArtistSongs(artist.name, 10).catch(() => {}) }}
                         className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-white/[0.06] rounded-xl transition-colors flex items-center gap-3 group"
                       >
                         <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-white/[0.08] flex items-center justify-center text-gray-600 dark:text-gray-400 group-hover:bg-gray-300 dark:group-hover:bg-white/[0.12] transition-colors overflow-hidden flex-shrink-0">
