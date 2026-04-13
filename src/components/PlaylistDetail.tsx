@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { springPress } from '../utils/springPress'
 import { createPortal } from 'react-dom'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { Capacitor } from '@capacitor/core'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerState, usePlayerActions } from '../contexts/PlayerContext'
 import PageHero from './PageHero'
@@ -19,6 +20,80 @@ import { usePinnedPlaylists } from '../hooks/usePinnedPlaylists'
 import { PinFilledIcon, PinOutlinedIcon } from './icons/PinIcons'
 import { useDominantColors } from '../hooks/useDominantColors'
 import { SongTable } from './SongTable'
+import { useHeroPresence } from '../contexts/HeroPresenceContext'
+
+const isNative = Capacitor.isNativePlatform()
+
+function PlaylistDetailSkeleton() {
+  const { incHero, decHero } = useHeroPresence()
+  useEffect(() => {
+    incHero()
+    return () => { decHero() }
+  }, [incHero, decHero])
+
+  const titleWidths = ['w-3/5', 'w-2/5', 'w-4/5', 'w-1/2', 'w-3/4', 'w-2/3', 'w-1/3', 'w-3/5', 'w-1/2', 'w-4/5']
+  const subtitleWidths = ['w-1/3', 'w-2/5', 'w-1/4', 'w-2/5', 'w-1/3', 'w-1/4', 'w-2/5', 'w-1/3', 'w-2/5', 'w-1/4']
+
+  return (
+    <div className="animate-pulse">
+      {/* Hero — matches PageHero structure exactly */}
+      <section
+        className="relative overflow-hidden rounded-none md:rounded-3xl !mt-0 bg-gray-900 dark:bg-gray-800/70"
+        style={{ minHeight: 340 }}
+      >
+        <div
+          className="relative flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pt-6 pb-9 md:pb-9"
+          style={{ paddingTop: isNative ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
+        >
+          {/* Cover */}
+          <div className="w-48 h-48 md:w-56 md:h-56 flex-shrink-0 rounded-2xl bg-white/[0.12]" />
+
+          {/* Text block */}
+          <div className="flex-1 min-w-0 text-center md:text-left w-full">
+            {/* Subtitle */}
+            <div className="h-2 w-20 rounded-full bg-white/20 mx-auto md:mx-0" />
+            {/* Title */}
+            <div className="mt-2 md:mt-4 h-8 md:h-14 lg:h-16 w-3/5 md:w-2/3 rounded-lg bg-white/[0.18] mx-auto md:mx-0" />
+            {/* Metadata row: owner · count · duration */}
+            <div className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-1 justify-center md:justify-start">
+              <div className="h-3 md:h-4 w-20 rounded-full bg-white/10" />
+              <div className="h-2 w-0.5 rounded-full bg-white/10" />
+              <div className="h-3 md:h-4 w-16 rounded-full bg-white/10" />
+              <div className="h-2 w-0.5 rounded-full bg-white/10" />
+              <div className="h-3 md:h-4 w-12 rounded-full bg-white/10" />
+            </div>
+            {/* Action buttons row */}
+            <div className="mt-5 flex justify-center md:justify-start gap-2">
+              <div className="h-11 w-36 rounded-full bg-white/[0.15]" />
+              <div className="h-11 w-11 rounded-full bg-white/[0.12]" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Song rows — showCover=true, showAlbum=true: cover | title+subtitle | duration */}
+      <div className="px-5 md:px-8 lg:px-10 mt-6">
+        <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
+          {titleWidths.map((w, i) => (
+            <div key={i} className="grid grid-cols-[2.5rem,1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-[9px]">
+              {/* Cover thumbnail */}
+              <div className="w-9 h-9 rounded-lg bg-gray-200 dark:bg-white/10 flex-shrink-0" />
+              {/* Title + album/artist below */}
+              <div className="flex flex-col gap-1.5 min-w-0">
+                <div className={`h-[14px] ${w} rounded-full bg-gray-200 dark:bg-white/10`} />
+                <div className={`h-[11px] ${subtitleWidths[i]} rounded-full bg-gray-100 dark:bg-white/[0.06]`} />
+              </div>
+              {/* Duration */}
+              <div className="flex justify-end">
+                <div className="h-3 w-7 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function computePageBgColor(hex: string, solidOnLight = false): string {
   if (!hex.startsWith('#') || hex.length < 7) return solidOnLight ? '#f5f5f0' : '#1a1212'
@@ -474,10 +549,7 @@ export default function PlaylistDetail() {
   return (
     <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
       {loading && !pinnedFallback ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-32 text-center text-gray-500 dark:text-gray-400">
-          <div className="w-10 h-10 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          <p>Cargando playlist...</p>
-        </div>
+        <PlaylistDetailSkeleton />
       ) : (
         <>
           <PageHero

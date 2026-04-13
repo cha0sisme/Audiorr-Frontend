@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { XMarkIcon } from '@heroicons/react/24/solid'
+import { Capacitor } from '@capacitor/core'
 
 interface CreatePlaylistModalProps {
   isOpen: boolean
@@ -68,7 +69,11 @@ export default function CreatePlaylistModal({ isOpen, onClose, onConfirm }: Crea
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 32, stiffness: 320 }}
               className="fixed bottom-0 left-0 right-0 z-[10001] bg-[#1c1c1e] rounded-t-[20px] overflow-hidden"
-              style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+              style={{
+                paddingBottom: Capacitor.isNativePlatform()
+                  ? 'calc(env(safe-area-inset-bottom) + 130px)'
+                  : 'env(safe-area-inset-bottom)',
+              }}
               onKeyDown={handleKeyDown}
             >
               <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.08]">
