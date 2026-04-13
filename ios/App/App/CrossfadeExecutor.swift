@@ -103,6 +103,7 @@ class CrossfadeExecutor {
     // DispatchSourceTimer en vez de CADisplayLink — funciona en background
     private var filterTimer: DispatchSourceTimer?
     private var safetyWatchdog: DispatchSourceTimer?
+    private var secondaryWatchdog: DispatchSourceTimer?
     private var isCancelled = false
     private var lastLogTime: Double = 0
 
@@ -224,13 +225,25 @@ class CrossfadeExecutor {
 
         setupInitialEQ()
 
-        schedulePlayerB()
+        guard schedulePlayerB() else {
+            // B tiene 0 frames — no hay nada que reproducir.
+            // Restauramos A y llamamos onComplete para que AudioEngineManager
+            // limpie isCrossfading y no quede en estado fantasma.
+            print("[CrossfadeExecutor] ⚠️ Setup falló (sin frames en B) — restaurando A")
+            mixerA.outputVolume = maxVolumeA
+            isCancelled = true
+            DispatchQueue.main.async { [weak self] in
+                self?.onComplete?(0)
+            }
+            return
+        }
 
         playerB.play()
 
         startFilterAutomation()
 
         startSafetyWatchdog()
+        startSecondaryWatchdog()
     }
 
     func cancel() {
@@ -239,6 +252,8 @@ class CrossfadeExecutor {
         filterTimer = nil
         safetyWatchdog?.cancel()
         safetyWatchdog = nil
+        secondaryWatchdog?.cancel()
+        secondaryWatchdog = nil
         playerB.stop()
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
@@ -282,7 +297,8 @@ class CrossfadeExecutor {
         }
     }
 
-    private func schedulePlayerB() {
+    @discardableResult
+    private func schedulePlayerB() -> Bool {
         let sampleRate = nextFile.processingFormat.sampleRate
         let startFrame = AVAudioFramePosition(timings.startOffset * sampleRate)
         let totalFrames = nextFile.length
@@ -290,12 +306,13 @@ class CrossfadeExecutor {
 
         guard framesToPlay > 0 else {
             print("[CrossfadeExecutor] No hay frames en B para reproducir")
-            return
+            return false
         }
 
         mixerB.outputVolume = 0  // B starts silent; filterTick ramps it up
 
         playerB.scheduleSegment(nextFile, startingFrame: startFrame, frameCount: framesToPlay, at: nil)
+        return true
     }
 
     // MARK: - Volume automation via mixer.outputVolume (updated from filterTick at ~60Hz)
@@ -528,6 +545,8 @@ class CrossfadeExecutor {
         filterTimer = nil
         safetyWatchdog?.cancel()
         safetyWatchdog = nil
+        secondaryWatchdog?.cancel()
+        secondaryWatchdog = nil
 
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
@@ -544,7 +563,7 @@ class CrossfadeExecutor {
     }
 
     // MARK: - Watchdog
-    
+
     private func startSafetyWatchdog() {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         let timeout = timings.totalTime + 2.0
@@ -555,6 +574,21 @@ class CrossfadeExecutor {
             self.completeCrossfade()
         }
         safetyWatchdog = timer
+        timer.resume()
+    }
+
+    /// Watchdog secundario: backstop para casos extremos donde el watchdog principal
+    /// fue retrasado por suspensión agresiva de iOS. Dispara ~50% más tarde que el principal.
+    private func startSecondaryWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timeout = timings.totalTime + 2.0 + max(5.0, timings.totalTime * 0.5)
+        timer.schedule(deadline: .now() + timeout, leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            guard let self = self, !self.isCancelled else { return }
+            print("[CrossfadeExecutor] ⚠️ Watchdog secundario disparado — forzando completado")
+            self.completeCrossfade()
+        }
+        secondaryWatchdog = timer
         timer.resume()
     }
 
