@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerState, usePlayerActions } from '../contexts/PlayerContext'
@@ -15,72 +15,61 @@ import { useHeroPresence } from '../contexts/HeroPresenceContext'
 
 const isNative = Capacitor.isNativePlatform()
 
-function AlbumDetailSkeleton() {
+function AlbumDetailSkeleton({ pageBgColor, solidOnLight }: { pageBgColor?: string | null; solidOnLight?: boolean }) {
   const { incHero, decHero } = useHeroPresence()
   useEffect(() => {
     incHero()
     return () => { decHero() }
   }, [incHero, decHero])
 
-  // Same widths pattern as real song titles at various lengths
   const titleWidths = ['w-2/5', 'w-3/5', 'w-1/2', 'w-4/5', 'w-1/3', 'w-2/3', 'w-3/4', 'w-2/5', 'w-1/2', 'w-3/5', 'w-4/5', 'w-2/3']
+
+  const heroPulse    = pageBgColor ? (solidOnLight ? 'bg-black/[0.12]' : 'bg-white/[0.12]') : 'bg-white/[0.12]'
+  const heroPulseMid = pageBgColor ? (solidOnLight ? 'bg-black/[0.18]' : 'bg-white/[0.18]') : 'bg-white/[0.18]'
+  const heroPulseAlt = pageBgColor ? (solidOnLight ? 'bg-black/[0.08]' : 'bg-white/20')     : 'bg-white/20'
+  const rowPulse     = pageBgColor ? (solidOnLight ? 'bg-black/[0.10]' : 'bg-white/10')      : 'bg-gray-200 dark:bg-white/10'
+  const rowPulseAlt  = pageBgColor ? (solidOnLight ? 'bg-black/[0.06]' : 'bg-white/[0.06]') : 'bg-gray-100 dark:bg-white/[0.06]'
+  const tableCls     = pageBgColor
+    ? (solidOnLight ? 'border-black/10 bg-black/[0.03] divide-black/[0.06]' : 'border-white/5 bg-white/[0.03] divide-white/[0.04]')
+    : 'border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 divide-gray-100/80 dark:divide-white/[0.04]'
 
   return (
     <div className="animate-pulse">
-      {/* ── Hero ── matches PageHero's <section> + inner content div exactly */}
       <section
-        className="relative overflow-hidden rounded-none md:rounded-3xl !mt-0 bg-gray-900 dark:bg-gray-800/70"
-        style={{ minHeight: 340 }}
+        className={`relative overflow-hidden rounded-none md:rounded-3xl !mt-0 ${!pageBgColor ? 'bg-gray-900 dark:bg-gray-800/70' : ''}`}
+        style={{ minHeight: 340, ...(pageBgColor ? { backgroundColor: pageBgColor } : {}) }}
       >
-        {/* Same inner layout as PageHero content div */}
         <div
           className="relative flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pt-6 pb-9 md:pb-9"
           style={{ paddingTop: isNative ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
         >
-          {/* Cover — matches UniversalCover hero album: w-48 h-48 md:w-56 md:h-56 rounded-2xl */}
-          <div className="w-48 h-48 md:w-56 md:h-56 flex-shrink-0 rounded-2xl bg-white/[0.12]" />
-
-          {/* Text block — matches PageHero right column */}
+          <div className={`w-48 h-48 md:w-56 md:h-56 flex-shrink-0 rounded-2xl ${heroPulse}`} />
           <div className="flex-1 min-w-0 text-center md:text-left w-full">
-            {/* Subtitle: text-[10px] uppercase tracking — very short narrow bar */}
-            <div className="h-2 w-12 rounded-full bg-white/20 mx-auto md:mx-0" />
-
-            {/* Title: mt-2 md:mt-4, text-3xl md:text-6xl lg:text-7xl */}
-            <div className="mt-2 md:mt-4 h-8 md:h-14 lg:h-16 w-3/5 md:w-2/3 rounded-lg bg-white/[0.18] mx-auto md:mx-0" />
-
-            {/* Artist: mt-2, text-lg md:text-xl */}
-            <div className="mt-2 h-5 md:h-6 w-1/3 rounded-full bg-white/[0.12] mx-auto md:mx-0" />
-
-            {/* Metadata row: mt-4, text-xs md:text-base */}
+            <div className={`h-2 w-12 rounded-full ${heroPulseAlt} mx-auto md:mx-0`} />
+            <div className={`mt-2 md:mt-4 h-8 md:h-14 lg:h-16 w-3/5 md:w-2/3 rounded-lg ${heroPulseMid} mx-auto md:mx-0`} />
+            <div className={`mt-2 h-5 md:h-6 w-1/3 rounded-full ${heroPulse} mx-auto md:mx-0`} />
             <div className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-1 justify-center md:justify-start">
-              <div className="h-3 md:h-4 w-24 rounded-full bg-white/10" />
-              <div className="h-2 w-0.5 rounded-full bg-white/10" />
-              <div className="h-3 md:h-4 w-16 rounded-full bg-white/10" />
+              <div className={`h-3 md:h-4 w-24 rounded-full ${heroPulseAlt}`} />
+              <div className={`h-2 w-0.5 rounded-full ${heroPulseAlt}`} />
+              <div className={`h-3 md:h-4 w-16 rounded-full ${heroPulseAlt}`} />
             </div>
-
-            {/* Play button: mt-5, h-11 pill */}
             <div className="mt-5 flex justify-center md:justify-start">
-              <div className="h-11 w-36 rounded-full bg-white/[0.15]" />
+              <div className={`h-11 w-36 rounded-full ${heroPulse}`} />
             </div>
           </div>
         </div>
       </section>
 
-      {/* ── SongTable ── AlbumDetail uses showArtist=false, showCover=false, useTrackNumber=true
-           so each row is: track# | title only | duration */}
       <div className="px-5 md:px-8 lg:px-10 mt-6">
-        <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
+        <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border -mx-5 md:mx-0 divide-y ${tableCls}`}>
           {titleWidths.map((w, i) => (
             <div key={i} className="grid grid-cols-[2rem,1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-[9px]">
-              {/* Track number */}
               <div className="flex items-center justify-center">
-                <div className="h-3 w-3.5 rounded-full bg-gray-200 dark:bg-white/10" />
+                <div className={`h-3 w-3.5 rounded-full ${rowPulse}`} />
               </div>
-              {/* Title — single line, no artist below */}
-              <div className={`h-[17px] ${w} rounded-full bg-gray-200 dark:bg-white/10`} />
-              {/* Duration */}
+              <div className={`h-[17px] ${w} rounded-full ${rowPulse}`} />
               <div className="flex justify-end">
-                <div className="h-3 w-7 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+                <div className={`h-3 w-7 rounded-full ${rowPulseAlt}`} />
               </div>
             </div>
           ))}
@@ -114,6 +103,7 @@ function computePageBgColor(hex: string, solidOnLight = false): string {
 
 export default function AlbumDetail() {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const [songs, setSongs] = useState<Song[]>([])
   const [albumInfo, setAlbumInfo] = useState<{
     name: string
@@ -131,12 +121,18 @@ export default function AlbumDetail() {
   const [albumNotes, setAlbumNotes] = useState<string | null>(null)
   const [showCoverModal, setShowCoverModal] = useState(false)
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null)
+  const [colorSourceUrl, setColorSourceUrl] = useState<string | null>(() => {
+    // If we navigated here from an album card the thumbnail is already in HTTP
+    // cache, so dominant colors resolve before the API call even finishes.
+    const stateAlbum = (location.state as { album?: { coverArt?: string } } | null)?.album
+    return stateAlbum?.coverArt ? navidromeApi.getCoverUrl(stateAlbum.coverArt, 300) : null
+  })
   const playerActions = usePlayerActions()
   const playerState = usePlayerState()
   const { isConnected, activeDeviceId, currentDeviceId, remotePlaybackState, sendRemoteCommand } = useConnect()
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
-  const dominantColors = useDominantColors(coverImageUrl)
+  const dominantColors = useDominantColors(colorSourceUrl)
 
 
   const solidOnLight = !!(dominantColors?.isSolid && dominantColors.primary.startsWith('#') &&
@@ -230,6 +226,9 @@ export default function AlbumDetail() {
 
           if (finalCoverArtId) {
             setCoverImageUrl(navidromeApi.getCoverUrl(finalCoverArtId, 2000))
+            // Use a small thumbnail for color extraction — already in HTTP cache
+            // if we navigated here from a page that showed album cards.
+            setColorSourceUrl(navidromeApi.getCoverUrl(finalCoverArtId, 300))
           }
         }
       } catch (error) {
@@ -249,16 +248,6 @@ export default function AlbumDetail() {
       if (notes) setAlbumNotes(notes)
     })
   }, [id])
-
-  if (loading) {
-    return <AlbumDetailSkeleton />
-  }
-
-  if (!albumInfo) {
-    return (
-      <div className="text-center text-red-500">No se pudo cargar la información del álbum.</div>
-    )
-  }
 
   const handlePlaySong = (song: Song) => {
     playerActions.playPlaylistFromSong(songs, song, `album:${id}`)
@@ -305,9 +294,12 @@ export default function AlbumDetail() {
   }
 
   return (
-    // --bg-base is read by PageHero's color bridge so it fades into the album color.
-    // backgroundColor is set on the StackPage scrollable container via the ref effect above.
     <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
+      {loading ? (
+        <AlbumDetailSkeleton pageBgColor={pageBgColor} solidOnLight={solidOnLight} />
+      ) : !albumInfo ? (
+        <div className="text-center text-red-500">No se pudo cargar la información del álbum.</div>
+      ) : (<>
       <PageHero
         type="album"
         title={albumInfo.name}
@@ -424,6 +416,7 @@ export default function AlbumDetail() {
         isOpen={showCoverModal}
         onClose={() => setShowCoverModal(false)}
       />
+      </>)}
     </div>
   )
 }

@@ -14,7 +14,7 @@ function AlbumCard({ album, immersive = false }: AlbumCardProps) {
   return (
     <div className="group">
       <div className="relative">
-        <Link to={`/albums/${album.id}`}>
+        <Link to={`/albums/${album.id}`} state={{ album }}>
           <div className="relative rounded-lg overflow-hidden active:scale-95 transition-transform duration-150">
             <AlbumCover
               coverArtId={album.coverArt}
@@ -28,6 +28,7 @@ function AlbumCard({ album, immersive = false }: AlbumCardProps) {
       <div className="mt-2">
         <Link
           to={`/albums/${album.id}`}
+          state={{ album }}
           className={`font-semibold transition-colors duration-150 block truncate ${immersive ? 'text-white hover:text-white/80' : 'text-gray-800 dark:text-gray-200'}`}
           title={album.name}
         >
