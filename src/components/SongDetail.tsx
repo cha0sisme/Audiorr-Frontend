@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { navidromeApi, Song } from '../services/navidromeApi'
 import { usePlayerActions, usePlayerState } from '../contexts/PlayerContext'
 import { Capacitor } from '@capacitor/core'
@@ -13,7 +13,7 @@ import { useHeroPresence } from '../contexts/HeroPresenceContext'
 
 const isNativeSong = Capacitor.isNativePlatform()
 
-function SongDetailSkeleton() {
+function SongDetailSkeleton({ pageBgColor, solidOnLight }: { pageBgColor?: string | null; solidOnLight?: boolean }) {
   const { incHero, decHero } = useHeroPresence()
   useEffect(() => {
     incHero()
@@ -23,50 +23,58 @@ function SongDetailSkeleton() {
   const rows = 5
   const widths = ['w-3/4', 'w-1/2', 'w-2/3', 'w-4/5', 'w-2/5']
   const artistWidths = ['w-1/3', 'w-1/4', 'w-2/5', 'w-1/3', 'w-1/4']
+
+  const heroPulse    = pageBgColor ? (solidOnLight ? 'bg-black/[0.12]' : 'bg-white/[0.12]') : 'bg-white/10'
+  const heroPulseMid = pageBgColor ? (solidOnLight ? 'bg-black/[0.15]' : 'bg-white/15')     : 'bg-white/15'
+  const rowPulse     = pageBgColor ? (solidOnLight ? 'bg-black/[0.10]' : 'bg-white/10')      : 'bg-gray-200 dark:bg-white/10'
+  const rowPulseAlt  = pageBgColor ? (solidOnLight ? 'bg-black/[0.06]' : 'bg-white/[0.06]') : 'bg-gray-100 dark:bg-white/[0.06]'
+  const tableCls     = pageBgColor
+    ? (solidOnLight ? 'border-black/10 bg-black/[0.03] divide-black/[0.06]' : 'border-white/5 bg-white/[0.03] divide-white/[0.04]')
+    : 'border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 divide-gray-100/80 dark:divide-white/[0.04]'
+  const headingPulse = pageBgColor ? (solidOnLight ? 'bg-black/[0.10]' : 'bg-white/10') : 'bg-gray-200 dark:bg-white/10'
+
   return (
     <div className="animate-pulse">
-      {/* Hero */}
       <div
-        className="relative overflow-hidden rounded-none md:rounded-3xl bg-gray-900 dark:bg-gray-900/80 flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9"
-        style={{ minHeight: 340, paddingTop: isNativeSong ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
+        className={`relative overflow-hidden rounded-none md:rounded-3xl flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9 ${!pageBgColor ? 'bg-gray-900 dark:bg-gray-900/80' : ''}`}
+        style={{ minHeight: 340, paddingTop: isNativeSong ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem', ...(pageBgColor ? { backgroundColor: pageBgColor } : {}) }}
       >
-        <div className="w-[148px] h-[148px] md:w-[200px] md:h-[200px] lg:w-[232px] lg:h-[232px] flex-shrink-0 rounded-xl md:rounded-2xl bg-white/10" />
+        <div className={`w-[148px] h-[148px] md:w-[200px] md:h-[200px] lg:w-[232px] lg:h-[232px] flex-shrink-0 rounded-xl md:rounded-2xl ${heroPulse}`} />
         <div className="flex-1 min-w-0 text-center md:text-left space-y-3 w-full">
-          <div className="h-2.5 w-16 rounded-full bg-white/15 mx-auto md:mx-0" />
-          <div className="h-9 md:h-14 w-3/4 rounded-xl bg-white/15 mx-auto md:mx-0" />
-          <div className="h-5 w-1/3 rounded-full bg-white/10 mx-auto md:mx-0" />
+          <div className={`h-2.5 w-16 rounded-full ${heroPulseMid} mx-auto md:mx-0`} />
+          <div className={`h-9 md:h-14 w-3/4 rounded-xl ${heroPulseMid} mx-auto md:mx-0`} />
+          <div className={`h-5 w-1/3 rounded-full ${heroPulse} mx-auto md:mx-0`} />
           <div className="flex items-center gap-2 justify-center md:justify-start mt-2">
-            <div className="h-3.5 w-20 rounded-full bg-white/10" />
-            <div className="h-2 w-1 rounded-full bg-white/8" />
-            <div className="h-3.5 w-14 rounded-full bg-white/10" />
+            <div className={`h-3.5 w-20 rounded-full ${heroPulse}`} />
+            <div className={`h-2 w-1 rounded-full ${heroPulse}`} />
+            <div className={`h-3.5 w-14 rounded-full ${heroPulse}`} />
           </div>
         </div>
         <div className="absolute bottom-0 left-0 right-0 h-[30%] bg-gradient-to-b from-transparent to-gray-950/80 pointer-events-none" />
       </div>
-      {/* Song row + similar songs */}
       <div className="px-5 md:px-8 lg:px-10 mt-6 space-y-8">
-        <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0">
+        <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border -mx-5 md:mx-0 ${tableCls}`}>
           <div className="grid grid-cols-[1fr,auto] md:grid-cols-[1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-2">
             <div className="min-w-0 space-y-1.5">
-              <div className="h-4 w-2/5 rounded-full bg-gray-200 dark:bg-white/10" />
-              <div className="h-3 w-1/4 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+              <div className={`h-4 w-2/5 rounded-full ${rowPulse}`} />
+              <div className={`h-3 w-1/4 rounded-full ${rowPulseAlt}`} />
             </div>
-            <div className="h-3 w-8 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+            <div className={`h-3 w-8 rounded-full ${rowPulseAlt}`} />
           </div>
         </div>
         <div>
-          <div className="h-7 w-44 rounded-lg mb-6 bg-gray-200 dark:bg-white/10" />
-          <div className="overflow-hidden rounded-none md:rounded-2xl border-y md:border border-gray-200/80 bg-white dark:border-white/5 dark:bg-gray-900/40 -mx-5 md:mx-0 divide-y divide-gray-100/80 dark:divide-white/[0.04]">
+          <div className={`h-7 w-44 rounded-lg mb-6 ${headingPulse}`} />
+          <div className={`overflow-hidden rounded-none md:rounded-2xl border-y md:border -mx-5 md:mx-0 divide-y ${tableCls}`}>
             {Array.from({ length: rows }).map((_, i) => (
               <div key={i} className="grid grid-cols-[1fr,auto] md:grid-cols-[1fr,2.5rem] items-center gap-2 md:gap-3 px-3 md:px-4 py-2">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-md flex-shrink-0 bg-gray-200 dark:bg-white/10" />
+                  <div className={`w-10 h-10 rounded-md flex-shrink-0 ${rowPulse}`} />
                   <div className="min-w-0 space-y-1.5">
-                    <div className={`h-4 ${widths[i]} rounded-full bg-gray-200 dark:bg-white/10`} />
-                    <div className={`h-3 ${artistWidths[i]} rounded-full bg-gray-100 dark:bg-white/[0.06]`} />
+                    <div className={`h-4 ${widths[i]} rounded-full ${rowPulse}`} />
+                    <div className={`h-3 ${artistWidths[i]} rounded-full ${rowPulseAlt}`} />
                   </div>
                 </div>
-                <div className="h-3 w-8 rounded-full bg-gray-100 dark:bg-white/[0.06]" />
+                <div className={`h-3 w-8 rounded-full ${rowPulseAlt}`} />
               </div>
             ))}
           </div>
@@ -96,6 +104,7 @@ function computePageBgColor(hex: string, solidOnLight = false): string {
 
 export default function SongDetail() {
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const [song, setSong] = useState<Song | null>(null)
   const [albumInfo, setAlbumInfo] = useState<{
     mbReleaseType?: string
@@ -109,11 +118,15 @@ export default function SongDetail() {
   const [loadingSimilar, setLoadingSimilar] = useState(false)
   const [showCoverModal, setShowCoverModal] = useState(false)
   const [coverImageUrl, setCoverImageUrl] = useState<string | null>(null)
+  const [colorSourceUrl, setColorSourceUrl] = useState<string | null>(() => {
+    const stateSong = (location.state as { song?: { coverArt?: string } } | null)?.song
+    return stateSong?.coverArt ? navidromeApi.getCoverUrl(stateSong.coverArt, 300) : null
+  })
   const playerActions = usePlayerActions()
   const playerState = usePlayerState()
   const { isConnected, activeDeviceId, currentDeviceId, remotePlaybackState, sendRemoteCommand } = useConnect()
 
-  const dominantColors = useDominantColors(coverImageUrl)
+  const dominantColors = useDominantColors(colorSourceUrl)
 
   const solidOnLight = !!(dominantColors?.isSolid && dominantColors.primary.startsWith('#') &&
     parseInt(dominantColors.primary.slice(1, 3), 16) * 0.299 +
@@ -179,6 +192,7 @@ export default function SongDetail() {
         // Obtener URL de la carátula para el modal (alta calidad para modal pero razonable para red)
         if (detailedSong.coverArt) {
           setCoverImageUrl(navidromeApi.getCoverUrl(detailedSong.coverArt, 2000))
+          setColorSourceUrl(navidromeApi.getCoverUrl(detailedSong.coverArt, 300))
         }
 
         // Obtener información del álbum si tenemos el albumId
@@ -229,18 +243,6 @@ export default function SongDetail() {
   }, [song, id])
 
 
-
-  if (loading) {
-    return <SongDetailSkeleton />
-  }
-
-  if (!song) {
-    return (
-      <div className="text-center text-red-500">
-        No se pudo cargar la información de la canción.
-      </div>
-    )
-  }
 
   const handlePlaySong = (songToPlay: Song) => {
     playerActions.setCurrentContextUri(`song:${songToPlay.id}`)
@@ -316,6 +318,11 @@ export default function SongDetail() {
 
   return (
     <div ref={rootRef} style={pageBgColor ? { ['--bg-base' as string]: pageBgColor } : undefined}>
+      {loading ? (
+        <SongDetailSkeleton pageBgColor={pageBgColor} solidOnLight={solidOnLight} />
+      ) : !song ? (
+        <div className="text-center text-red-500">No se pudo cargar la información de la canción.</div>
+      ) : (<>
       <PageHero
         type="song"
         title={song.title}
@@ -448,6 +455,7 @@ export default function SongDetail() {
         isOpen={showCoverModal}
         onClose={() => setShowCoverModal(false)}
       />
+      </>)}
     </div>
   )
 }

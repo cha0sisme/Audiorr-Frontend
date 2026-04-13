@@ -122,7 +122,7 @@ export default function SongContextMenu({
   const handleGoToSong = (e: React.MouseEvent) => {
     e.stopPropagation()
     onBeforeNavigate?.()
-    navigate(`/songs/${song.id}`)
+    navigate(`/songs/${song.id}`, { state: { song } })
     onClose()
   }
 

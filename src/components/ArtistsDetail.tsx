@@ -24,6 +24,7 @@ function computePageBgColor(hex: string, solidOnLight = false): string {
 
 import { useContextMenu } from '../hooks/useContextMenu'
 import { useConnect } from '../hooks/useConnect'
+import { getArtistAvatarCache } from '../utils/artistAvatarCache'
 import SongContextMenu from './SongContextMenu'
 import HorizontalScrollSection from './HorizontalScrollSection'
 import AlbumCard from './AlbumCard'
@@ -91,6 +92,13 @@ export default function ArtistsDetail() {
   const [songs, setSongs] = useState<Song[]>([])
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [artistImage, setArtistImage] = useState<string | null>(null)
+  const [colorSourceUrl, setColorSourceUrl] = useState<string | null>(() => {
+    // ArtistAvatar keeps a memory LRU cache — if we came from a page that already
+    // rendered this artist's avatar, the URL is available synchronously.
+    if (!name) return null
+    const decoded = decodeURIComponent(name).toLowerCase().trim()
+    return getArtistAvatarCache().get(decoded) || null
+  })
   const [showAvatarModal, setShowAvatarModal] = useState(false)
   const [loading, setLoading] = useState(true)
   const [playlistsLoading, setPlaylistsLoading] = useState(true)
@@ -103,7 +111,7 @@ export default function ArtistsDetail() {
   const { isConnected, activeDeviceId, currentDeviceId, remotePlaybackState, sendRemoteCommand } = useConnect()
   const { menu, handleContextMenu, closeContextMenu } = useContextMenu()
 
-  const dominantColors = useDominantColors(artistImage)
+  const dominantColors = useDominantColors(colorSourceUrl)
 
   const solidOnLight = !!(dominantColors?.isSolid && dominantColors.primary.startsWith('#') &&
     parseInt(dominantColors.primary.slice(1, 3), 16) * 0.299 +
@@ -165,6 +173,9 @@ export default function ArtistsDetail() {
       setCollaborations([])
       setPlaylists([])
       setArtistImage(null)
+      // Re-seed from LRU cache for the new artist (may be null if not yet visited)
+      const decoded = decodeURIComponent(name).toLowerCase().trim()
+      setColorSourceUrl(getArtistAvatarCache().get(decoded) || null)
 
       try {
         const decodedName = decodeURIComponent(name)
@@ -264,7 +275,7 @@ export default function ArtistsDetail() {
         isRemote={!!isRemote}
         artistName={decodedName}
         onCoverClick={() => artistImage && setShowAvatarModal(true)}
-        onImageLoaded={setArtistImage}
+        onImageLoaded={(url) => { setArtistImage(url); setColorSourceUrl(url) }}
         widePlayButton
         metadata={
           <div className="mt-5 flex flex-wrap items-center gap-x-1 gap-y-1 text-sm md:text-base text-[var(--hero-text-muted)]">

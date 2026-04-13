@@ -11,13 +11,13 @@ import { getColorForUsername, getInitial } from '../utils/userUtils'
 
 const isNativeUser = Capacitor.isNativePlatform()
 
-function UserProfileSkeleton() {
+function UserProfileSkeleton({ bgColor }: { bgColor?: string }) {
   return (
     <div className="animate-pulse">
       {/* Hero */}
       <div
-        className="relative overflow-hidden rounded-none md:rounded-3xl bg-gray-200 dark:bg-gray-800/60 flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9"
-        style={{ minHeight: 340, paddingTop: isNativeUser ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem' }}
+        className={`relative overflow-hidden rounded-none md:rounded-3xl flex flex-col md:flex-row items-center md:items-end gap-3 md:gap-6 px-5 md:px-8 lg:px-10 pb-9 ${!bgColor ? 'bg-gray-200 dark:bg-gray-800/60' : ''}`}
+        style={{ minHeight: 340, paddingTop: isNativeUser ? 'calc(env(safe-area-inset-top) + 24px)' : '3.5rem', ...(bgColor ? { backgroundColor: bgColor } : {}) }}
       >
         <div className="w-[148px] h-[148px] md:w-[200px] md:h-[200px] rounded-full bg-gray-300 dark:bg-white/10 flex-shrink-0" />
         <div className="flex-1 min-w-0 text-center md:text-left space-y-3 w-full">
@@ -463,8 +463,10 @@ export default function UserProfile() {
         .catch(err => console.error('[UserProfile] Error loading admin profile data:', err))
     }, [username])
 
+  const skeletonBgColor = username ? getColorForUsername(username) : undefined
+
   if (loading) {
-    return <UserProfileSkeleton />
+    return <UserProfileSkeleton bgColor={skeletonBgColor} />
   }
 
   if (!userExists) {
