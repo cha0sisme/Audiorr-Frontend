@@ -365,7 +365,7 @@ export default function ArtistsDetail() {
               <HorizontalScrollSection>
                 {albums.map(album => (
                   <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                    <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor} />
+                    <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor && !solidOnLight} />
                   </div>
                 ))}
               </HorizontalScrollSection>
@@ -385,7 +385,7 @@ export default function ArtistsDetail() {
             <HorizontalScrollSection>
               {collaborations.map(album => (
                 <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-                  <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor} />
+                  <AlbumCard album={album} showPlayButton={true} immersive={!!pageBgColor && !solidOnLight} />
                 </div>
               ))}
             </HorizontalScrollSection>
@@ -394,10 +394,10 @@ export default function ArtistsDetail() {
 
         {!playlistsLoading && playlists.length > 0 && (
           <section>
-            <HorizontalScrollSection title={`Playlists con ${decodedName}`} immersive={!!pageBgColor}>
+            <HorizontalScrollSection title={`Playlists con ${decodedName}`} immersive={!!pageBgColor && !solidOnLight}>
               {playlists.map(playlist => (
                 <div key={playlist.id} className="flex-shrink-0 w-36 md:w-44">
-                  <ArtistPlaylistItem playlist={playlist} immersive={!!pageBgColor} />
+                  <ArtistPlaylistItem playlist={playlist} immersive={!!pageBgColor && !solidOnLight} />
                 </div>
               ))}
             </HorizontalScrollSection>
@@ -406,7 +406,7 @@ export default function ArtistsDetail() {
 
         {!loading && artistInfoLoading && (
           <section>
-            <HorizontalScrollSection title="Fans también escuchan" immersive={!!pageBgColor}>
+            <HorizontalScrollSection title="Fans también escuchan" immersive={!!pageBgColor && !solidOnLight}>
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="flex-shrink-0 w-32 text-center">
                   <div className={`w-32 h-32 mx-auto mb-3 rounded-full animate-pulse ${pageBgColor ? (solidOnLight ? 'bg-black/10' : 'bg-white/10') : 'bg-gray-200 dark:bg-white/[0.08]'}`} />
@@ -419,7 +419,7 @@ export default function ArtistsDetail() {
 
         {!artistInfoLoading && artistInfo && artistInfo.similarArtists.length > 0 && (
           <section>
-            <HorizontalScrollSection title="Fans también escuchan" immersive={!!pageBgColor}>
+            <HorizontalScrollSection title="Fans también escuchan" immersive={!!pageBgColor && !solidOnLight}>
               {artistInfo.similarArtists.slice(0, 15).map(artist => (
                 <Link
                   key={artist.id}
@@ -430,7 +430,7 @@ export default function ArtistsDetail() {
                   <div className="w-32 h-32 mx-auto mb-3 active:scale-95 transition-transform duration-150">
                     <UniversalCover type="artist" artistName={artist.name} context="grid" />
                   </div>
-                  <p className={`font-bold truncate group-hover:text-blue-400 transition-colors text-sm ${pageBgColor ? 'text-white' : 'text-gray-900 dark:text-gray-100'}`}>
+                  <p className={`font-bold truncate group-hover:text-blue-400 transition-colors text-sm ${pageBgColor ? (solidOnLight ? 'text-gray-900' : 'text-white') : 'text-gray-900 dark:text-gray-100'}`}>
                     {artist.name}
                   </p>
                 </Link>
