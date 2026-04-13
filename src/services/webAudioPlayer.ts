@@ -85,6 +85,8 @@ export class WebAudioPlayer {
   private duration = 0
   private volume = 0.75
   private isCrossfading = false
+  /** Timestamp (ms) en que arrancó el último crossfade — para detectar estado estancado */
+  private crossfadeStartedAt = 0
 
   // Blob URL for currently cached song served from IndexedDB
   private currentBlobUrl: string | null = null
@@ -1691,6 +1693,19 @@ export class WebAudioPlayer {
   startCrossfade(): void {
     console.log('[WebAudioPlayer] Iniciando crossfade:', this.currentSong?.title, '->', this.nextSong?.title)
 
+    // Detección de crossfade estancado: si isCrossfading lleva más tiempo del
+    // máximo esperado (fade + 20s de margen), probablemente el watchdog no llegó
+    // a tiempo (iOS background). Forzamos reset para no bloquear la próxima transición.
+    if (this.isCrossfading && this.crossfadeStartedAt > 0) {
+      const elapsed = Date.now() - this.crossfadeStartedAt
+      const maxExpected = 45_000 // 45s: máximo teórico (fade 15s + anticipación 10s + margen)
+      if (elapsed > maxExpected) {
+        console.warn(`[WebAudioPlayer] ⚠️ Crossfade estancado (${(elapsed / 1000).toFixed(1)}s), forzando reset`)
+        this.isCrossfading = false
+        this.crossfadeEngine.forceReset()
+      }
+    }
+
     // === MODO MEDIAELEMENT (Electron) ===
     if (this.useMediaElementMode) {
       if (!this.mediaElement || !this.nextMediaElement || !this.nextSong || this.isCrossfading) {
@@ -1704,6 +1719,7 @@ export class WebAudioPlayer {
       }
 
       this.isCrossfading = true
+      this.crossfadeStartedAt = Date.now()
       console.log('[WebAudioPlayer] 🖥️ Iniciando crossfade en modo MediaElement')
 
       // =======================================================================
@@ -1835,6 +1851,7 @@ export class WebAudioPlayer {
     }
 
     this.isCrossfading = true
+    this.crossfadeStartedAt = Date.now()
 
     // Crear nextSource
     this.nextSource = this.audioContext.createBufferSource()

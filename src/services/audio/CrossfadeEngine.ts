@@ -150,95 +150,99 @@ export class CrossfadeEngine {
     console.log(`[CrossfadeEngine] 🎵 Iniciando: "${currentSong.title}" → "${nextSong.title}"`)
 
     // =======================================================================
-    // 1. CALCULAR CONFIGURACIÓN
+    // 1-8. SETUP DEL GRAFO DE AUDIO
+    // Envuelto en try/catch: si falla cualquier operación WebAudio (e.g.
+    // disconnect() en iOS post-suspensión), reseteamos el flag y reconectamos
+    // A directamente al master para evitar silencio.
     // =======================================================================
-    const config = calculateCrossfadeConfig({
-      currentAnalysis,
-      nextAnalysis,
-      bufferADuration: currentBuffer.duration,
-      bufferBDuration: nextBuffer.duration,
-      mode,
-      currentPlaybackTimeA,
-    })
+    let config: CrossfadeConfig
+    let timings: CrossfadeTimings
+    let chainA: EffectsChainA
+    let chainB: EffectsChainB
 
-    console.log(`[CrossfadeEngine] Config: entrada=${config.entryPoint.toFixed(2)}s, fade=${config.fadeDuration.toFixed(2)}s`)
+    try {
+      // 1. Calcular configuración
+      config = calculateCrossfadeConfig({
+        currentAnalysis,
+        nextAnalysis,
+        bufferADuration: currentBuffer.duration,
+        bufferBDuration: nextBuffer.duration,
+        mode,
+        currentPlaybackTimeA,
+      })
 
-    // =======================================================================
-    // 2. CALCULAR TIMINGS
-    // =======================================================================
-    const timings = this.calculateTimings(audioContext, config)
+      console.log(`[CrossfadeEngine] Config: entrada=${config.entryPoint.toFixed(2)}s, fade=${config.fadeDuration.toFixed(2)}s`)
 
-    // =======================================================================
-    // 3. CREAR CADENAS DE EFECTOS
-    // =======================================================================
-    const chainA = createEffectsChainA({ audioContext, config, timings, maxVolume: trackGainA })
-    const chainB = createEffectsChainB({ audioContext, config, timings }) // maxVolume not needed here since it starts at 0
+      // 2. Calcular timings
+      timings = this.calculateTimings(audioContext, config)
 
-    // =======================================================================
-    // 4. DESCONECTAR A DEL MASTER Y RECONECTAR CON EFECTOS
-    // =======================================================================
-    currentSource.disconnect(masterGain)
-    connectEffectsChainA(currentSource, chainA, masterGain)
+      // 3. Crear cadenas de efectos
+      chainA = createEffectsChainA({ audioContext, config, timings, maxVolume: trackGainA })
+      chainB = createEffectsChainB({ audioContext, config, timings })
 
-    // Asegurar volumen maestro correcto (base de usuario, cadenas manejan el ReplayGain)
-    masterGain.gain.setValueAtTime(volume, audioContext.currentTime)
+      // 4. Desconectar A del master y reconectar con efectos
+      currentSource.disconnect(masterGain)
+      connectEffectsChainA(currentSource, chainA, masterGain)
+      masterGain.gain.setValueAtTime(volume, audioContext.currentTime)
 
-    // =======================================================================
-    // 5. PROGRAMAR AUTOMATIZACIONES DE A
-    // =======================================================================
-    scheduleEffectsChainA(chainA, config, timings, trackGainA)
+      // 5. Programar automatizaciones de A
+      scheduleEffectsChainA(chainA, config, timings, trackGainA)
 
-    const filterMode = config.useFilters 
-      ? (config.useAggressiveFilters ? 'AGRESIVO' : 'normal') 
-      : 'SIN FILTROS'
-    
-    console.log(
-      `[CrossfadeEngine] Fade out A [${config.transitionType}]: 1.0 → 0 en ${(timings.transitionEndTime - timings.filterStartTime).toFixed(2)}s ` +
-      `(pre-filtro: ${timings.filterLead.toFixed(2)}s) [${filterMode}]`
-    )
+      const filterMode = config.useFilters
+        ? (config.useAggressiveFilters ? 'AGRESIVO' : 'normal')
+        : 'SIN FILTROS'
+      console.log(
+        `[CrossfadeEngine] Fade out A [${config.transitionType}]: 1.0 → 0 en ` +
+        `${(timings.transitionEndTime - timings.filterStartTime).toFixed(2)}s ` +
+        `(pre-filtro: ${timings.filterLead.toFixed(2)}s) [${filterMode}]`
+      )
 
-    // =======================================================================
-    // 6. CONECTAR B CON EFECTOS
-    // =======================================================================
-    connectEffectsChainB(nextSource, chainB, masterGain)
+      // 6. Conectar B con efectos
+      connectEffectsChainB(nextSource, chainB, masterGain)
 
-    // =======================================================================
-    // 7. PROGRAMAR AUTOMATIZACIONES DE B
-    // =======================================================================
-    scheduleEffectsChainB(chainB, config, timings, trackGainB)
+      // 7. Programar automatizaciones de B
+      scheduleEffectsChainB(chainB, config, timings, trackGainB)
 
-    // =======================================================================
-    // 8. INICIAR REPRODUCCIÓN DE B
-    // =======================================================================
-    nextSource.start(timings.anticipationStartTime, timings.startOffset)
+      // 8. Iniciar reproducción de B
+      nextSource.start(timings.anticipationStartTime, timings.startOffset)
 
-    const effectsSummary = getEffectsSummary(chainB)
-    const volumeRamp = config.needsAnticipation 
-      ? '0%→30%→50%→100%' 
-      : '0%→100%'
-    
-    console.log(
-      `[CrossfadeEngine] Fade in B: ${volumeRamp} en ` +
-      `${(timings.fadeInEndTime - timings.anticipationStartTime).toFixed(2)}s ` +
-      `desde ${timings.startOffset.toFixed(2)}s → ${config.entryPoint.toFixed(2)}s ` +
-      `[${effectsSummary.join(', ') || 'sin efectos'}]`
-    )
+      const effectsSummary = getEffectsSummary(chainB)
+      const volumeRamp = config.needsAnticipation ? '0%→30%→50%→100%' : '0%→100%'
+      console.log(
+        `[CrossfadeEngine] Fade in B: ${volumeRamp} en ` +
+        `${(timings.fadeInEndTime - timings.anticipationStartTime).toFixed(2)}s ` +
+        `desde ${timings.startOffset.toFixed(2)}s → ${config.entryPoint.toFixed(2)}s ` +
+        `[${effectsSummary.join(', ') || 'sin efectos'}]`
+      )
+    } catch (setupError) {
+      // Restaurar A al master para evitar silencio y liberar el flag
+      console.error('[CrossfadeEngine] ❌ Error en setup del crossfade, restaurando A:', setupError)
+      this.isCrossfading = false
+      try { currentSource.connect(masterGain) } catch { /* ya conectado o muerto */ }
+      masterGain.gain.setValueAtTime(volume * trackGainA, audioContext.currentTime)
+      throw setupError
+    }
 
     // =======================================================================
     // 9. ESPERAR Y COMPLETAR
     // =======================================================================
-    return new Promise<CrossfadeResult>((resolve) => {
+    return new Promise<CrossfadeResult>((resolve, reject) => {
       const cleanupTime = timings.totalTime * 1000 + 500 // +500ms margen
 
-      setTimeout(() => {
-        this.completeCrossfade(
-          resources,
-          chainA,
-          chainB,
-          config,
-          resolve
-        )
+      const mainTimer = setTimeout(() => {
+        this.completeCrossfade(resources, chainA, chainB, config, resolve, reject)
       }, cleanupTime)
+
+      // Watchdog secundario: si el JS thread fue throttleado (iOS background,
+      // pantalla bloqueada) y el timer principal se retrasó, este garantiza
+      // que el audio nunca se quede en estado fantasma.
+      const watchdogTime = cleanupTime + Math.max(3000, timings.totalTime * 500)
+      setTimeout(() => {
+        if (!this.isCrossfading) return // Ya completó normalmente
+        clearTimeout(mainTimer)
+        console.warn('[CrossfadeEngine] ⚠️ Watchdog JS disparado — forzando completado')
+        this.completeCrossfade(resources, chainA, chainB, config, resolve, reject)
+      }, watchdogTime)
     })
   }
 
@@ -294,14 +298,19 @@ export class CrossfadeEngine {
 
   /**
    * Completa el crossfade: limpia recursos y promociona B a actual.
+   * Siempre settle la Promise (resolve o reject) para que webAudioPlayer
+   * nunca quede con isCrossfading = true indefinidamente.
    */
   private completeCrossfade(
     resources: CrossfadeResources,
     chainA: EffectsChainA,
     chainB: EffectsChainB,
     config: CrossfadeConfig,
-    resolve: (result: CrossfadeResult) => void
+    resolve: (result: CrossfadeResult) => void,
+    reject: (reason: Error) => void
   ): void {
+    if (!this.isCrossfading) return // Ya fue completado (e.g. doble watchdog)
+
     const { currentSource, nextSource, nextBuffer, nextSong, nextAnalysis, masterGain, audioContext, volume } = resources
 
     console.log(`[CrossfadeEngine] Completando crossfade`)
@@ -310,6 +319,7 @@ export class CrossfadeEngine {
     if (!nextSource || !nextBuffer || !nextSong) {
       console.warn('[CrossfadeEngine] ⚠️ Recursos no disponibles al completar')
       this.isCrossfading = false
+      reject(new Error('Recursos de crossfade no disponibles al completar'))
       return
     }
 
