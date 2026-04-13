@@ -93,14 +93,9 @@
         height: 88px;
         /* Logo es oscuro por defecto — en dark mode lo invertimos a blanco */
         filter: brightness(0);
-        animation: splash-breathe 2s ease-in-out infinite;
       }
       html.dark #splash-logo {
         filter: brightness(0) invert(1);
-      }
-      @keyframes splash-breathe {
-        0%, 100% { opacity: 0.7; transform: scale(1); }
-        50%       { opacity: 1;   transform: scale(1.04); }
       }
     </style>
   </head>
