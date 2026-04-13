@@ -31,8 +31,25 @@ import NativeBackButton from './components/NativeBackButton'
 const LyricsPage = lazy(() => import('./components/LyricsPage'))
 const CanvasPage = lazy(() => import('./components/CanvasPage'))
 
+// Desvanecer y eliminar el splash screen del index.html una vez React está montado.
+// Se llama una sola vez: en el primer render de App, independientemente de si el
+// usuario está conectado o no, ya que ambas rutas (ServerConnection / MainApp) son
+// contenido real que puede mostrarse.
+function hideSplash() {
+  const el = document.getElementById('splash-screen')
+  if (!el) return
+  el.classList.add('hiding')
+  el.addEventListener('transitionend', () => el.remove(), { once: true })
+  // Safety: si transitionend no dispara (prefers-reduced-motion, etc.)
+  setTimeout(() => el.remove(), 400)
+}
+
 function App() {
   const [isConnected, setIsConnected] = useState(() => !!navidromeApi.getConfig())
+
+  useEffect(() => {
+    hideSplash()
+  }, [])
 
   if (!isConnected) {
     return <ServerConnection onConnected={() => setIsConnected(true)} />

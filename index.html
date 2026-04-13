@@ -22,7 +22,7 @@
         document.documentElement.classList.add(isDark ? 'dark' : 'light')
 
         // Aplicar color de fondo inmediatamente para evitar flash
-        document.documentElement.style.backgroundColor = isDark ? '#1f2937' : '#f3f4f6'
+        document.documentElement.style.backgroundColor = isDark ? '#121212' : '#f3f4f6'
         document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
       })()
     </script>
@@ -57,7 +57,7 @@
         overscroll-behavior: none;
       }
       html.dark {
-        background-color: #1f2937;
+        background-color: #121212;
       }
       body {
         margin: 0;
@@ -66,34 +66,49 @@
         overflow: hidden;
         overscroll-behavior: none;
       }
-      /* Ocultar contenido hasta que React se hidrate */
-      #root:empty {
-        min-height: 100vh;
+
+      /* ── Splash screen ─────────────────────────────────────────────────────── */
+      /* Se muestra desde el primer frame hasta que React llama a hideSplash().   */
+      /* Cubre cualquier flash de contenido sin renderizar.                        */
+      #splash-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
+        background-color: #f3f4f6;
+        transition: opacity 0.25s ease-out;
       }
-      #root:empty::after {
-        content: '';
-        width: 40px;
-        height: 40px;
-        border: 3px solid rgba(156, 163, 175, 0.3);
-        border-top-color: #6b7280;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
+      html.dark #splash-screen {
+        background-color: #121212;
       }
-      html.dark #root:empty::after {
-        border-color: rgba(156, 163, 175, 0.2);
-        border-top-color: #9ca3af;
+      #splash-screen.hiding {
+        opacity: 0;
+        pointer-events: none;
       }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
+      #splash-logo {
+        width: 88px;
+        height: 88px;
+        /* Logo es oscuro por defecto — en dark mode lo invertimos a blanco */
+        filter: brightness(0);
+        animation: splash-breathe 2s ease-in-out infinite;
+      }
+      html.dark #splash-logo {
+        filter: brightness(0) invert(1);
+      }
+      @keyframes splash-breathe {
+        0%, 100% { opacity: 0.7; transform: scale(1); }
+        50%       { opacity: 1;   transform: scale(1.04); }
       }
     </style>
   </head>
   <body>
+    <!-- Splash screen: visible inmediatamente, removido por React al montar -->
+    <div id="splash-screen" aria-hidden="true">
+      <img id="splash-logo" src="/assets/logo-icon.svg" alt="" draggable="false" />
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
