@@ -60,6 +60,8 @@ export interface CrossfadeResources {
   trackGainA?: number
   /** Multiplicador ReplayGain para B (opcional) */
   trackGainB?: number
+  /** Posición de reproducción actual de A (segundos) — para beat-sync de fase cruzada */
+  currentPlaybackTimeA?: number
 }
 
 export interface CrossfadeResult {
@@ -142,6 +144,7 @@ export class CrossfadeEngine {
       volume,
       trackGainA = 1.0,
       trackGainB = 1.0,
+      currentPlaybackTimeA,
     } = resources
 
     console.log(`[CrossfadeEngine] 🎵 Iniciando: "${currentSong.title}" → "${nextSong.title}"`)
@@ -155,6 +158,7 @@ export class CrossfadeEngine {
       bufferADuration: currentBuffer.duration,
       bufferBDuration: nextBuffer.duration,
       mode,
+      currentPlaybackTimeA,
     })
 
     console.log(`[CrossfadeEngine] Config: entrada=${config.entryPoint.toFixed(2)}s, fade=${config.fadeDuration.toFixed(2)}s`)

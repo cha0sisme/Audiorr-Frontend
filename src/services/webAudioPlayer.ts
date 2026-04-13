@@ -1721,6 +1721,7 @@ export class WebAudioPlayer {
         bufferADuration: currentDuration,
         bufferBDuration: nextDuration,
         mode,
+        currentPlaybackTimeA: this.mediaElement?.currentTime ?? undefined,
       })
 
       console.log(`[CROSSFADE] ${this.isDjMode ? 'MODO DJ' : 'MODO NORMAL'}`)
@@ -1857,6 +1858,7 @@ export class WebAudioPlayer {
       volume: this.volume,
       trackGainA: this.getReplayGainMultiplier(this.currentSong),
       trackGainB: this.getReplayGainMultiplier(this.nextSong),
+      currentPlaybackTimeA: this.getCurrentTime(),
     }
 
     // Liberar buffer A anticipadamente para ahorrar memoria

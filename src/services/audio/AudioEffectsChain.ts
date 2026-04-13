@@ -384,11 +384,18 @@ export function scheduleEffectsChainB(
     }
     
     // Programar filtros normales
+    // IMPORTANTE: anclar al fadeInStartTime, no al now.
+    // Si se ancla a now, el sweep ocurre antes de que B sea audible y el efecto llega
+    // a medias cuando el gain sube (p.ej. highpass ya en 318 Hz en vez de 400 Hz).
     if (highpass && highpassConfig) {
+      highpass.frequency.cancelScheduledValues(timings.now)
+      highpass.frequency.setValueAtTime(highpassConfig.startFreq, timings.fadeInStartTime)
       highpass.frequency.linearRampToValueAtTime(highpassConfig.endFreq, timings.fadeInEndTime)
     }
-    
+
     if (lowshelf && lowshelfConfig) {
+      lowshelf.gain.cancelScheduledValues(timings.now)
+      lowshelf.gain.setValueAtTime(lowshelfConfig.startGain, timings.fadeInStartTime)
       lowshelf.gain.linearRampToValueAtTime(lowshelfConfig.endGain, timings.fadeInEndTime)
     }
   }

@@ -72,6 +72,8 @@ export interface EntryPointInput {
   bufferDuration: number
   /** Modo de mezcla */
   mode: MixMode
+  /** Posición de reproducción actual de A (segundos) — para beat-sync de fase cruzada */
+  currentPlaybackTimeA?: number
 }
 
 export interface EntryPointResult {
@@ -92,7 +94,7 @@ export interface EntryPointResult {
  * En modo Normal: Conservador, transiciones suaves
  */
 export function calculateSmartEntryPoint(input: EntryPointInput): EntryPointResult {
-  const { nextAnalysis, currentAnalysis, bufferDuration, mode } = input
+  const { nextAnalysis, currentAnalysis, bufferDuration, mode, currentPlaybackTimeA } = input
   const config = MIX_MODE_CONFIGS[mode]
   
   let entryPoint = 0
@@ -162,7 +164,7 @@ export function calculateSmartEntryPoint(input: EntryPointInput): EntryPointResu
 
   // Beat matching (solo en modo DJ)
   if (mode === 'dj') {
-    const beatResult = applyBeatSync(entryPoint, currentAnalysis, nextAnalysis)
+    const beatResult = applyBeatSync(entryPoint, currentAnalysis, nextAnalysis, currentPlaybackTimeA)
     entryPoint = beatResult.adjustedEntryPoint
     beatSyncInfo = beatResult.info
     isBeatSynced = beatResult.isSynced
@@ -188,12 +190,16 @@ interface BeatSyncResult {
 
 /**
  * Ajusta el punto de entrada para sincronizar con el beat o downbeat.
- * Solo se aplica si ambas canciones tienen datos de beatInterval.
+ *
+ * Con currentPlaybackTimeA: sincronización de fase cruzada real — B entra alineado
+ * con la fase de beat de A en ese momento, no solo con la rejilla propia de B.
+ * Sin currentPlaybackTimeA: alineación a la rejilla propia de B (comportamiento previo).
  */
 function applyBeatSync(
   entryPoint: number,
   currentAnalysis: AudioAnalysisResult | null,
-  nextAnalysis: AudioAnalysisResult | null
+  nextAnalysis: AudioAnalysisResult | null,
+  currentPlaybackTimeA?: number
 ): BeatSyncResult {
   if (
     !currentAnalysis ||
@@ -213,45 +219,72 @@ function applyBeatSync(
 
   const downbeatsB = (nextAnalysis as ExtendedAudioAnalysis).downbeatTimes as number[] | undefined
   const targetBeats = (downbeatsB && downbeatsB.length > 0) ? downbeatsB : []
-  
+
   let adjustedEntryPoint = entryPoint
   let info = ''
 
+  // =========================================================================
+  // FASE 1: Alinear B a su propia rejilla de downbeats/compases
+  // =========================================================================
   if (targetBeats.length > 0) {
-    // Mejora v2: Alinear usando downbeats reales en vez de beats arbitrarios
     const nearest = targetBeats.reduce((prev, curr) => Math.abs(curr - entryPoint) < Math.abs(prev - entryPoint) ? curr : prev)
     const rawAdjustment = nearest - entryPoint
-    const adjustment = Math.max(-beatIntervalB, Math.min(beatIntervalB, rawAdjustment)) // Límite estricto ±1 beat
+    const adjustment = Math.max(-beatIntervalB, Math.min(beatIntervalB, rawAdjustment))
     adjustedEntryPoint = entryPoint + adjustment
-    info = `Beat-sync (Downbeat real): ${adjustment > 0 ? '+' : ''}${adjustment.toFixed(3)}s (${entryPoint.toFixed(2)}s → ${adjustedEntryPoint.toFixed(2)}s)`
+    info = `Downbeat real: ${adjustment > 0 ? '+' : ''}${adjustment.toFixed(3)}s`
   } else {
-    // Estimación: Calcular en qué fase del "downbeat estimado" (cada 4 beats) estaría B
-    const estimativeMeasure = beatIntervalB * 4
-    const timeIntoMeasure = entryPoint % estimativeMeasure
-    
+    const measureB = beatIntervalB * 4
+    const timeIntoMeasure = entryPoint % measureB
     let rawAdjustment = 0
-    if (timeIntoMeasure > estimativeMeasure * 0.1) {
-      rawAdjustment = estimativeMeasure - timeIntoMeasure
+    if (timeIntoMeasure > measureB * 0.1) {
+      rawAdjustment = measureB - timeIntoMeasure
     } else if (timeIntoMeasure > 0.001) {
       rawAdjustment = -timeIntoMeasure
     }
-
-    // Mejora v2: Limitar ajuste a máximo ±1 beat individual para evitar saltos rítmicos muy evidentes
     const adjustment = Math.max(-beatIntervalB, Math.min(beatIntervalB, rawAdjustment))
     adjustedEntryPoint = entryPoint + adjustment
-    info = `Beat-sync (Estimación 4-beats limitado): ${adjustment > 0 ? '+' : ''}${adjustment.toFixed(3)}s (${entryPoint.toFixed(2)}s → ${adjustedEntryPoint.toFixed(2)}s)`
+    info = `Estimación 4-beats: ${adjustment > 0 ? '+' : ''}${adjustment.toFixed(3)}s`
   }
 
-  console.log(`[BEAT-SYNC] ${info}`)
+  // =========================================================================
+  // FASE 2: Alineación de fase cruzada A↔B (requiere posición actual de A)
+  //
+  // B ya está en su downbeat, pero A puede estar a mitad de compás.
+  // Buscamos el downbeat de B más cercano que esté en fase con A:
+  //   fase de A ahora = currentPlaybackTimeA % beatIntervalA
+  //   B debe estar en esa misma fracción de beat cuando el crossfade arranca.
+  //   Ajustamos entryPoint en pasos de beatIntervalB hasta minimizar la diferencia de fase.
+  // =========================================================================
+  if (currentPlaybackTimeA !== undefined && currentPlaybackTimeA > 0) {
+    const beatFractionA = (currentPlaybackTimeA % beatIntervalA) / beatIntervalA // 0..1
+    const targetPhaseOffsetB = beatFractionA * beatIntervalB // fase equiv. en rejilla B
+
+    const currentPhaseB = adjustedEntryPoint % beatIntervalB
+    let phaseError = targetPhaseOffsetB - currentPhaseB
+    // Normalizar a ±0.5 beat
+    if (phaseError > beatIntervalB / 2) phaseError -= beatIntervalB
+    if (phaseError < -beatIntervalB / 2) phaseError += beatIntervalB
+
+    // Solo aplicar si el error supera 10% del beat (ruido de análisis)
+    if (Math.abs(phaseError) > beatIntervalB * 0.10) {
+      const phaseAdj = Math.max(-beatIntervalB, Math.min(beatIntervalB, phaseError))
+      adjustedEntryPoint += phaseAdj
+      info += ` + fase A↔B: ${phaseAdj > 0 ? '+' : ''}${phaseAdj.toFixed(3)}s`
+      console.log(
+        `[BEAT-SYNC] Fase cruzada: A en ${(beatFractionA * 100).toFixed(0)}% de su beat → ajuste B ${phaseAdj > 0 ? '+' : ''}${phaseAdj.toFixed(3)}s`
+      )
+    }
+  }
+
+  const fullInfo = `Beat-sync (${info}): ${entryPoint.toFixed(2)}s → ${adjustedEntryPoint.toFixed(2)}s`
+  console.log(`[BEAT-SYNC] ${fullInfo}`)
   console.log(
     `[BEAT-SYNC] A: ${beatIntervalA.toFixed(3)}s/beat (${(60 / beatIntervalA).toFixed(1)} BPM), ` +
     `B: ${beatIntervalB.toFixed(3)}s/beat (${(60 / beatIntervalB).toFixed(1)} BPM)`
   )
 
-  return { adjustedEntryPoint, info, isSynced: true }
+  return { adjustedEntryPoint, info: fullInfo, isSynced: true }
 }
-// Mejora v2: Se agregó la prioridad para sincronizar "downbeats" (primer golpe de compás) y 
-// un limitador "Hard Clip" de ±1 beat para que los adelantos/retrasos nunca desubiquen al usuario bruscamente.
 
 // =============================================================================
 // CÁLCULO DE DURACIÓN DE FADE
@@ -583,8 +616,11 @@ export function decideTransitionType(input: TransitionTypeDecisionInput): Transi
   let isBAbrupt = false
   if (hasNextAnalysis) {
     const introEnd = nextAnalysis!.introEndTime
-    const vocalStart = nextAnalysis!.vocalStartTime || 0
-    if (!introEnd || introEnd < 2 || (vocalStart > 0 && config.entryPoint >= vocalStart)) {
+    // Solo es "abrupto" si B no tiene intro real (< 2s).
+    // Entrar en o después del vocal start es lo normal en modo DJ (vocalLeadTime = 0);
+    // no implica que la canción sea abrupta, y la condición anterior bloqueaba
+    // BEAT_MATCH_BLEND en prácticamente todos los casos con voz.
+    if (!introEnd || introEnd < 2) {
       isBAbrupt = true
     }
   } else {
@@ -679,19 +715,22 @@ export interface CrossfadeCalculationInput {
   mode: MixMode
   /** Análisis (siguiente) */
   nextAnalysis: AudioAnalysisResult | null
+  /** Posición de reproducción actual de A (segundos) — para beat-sync de fase cruzada */
+  currentPlaybackTimeA?: number
 }
 
 /**
  * Calcula toda la configuración necesaria para el crossfade.
  */
 export function calculateCrossfadeConfig(input: CrossfadeCalculationInput): CrossfadeConfig {
-  const { currentAnalysis, nextAnalysis, bufferADuration, bufferBDuration, mode } = input
+  const { currentAnalysis, nextAnalysis, bufferADuration, bufferBDuration, mode, currentPlaybackTimeA } = input
 
   const entryResult = calculateSmartEntryPoint({
     nextAnalysis,
     currentAnalysis,
     bufferDuration: bufferBDuration,
     mode,
+    currentPlaybackTimeA,
   })
 
   // 2. Calcular duración de fade
