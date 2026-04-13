@@ -27,6 +27,11 @@ export default function Canvas({ canvasUrl, isLoading, className = '', isPlaying
   const [imageError, setImageError] = useState(false)
   const [isImage, setIsImage] = useState(false)
 
+  // Ref siempre actualizado: lo usan los callbacks del effect de carga (closure sobre canvasUrl)
+  // para conocer el valor *actual* de isPlaying sin necesitar isPlaying como dependencia.
+  const isPlayingRef = useRef(isPlaying)
+  useEffect(() => { isPlayingRef.current = isPlaying }, [isPlaying])
+
   // Play / pause the canvas video in sync with the song
   useEffect(() => {
     const video = videoRef.current
@@ -69,13 +74,13 @@ export default function Canvas({ canvasUrl, isLoading, className = '', isPlaying
     video.playsInline = true // Importante para móviles
     video.preload = 'auto'
 
-    // Función para intentar reproducir el video
+    // Función para intentar reproducir el video — respeta el estado de pausa actual
     const attemptPlay = async () => {
+      if (!isPlayingRef.current) return
       try {
         await video.play()
       } catch (error) {
         // Ignorar errores de reproducción automática (políticas del navegador)
-        // El usuario puede interactuar manualmente si es necesario
         console.debug('[Canvas] No se pudo reproducir automáticamente:', error)
       }
     }
