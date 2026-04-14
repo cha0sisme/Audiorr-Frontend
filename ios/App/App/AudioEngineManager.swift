@@ -529,8 +529,10 @@ class AudioEngineManager {
 
         let item = AVPlayerItem(url: remoteURL)
         let player = AVPlayer(playerItem: item)
-        // AVPlayer volume es independiente de AVAudioEngine — aplicar volumen maestro
-        player.volume = volume
+        // AVPlayer volume es independiente de AVAudioEngine.
+        // Aplicar volumen maestro × ReplayGain para consistencia con el modo engine,
+        // donde mainMixerNode.outputVolume = volume y mixerA.outputVolume = replayGainMultiplier.
+        player.volume = min(1.0, volume * replayGainMultiplier)
         streamPlayer = player
 
         if startAt > 0 {
@@ -637,7 +639,8 @@ class AudioEngineManager {
     func setVolume(_ vol: Float) {
         volume = max(0, min(1, vol))
         engine.mainMixerNode.outputVolume = volume
-        streamPlayer?.volume = volume
+        // Modo stream: AVPlayer.volume = volumen × ReplayGain (igual que modo engine)
+        streamPlayer?.volume = min(1.0, volume * replayGainMultiplierA)
     }
 
     // MARK: - Tiempo actual
@@ -748,6 +751,17 @@ class AudioEngineManager {
             self.playStartOffset = startOffset
             self.pauseSampleTime = 0
 
+            // CRÍTICO: Actualizar duración y metadata de la nueva canción.
+            // Sin esto, notifyTimeUpdate() sigue enviando la duración de la canción
+            // saliente, corrompiendo el cálculo del trigger del siguiente crossfade en JS
+            // (remaining = wrongDuration - currentTime < 0 → crossfade bloqueado).
+            if self.nextSongDuration > 0 {
+                self.currentSongDuration = self.nextSongDuration
+            }
+            if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
+            if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
+            if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
+
             // Resetear EQ a bypass (bandas de crossfade 0-1 tras el swap)
             self.eqA.bands[0].bypass = true
             self.eqA.bands[1].bypass = true
@@ -772,6 +786,32 @@ class AudioEngineManager {
             self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": actualPosition])
 
             print("[AudioEngineManager] Crossfade completado (swap A↔B), offset: \(String(format: "%.1f", actualPosition))s")
+        }
+
+        // Safety net: si playerB llega al final de su buffer sin que el crossfade haya
+        // completado (automix no disparó a tiempo, watchdog falló), notificar onTrackEnd
+        // para que JS pueda recuperar el flujo con una transición directa.
+        executor.onPlayerBEndedNaturally = { [weak self] in
+            guard let self = self, self.isCrossfading else { return }
+            print("[AudioEngineManager] ⚠️ PlayerB terminó sin crossfade completado — disparando onTrackEnd")
+            self.isCrossfading = false
+            self.crossfadeExecutor = nil
+            // Promover B→A manualmente para que el estado quede consistente
+            self.playerA.stop()
+            swap(&self.playerA, &self.playerB)
+            swap(&self.eqA, &self.eqB)
+            swap(&self.mixerA, &self.mixerB)
+            self.currentFile = self.nextFile
+            self.nextFile = nil
+            self.replayGainMultiplierA = self.replayGainMultiplierB
+            if self.nextSongDuration > 0 { self.currentSongDuration = self.nextSongDuration }
+            if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
+            if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
+            if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
+            self.isPlaying = false
+            self.stopProgressTimer()
+            self.updateNowPlayingPlaybackState()
+            self.plugin?.notifyListeners("onTrackEnd", data: [:])
         }
 
         crossfadeExecutor = executor

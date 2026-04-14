@@ -108,6 +108,9 @@ class CrossfadeExecutor {
     private var lastLogTime: Double = 0
 
     var onComplete: ((Double) -> Void)?
+    /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
+    /// Permite que AudioEngineManager notifique onTrackEnd como safety net.
+    var onPlayerBEndedNaturally: (() -> Void)?
 
     // MARK: - Init
 
@@ -311,7 +314,14 @@ class CrossfadeExecutor {
 
         mixerB.outputVolume = 0  // B starts silent; filterTick ramps it up
 
-        playerB.scheduleSegment(nextFile, startingFrame: startFrame, frameCount: framesToPlay, at: nil)
+        playerB.scheduleSegment(nextFile, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self, !self.isCancelled else { return }
+                // Si llegamos aquí sin que completeCrossfade() haya corrido, el automix
+                // no disparó a tiempo. Notificar para que onTrackEnd recupere el flujo.
+                self.onPlayerBEndedNaturally?()
+            }
+        }
         return true
     }
 
@@ -472,14 +482,19 @@ class CrossfadeExecutor {
         let bandA = eqA.bands[0]
 
         if config.transitionType == .eqMix || config.transitionType == .beatMatchBlend {
-            let totalDur = timings.transitionEndTime - timings.filterStartTime
-            guard totalDur > 0 else { return }
-            let p = (t - timings.filterStartTime) / totalDur
-            let quickCut = 0.3
-            if p < quickCut {
-                bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(p / quickCut))
+            // Pivot en el 30% de [volumeFadeStartTime, transitionEndTime] — igual que JS:
+            // quickCutTime = volumeFadeStartTime + 0.3 * (transitionEndTime - volumeFadeStartTime)
+            let pivotTime = timings.volumeFadeStartTime + (timings.transitionEndTime - timings.volumeFadeStartTime) * 0.3
+            if t < pivotTime {
+                let dur = pivotTime - timings.filterStartTime
+                guard dur > 0 else { return }
+                let p = (t - timings.filterStartTime) / dur
+                bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(min(1, p)))
             } else {
-                bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float((p - quickCut) / (1.0 - quickCut)))
+                let dur = timings.transitionEndTime - pivotTime
+                guard dur > 0 else { return }
+                let p = (t - pivotTime) / dur
+                bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
             }
         } else {
             if t < timings.volumeFadeStartTime {

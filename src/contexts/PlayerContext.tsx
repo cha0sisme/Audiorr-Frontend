@@ -3071,6 +3071,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         )
         setIsCrossfading(false)
         setIsPlaying(true)
+        // Resetear para que el native backup timer se configure en la nueva canción.
+        // Sin esto, automixTriggerSentRef queda true del ciclo anterior y el nativo
+        // nunca recibe setAutomixTrigger para las canciones siguientes.
+        automixTriggerSentRef.current = false
+        outroRefinedForCurrentSongRef.current = false
         // Actualizar canción actual
         const newCurrentSong = {
           title: nextSong.title,
