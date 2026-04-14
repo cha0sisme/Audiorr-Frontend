@@ -245,7 +245,7 @@ const StackPage = memo(function StackPage({
   return (
     <div
       ref={pageRef}
-      className="bg-gray-50 dark:bg-[#121212]"
+      className={`bg-gray-50 dark:bg-[#121212]${status === 'exiting' ? ' page-is-exiting' : ''}`}
       style={{
         position: 'absolute',
         top: 0,
@@ -256,9 +256,16 @@ const StackPage = memo(function StackPage({
         overflowX: 'hidden',
         WebkitOverflowScrolling: 'touch',
         overscrollBehavior: 'none',
-        visibility: status === 'cached' ? 'hidden' : 'visible',
+        // Cached pages stay visible in the GPU compositing pipeline.
+        // Previously visibility:hidden caused a GPU layer re-promotion on iOS
+        // when switching from hidden→visible, producing a 1-frame flash of the
+        // cached page's content just as the exit animation started on the top page.
+        // By keeping all pages visible (covered by z-index), the reveal on back
+        // is just the exit slide — no compositor flush, no flash.
         zIndex: isAnimating ? 2 : status === 'active' ? 1 : 0,
-        pointerEvents: isAnimating ? 'none' : 'auto',
+        // Non-active pages must never receive pointer events: cached pages are
+        // covered visually by z-index but would otherwise intercept touches.
+        pointerEvents: status === 'active' ? 'auto' : 'none',
       }}
     >
       <div className={effectiveHero ? 'p-0 pb-[200px] md:pb-6' : `p-4 ${topPad} pb-[200px] md:p-6 md:pb-6 lg:p-8`}>

@@ -272,7 +272,9 @@ export default function PageHero({
     }
   }, [dominantColors])
 
-  // Update iOS notch / browser chrome color
+  // Update iOS notch / browser chrome color.
+  // Only reset to default on cleanup if no other hero has since taken ownership
+  // (e.g. the page below in the stack was cached and is now the active hero).
   useEffect(() => {
     const defaultColor = isDark ? '#121212' : '#f9fafb'
     const color = stickyBgColor ?? defaultColor
@@ -283,8 +285,14 @@ export default function PageHero({
       document.head.appendChild(meta)
     }
     meta.setAttribute('content', color)
-    return () => { 
-      meta?.setAttribute('content', defaultColor)
+    const capturedMeta = meta
+    const capturedColor = color
+    return () => {
+      // Only revert if the meta still shows the color this hero set.
+      // If another hero has already written a different color, leave it alone.
+      if (capturedMeta.getAttribute('content') === capturedColor) {
+        capturedMeta.setAttribute('content', defaultColor)
+      }
     }
   }, [stickyBgColor, isDark])
 

@@ -565,3 +565,16 @@
 .ctx-sheet.closing {
   animation: ctx-sheet-out 0.25s cubic-bezier(0.32, 0.72, 0, 1) both;
 }
+
+/* ── Page exit — sticky header suppression ───────────────────────────────── */
+/* On iOS WKWebView, position:sticky elements inside a scroll container that  */
+/* is being transformed via Web Animations API can briefly "snap" back to     */
+/* their stuck position before following the parent's translateX.             */
+/* Hiding them immediately when the page starts exiting prevents the          */
+/* 1-2 frame flash of the sticky cover image during back navigation.          */
+/* opacity:0 (not visibility:hidden) is used because visibility:hidden        */
+/* can be overridden by a child's visibility:visible.                         */
+.page-is-exiting .sticky {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

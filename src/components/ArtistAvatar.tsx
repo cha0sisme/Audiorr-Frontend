@@ -13,6 +13,11 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
   const [loading, setLoading] = useState(true)
   const ref = useRef<HTMLDivElement>(null)
   const isMounted = useRef(true)
+  // Ref so the fetch closure always calls the latest callback without
+  // being listed as a dependency (which would re-run the effect on every
+  // parent re-render and cause a loading flash each time).
+  const onImageLoadedRef = useRef(onImageLoaded)
+  useEffect(() => { onImageLoadedRef.current = onImageLoaded })
 
   useEffect(() => {
     isMounted.current = true
@@ -30,7 +35,7 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
               if (isMounted.current) {
                 setImageUrl(cachedImage)
                 setLoading(false)
-                onImageLoaded?.(cachedImage)
+                onImageLoadedRef.current?.(cachedImage)
               }
               return
             }
@@ -44,12 +49,12 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
                 if (isMounted.current) {
                   setImageUrl(result)
                   setLoading(false)
-                  onImageLoaded?.(result)
+                  onImageLoadedRef.current?.(result)
                 }
               } catch {
                 if (isMounted.current) {
                   setLoading(false)
-                  onImageLoaded?.(null)
+                  onImageLoadedRef.current?.(null)
                 }
               }
               return
@@ -70,13 +75,13 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
               const result = await promise
               if (isMounted.current) {
                 setImageUrl(result)
-                onImageLoaded?.(result)
+                onImageLoadedRef.current?.(result)
               }
             } catch (error) {
               console.error(`Failed to fetch avatar for ${artistName}`, error)
               if (isMounted.current) {
                 setArtistAvatarCache(cacheKey, null)
-                onImageLoaded?.(null)
+                onImageLoadedRef.current?.(null)
               }
             } finally {
               loadingPromises.delete(cacheKey)
@@ -100,7 +105,7 @@ function ArtistAvatar({ artistName, className, onImageLoaded }: ArtistAvatarProp
       isMounted.current = false
       observer.disconnect()
     }
-  }, [artistName, onImageLoaded])
+  }, [artistName])
 
   return (
     <div

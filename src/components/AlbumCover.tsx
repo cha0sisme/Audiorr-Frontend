@@ -9,12 +9,13 @@ interface Props {
   className?: string
   isLoading?: boolean
   size?: number
+  onImageLoaded?: (url: string) => void
 }
 
 // Registro global de imágenes ya cargadas para evitar parpadeos al navegar (unmount/mount)
 const globalLoadedImages = new Set<string>()
 
-export default function AlbumCover({ coverArtId, customCoverUrl, alt, className, isLoading, size }: Props) {
+export default function AlbumCover({ coverArtId, customCoverUrl, alt, className, isLoading, size, onImageLoaded }: Props) {
   const networkUrl = useMemo(() => {
     if (customCoverUrl) return customCoverUrl
     if (coverArtId) return navidromeApi.getCoverUrl(coverArtId, size)
@@ -50,6 +51,13 @@ export default function AlbumCover({ coverArtId, customCoverUrl, alt, className,
     })
     return () => { cancelled = true }
   }, [coverArtId, networkUrl])
+
+  // Notify parent once the image is actually rendered (covers all paths: network, blob, globalLoadedImages)
+  useEffect(() => {
+    if (isLoaded && networkUrl) {
+      onImageLoaded?.(networkUrl)
+    }
+  }, [isLoaded, networkUrl, onImageLoaded])
 
   const handleLoad = () => {
     if (networkUrl) {

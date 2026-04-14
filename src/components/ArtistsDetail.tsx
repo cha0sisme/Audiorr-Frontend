@@ -147,6 +147,12 @@ export default function ArtistsDetail() {
   const isThisArtistPlaying = currentSource === `artist:${decodeURIComponent(name || '')}`
   const currentSongId = isRemote ? remotePlaybackState?.trackId : playerState.currentSong?.id
 
+  // Stable reference — prevents ArtistAvatar's useEffect from re-running on re-renders
+  const handleArtistImageLoaded = useCallback((url: string | null) => {
+    setArtistImage(url)
+    setColorSourceUrl(url)
+  }, [])
+
   const handleMainPlayClick = useCallback(() => {
     if (isThisArtistPlaying) {
       if (isRemote) {
@@ -275,7 +281,7 @@ export default function ArtistsDetail() {
         isRemote={!!isRemote}
         artistName={decodedName}
         onCoverClick={() => artistImage && setShowAvatarModal(true)}
-        onImageLoaded={(url) => { setArtistImage(url); setColorSourceUrl(url) }}
+        onImageLoaded={handleArtistImageLoaded}
         widePlayButton
         metadata={
           <div className="mt-5 flex flex-wrap items-center gap-x-1 gap-y-1 text-sm md:text-base text-[var(--hero-text-muted)]">

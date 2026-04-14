@@ -11,6 +11,9 @@ import { Playlist } from '../services/navidromeApi'
 import HorizontalScrollSection from './HorizontalScrollSection'
 
 export default function DailyMixSection({ format = 'home' }: { format?: 'home' | 'playlists' }) {
+  const hadCache = useRef<boolean>(
+    (() => { try { return !!sessionStorage.getItem('audiorr:dailyMixes') } catch { return false } })()
+  )
   const [mixes, setMixes] = useState<DailyMix[]>(() => {
     try {
       const cached = sessionStorage.getItem('audiorr:dailyMixes')
@@ -160,7 +163,7 @@ export default function DailyMixSection({ format = 'home' }: { format?: 'home' |
             </p>
           </motion.div>
         ) : (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <motion.div initial={{ opacity: hadCache.current ? 1 : 0 }} animate={{ opacity: 1 }}>
             <HorizontalScrollSection>
               {mixes.map((mix) => {
                 const playlistObj: Playlist = {

@@ -100,17 +100,18 @@ export default function UniversalCover({
   // Playlist / Album / Song
   if (context === 'hero') {
     return (
-      <div 
+      <div
         className={`w-48 h-48 md:w-56 md:h-56 flex-shrink-0 rounded-2xl overflow-hidden transition-all duration-500 ease-out ${onClick ? 'cursor-pointer' : ''}`}
         onClick={onClick}
       >
         <AlbumCover
           coverArtId={coverArtId}
           customCoverUrl={customCoverUrl}
-          size={800}
+          size={400}
           alt={alt}
           className="h-full w-full object-cover"
           isLoading={isLoading}
+          onImageLoaded={onImageLoaded}
         />
       </div>
     )

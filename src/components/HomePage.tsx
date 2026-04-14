@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom'
 import { navidromeApi, type Album, type Song } from '../services/navidromeApi'
 import { usePlayerActions } from '../contexts/PlayerContext'
 import { API_BASE_URL } from '../services/backendApi'
-import Spinner from './Spinner'
 import AlbumCard from './AlbumCard'
 import AlbumCover from './AlbumCover'
 import DailyMixSection from './DailyMixSection'
@@ -123,15 +122,32 @@ export default function HomePage() {
     fetchRecentReleases()
   }, [])
 
-  if (loading && albums.length === 0) {
-    return (
-      <div className="flex justify-center items-center h-64">
-        <Spinner size="lg" />
-      </div>
-    )
-  }
-
   const currentYear = new Date().getFullYear()
+
+  const AlbumCardSkeleton = () => (
+    <div className="flex-shrink-0 w-36 md:w-44 animate-pulse">
+      <div className="aspect-square rounded-lg bg-gray-200 dark:bg-white/[0.08]" />
+      <div className="mt-2 space-y-1.5">
+        <div className="h-3.5 w-3/4 rounded-full bg-gray-200 dark:bg-white/[0.08]" />
+        <div className="h-3 w-1/2 rounded-full bg-gray-100 dark:bg-white/[0.05]" />
+      </div>
+    </div>
+  )
+
+  const TopWeeklySkeleton = () => (
+    <div className="flex-shrink-0 w-[calc(100vw-2rem)] max-w-sm flex flex-col">
+      {[...Array(5)].map((_, i) => (
+        <div key={i} className="flex items-center gap-2.5 py-2 px-2 animate-pulse">
+          <div className="w-5 h-3 flex-shrink-0 rounded-full bg-gray-200 dark:bg-white/[0.08]" />
+          <div className="w-10 h-10 flex-shrink-0 rounded-md bg-gray-200 dark:bg-white/[0.08]" />
+          <div className="flex-1 min-w-0 space-y-1.5">
+            <div className="h-3 w-3/4 rounded-full bg-gray-200 dark:bg-white/[0.08]" />
+            <div className="h-2.5 w-1/2 rounded-full bg-gray-100 dark:bg-white/[0.05]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 
   const toSong = (entry: TopWeeklySong): Song => ({
     id: entry.song_id,
@@ -180,52 +196,55 @@ export default function HomePage() {
       )}
 
       {/* 1. Lo más escuchado — horizontal scroll, 2 columnas de 5 canciones */}
-      {topWeekly.length > 0 && (
+      {backendAvailable && (
         <HorizontalScrollSection title="Lo más escuchado">
-          {[topWeekly.slice(0, 5), topWeekly.slice(5, 10)].map((group, groupIdx) => (
-            <div key={groupIdx} className="flex-shrink-0 w-[calc(100vw-2rem)] max-w-sm flex flex-col">
-              {group.map((entry, i) => {
-                const idx = groupIdx * 5 + i
-                return (
-                  <div
-                    key={entry.song_id}
-                    className="flex items-center gap-2.5 py-2 px-2 rounded-xl cursor-pointer select-none active:bg-black/5 dark:active:bg-white/5 transition-colors"
-                    onClick={() => {
-                      const allSongs = topWeekly.slice(0, 10).map(toSong)
-                      playerActions.playPlaylistFromSong(allSongs, allSongs[idx], `album:${entry.album_id}`)
-                    }}
-                  >
-                    <span className="w-5 text-center font-bold tabular-nums text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">
-                      {entry.rank}
-                    </span>
-                    <div className="w-10 h-10 flex-shrink-0 rounded-md overflow-hidden shadow">
-                      <AlbumCover coverArtId={entry.cover_art} size={80} className="w-full h-full" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold leading-tight truncate text-gray-900 dark:text-white">
-                        {entry.title}
-                      </p>
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">{entry.artist}</p>
-                    </div>
-                    <div className="flex items-center gap-0.5 flex-shrink-0">
-                      <TrendIndicator trend={entry.trend} change={entry.change} />
-                      <button
-                        className="flex items-center justify-center w-7 h-7 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 transition-colors"
-                        aria-label="Más opciones"
-                        onClick={e => { e.stopPropagation(); handleContextMenu(e, toSong(entry)) }}
+          {topWeekly.length > 0
+            ? [topWeekly.slice(0, 5), topWeekly.slice(5, 10)].map((group, groupIdx) => (
+                <div key={groupIdx} className="flex-shrink-0 w-[calc(100vw-2rem)] max-w-sm flex flex-col">
+                  {group.map((entry, i) => {
+                    const idx = groupIdx * 5 + i
+                    return (
+                      <div
+                        key={entry.song_id}
+                        className="flex items-center gap-2.5 py-2 px-2 rounded-xl cursor-pointer select-none active:bg-black/5 dark:active:bg-white/5 transition-colors"
+                        onClick={() => {
+                          const allSongs = topWeekly.slice(0, 10).map(toSong)
+                          playerActions.playPlaylistFromSong(allSongs, allSongs[idx], `album:${entry.album_id}`)
+                        }}
                       >
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                          <circle cx="5" cy="12" r="1.75" />
-                          <circle cx="12" cy="12" r="1.75" />
-                          <circle cx="19" cy="12" r="1.75" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ))}
+                        <span className="w-5 text-center font-bold tabular-nums text-gray-400 dark:text-gray-500 text-xs flex-shrink-0">
+                          {entry.rank}
+                        </span>
+                        <div className="w-10 h-10 flex-shrink-0 rounded-md overflow-hidden shadow">
+                          <AlbumCover coverArtId={entry.cover_art} size={80} className="w-full h-full" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] font-semibold leading-tight truncate text-gray-900 dark:text-white">
+                            {entry.title}
+                          </p>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">{entry.artist}</p>
+                        </div>
+                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                          <TrendIndicator trend={entry.trend} change={entry.change} />
+                          <button
+                            className="flex items-center justify-center w-7 h-7 rounded-full text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:bg-gray-200/70 dark:active:bg-white/10 transition-colors"
+                            aria-label="Más opciones"
+                            onClick={e => { e.stopPropagation(); handleContextMenu(e, toSong(entry)) }}
+                          >
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                              <circle cx="5" cy="12" r="1.75" />
+                              <circle cx="12" cy="12" r="1.75" />
+                              <circle cx="19" cy="12" r="1.75" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ))
+            : [0, 1].map(groupIdx => <TopWeeklySkeleton key={groupIdx} />)
+          }
         </HorizontalScrollSection>
       )}
 
@@ -233,29 +252,31 @@ export default function HomePage() {
       {backendAvailable && <JumpBackInSection />}
 
       {/* 3. Lanzamientos recientes */}
-      {!loadingRecent && recentReleases.length > 0 && (
-        <HorizontalScrollSection title="Lanzamientos recientes">
-          {recentReleases.slice(0, 18).map(album => (
-            <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-              <AlbumCard album={album} showPlayButton={true} />
-            </div>
-          ))}
-        </HorizontalScrollSection>
-      )}
+      <HorizontalScrollSection title="Lanzamientos recientes">
+        {loadingRecent
+          ? [...Array(6)].map((_, i) => <AlbumCardSkeleton key={i} />)
+          : recentReleases.slice(0, 18).map(album => (
+              <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
+                <AlbumCard album={album} showPlayButton={true} />
+              </div>
+            ))
+        }
+      </HorizontalScrollSection>
 
       {/* 4. Tus mixes diarios (solo con backend) */}
       {backendAvailable && <DailyMixSection />}
 
       {/* 5. Últimos álbumes añadidos */}
-      {albums.length > 0 && (
-        <HorizontalScrollSection title="Últimos álbumes añadidos">
-          {albums.map(album => (
-            <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
-              <AlbumCard album={album} showPlayButton={true} />
-            </div>
-          ))}
-        </HorizontalScrollSection>
-      )}
+      <HorizontalScrollSection title="Últimos álbumes añadidos">
+        {loading
+          ? [...Array(8)].map((_, i) => <AlbumCardSkeleton key={i} />)
+          : albums.map(album => (
+              <div key={album.id} className="flex-shrink-0 w-36 md:w-44">
+                <AlbumCard album={album} showPlayButton={true} />
+              </div>
+            ))
+        }
+      </HorizontalScrollSection>
 
       {menu && (
         <SongContextMenu
