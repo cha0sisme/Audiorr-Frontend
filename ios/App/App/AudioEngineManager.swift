@@ -80,6 +80,11 @@ class AudioEngineManager {
     private var nextSongDuration: Double = 0
     /// Indica si hay una siguiente canción preparada para playback directo (next desde lock screen)
     var hasNextFilePrepared: Bool { nextFile != nil }
+    /// URL de streaming de la siguiente canción — fallback si el archivo no descargó a tiempo.
+    /// Se establece al inicio de prepareNext y se borra cuando nextFile llega o al iniciar nueva canción.
+    private var nextStreamURL: URL?
+    /// Timer del crossfade en modo stream fallback (sustituye a CrossfadeExecutor cuando nextFile == nil)
+    private var streamFadeTimer: DispatchSourceTimer?
 
     // MARK: - Progress timer
 
@@ -490,6 +495,9 @@ class AudioEngineManager {
 
         crossfadeExecutor?.cancel()
         crossfadeExecutor = nil
+        streamFadeTimer?.cancel()
+        streamFadeTimer = nil
+        nextStreamURL = nil
 
         stopProgressTimer()
         clearNowPlaying()
@@ -512,6 +520,9 @@ class AudioEngineManager {
         isCrossfading = false
         crossfadeExecutor?.cancel()
         crossfadeExecutor = nil
+        streamFadeTimer?.cancel()
+        streamFadeTimer = nil
+        nextStreamURL = nil
         clearAutomixTrigger()
         cancelNativeNextFallback()
 
@@ -610,6 +621,13 @@ class AudioEngineManager {
             playStartOffset = currentPos
             pauseSampleTime = 0
 
+            // Si la duración fue 0 (song.duration no disponible en Navidrome),
+            // calcularla desde el archivo real ahora que lo tenemos descargado.
+            if currentSongDuration <= 0 {
+                currentSongDuration = Double(file.length) / file.processingFormat.sampleRate
+                print("[AudioEngineManager] handoffStreamToEngine: duración calculada del archivo: \(String(format: "%.1f", currentSongDuration))s")
+            }
+
             let activePlayer = playerA
             playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
                 DispatchQueue.main.async {
@@ -667,10 +685,18 @@ class AudioEngineManager {
 
     // MARK: - Preparar siguiente canción
 
+    /// Almacena la URL de streaming de B inmediatamente cuando JS llama prepareNext.
+    /// Permite hacer crossfade en modo stream si el archivo no descarga a tiempo.
+    func setNextStreamURL(_ url: URL, replayGainMultiplier: Float) {
+        nextStreamURL = url
+        replayGainMultiplierB = replayGainMultiplier
+    }
+
     func prepareNext(fileURL: URL, replayGainMultiplier: Float) {
         do {
             nextFile = try AVAudioFile(forReading: fileURL)
             replayGainMultiplierB = replayGainMultiplier
+            nextStreamURL = nil // ya tenemos el archivo, el fallback no es necesario
             print("[AudioEngineManager] Next preparado: \(fileURL.lastPathComponent) (RG: \(String(format: "%.3f", replayGainMultiplier)))")
         } catch {
             print("[AudioEngineManager] Error preparando next: \(error)")
@@ -690,7 +716,12 @@ class AudioEngineManager {
     @discardableResult
     func executeCrossfade(config: CrossfadeExecutor.Config) -> CrossfadeResult {
         guard let nextFile = nextFile else {
-            print("[AudioEngineManager] No hay next file para crossfade")
+            // Archivo B no listo: usar stream fallback si tenemos la URL.
+            // Esto garantiza crossfade aunque la descarga no haya completado.
+            if let streamURL = nextStreamURL {
+                return executeStreamFallbackCrossfade(streamURL: streamURL, config: config)
+            }
+            print("[AudioEngineManager] No hay next file ni stream URL para crossfade")
             return .noNextFile
         }
         guard !isCrossfading else {
@@ -822,7 +853,142 @@ class AudioEngineManager {
     func cancelCrossfade() {
         crossfadeExecutor?.cancel()
         crossfadeExecutor = nil
+        streamFadeTimer?.cancel()
+        streamFadeTimer = nil
         isCrossfading = false
+    }
+
+    // MARK: - Stream fallback crossfade (cuando nextFile == nil)
+
+    /// Crossfade usando AVPlayer streaming para B cuando el archivo no descargó a tiempo.
+    /// Fade out A via mixerA.outputVolume + fade in B via AVPlayer.volume.
+    /// Tras completar, B queda como streamPlayer activo.
+    /// handoffStreamToEngine() lo promoverá a AVAudioEngine en cuanto la descarga complete.
+    private func executeStreamFallbackCrossfade(streamURL: URL, config: CrossfadeExecutor.Config) -> CrossfadeResult {
+        guard !isCrossfading else { return .alreadyCrossfading }
+
+        print("[AudioEngineManager] ⚡ Stream fallback crossfade — archivo B no listo, usando AVPlayer streaming")
+
+        // Si A está en stream mode, cortar y activar el engine para que mixerA.outputVolume funcione
+        if isStreamMode {
+            let streamPos = currentTime()
+            stopStreamPlayer()
+            guard ensureEngineRunning() else {
+                print("[AudioEngineManager] executeStreamFallbackCrossfade: engine no arrancó")
+                return .noNextFile
+            }
+            playStartOffset = streamPos
+            pauseSampleTime = 0
+            // No hay frames de A en el engine → mixerA.outputVolume fade-out arranca desde 0 (corte limpio)
+        }
+
+        isCrossfading = true
+        plugin?.notifyListeners("onCrossfadeStart", data: [:])
+
+        // Calcular startOffset de B (mismo algoritmo que CrossfadeExecutor.calculateTimings)
+        let startOffset: Double
+        if config.needsAnticipation {
+            startOffset = max(0, config.entryPoint - config.fadeDuration - config.anticipationTime)
+        } else {
+            startOffset = max(0, config.entryPoint - config.fadeDuration)
+        }
+
+        // Crear AVPlayer para B y posicionarlo en startOffset
+        let item = AVPlayerItem(url: streamURL)
+        let bPlayer = AVPlayer(playerItem: item)
+        bPlayer.volume = 0
+        if startOffset > 0 {
+            bPlayer.seek(to: CMTime(seconds: startOffset, preferredTimescale: 1000))
+        }
+        bPlayer.play()
+
+        let fadeDuration = config.fadeDuration * 1.3  // igual que CrossfadeExecutor.fadeOutDuration
+        let startTime = CACurrentMediaTime()
+        let endTime = startTime + fadeDuration
+        let capturedMaxA = replayGainMultiplierA
+        let capturedMaxB = replayGainMultiplierB
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            guard let self = self, self.isCrossfading else {
+                self?.streamFadeTimer?.cancel()
+                self?.streamFadeTimer = nil
+                return
+            }
+
+            let t = CACurrentMediaTime()
+            let progress = min(1.0, (t - startTime) / fadeDuration)
+
+            // A: fade out via engine mixer
+            self.mixerA.outputVolume = capturedMaxA * Float(max(0.0, 1.0 - progress))
+            // B: fade in via AVPlayer volume
+            bPlayer.volume = min(1.0, self.volume * capturedMaxB * Float(progress))
+
+            guard t >= endTime else { return }
+
+            // ─── Crossfade completado ───
+            self.streamFadeTimer?.cancel()
+            self.streamFadeTimer = nil
+
+            self.mixerA.outputVolume = 0
+            bPlayer.volume = min(1.0, self.volume * capturedMaxB)
+            self.playerA.stop()
+
+            // B pasa a ser el stream player activo
+            self.stopStreamPlayer()   // limpia observers anteriores
+            self.streamPlayer = bPlayer
+            self.isStreamMode = true
+            self.isPlaying = true
+            self.isCrossfading = false
+            self.crossfadeExecutor = nil
+            self.nextStreamURL = nil
+            self.playStartOffset = startOffset
+            self.replayGainMultiplierA = capturedMaxB
+
+            // Actualizar metadata de la nueva canción
+            if self.nextSongDuration > 0 { self.currentSongDuration = self.nextSongDuration }
+            if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
+            if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
+            if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
+
+            // Observer de fin de pista para B
+            self.streamPlayerEndObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+            ) { [weak self] _ in
+                guard let self = self, self.isStreamMode else { return }
+                self.isPlaying = false
+                self.isStreamMode = false
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                print("[AudioEngineManager] Stream fallback: track B terminado")
+            }
+
+            // Re-iniciar progress timer para B
+            self.startProgressTimer()
+
+            // Actualizar NowPlaying
+            self.updateNowPlayingMetadata(
+                title: self.currentSongTitle,
+                artist: self.currentSongArtist,
+                album: self.currentSongAlbum,
+                duration: self.currentSongDuration,
+                artworkUrl: nil
+            )
+            self.updateNowPlayingPlaybackState()
+
+            // Notificar a JS
+            let actualPosition = self.currentTime()
+            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": actualPosition])
+
+            print("[AudioEngineManager] Stream fallback crossfade completado en \(String(format: "%.1f", actualPosition))s")
+        }
+
+        streamFadeTimer = timer
+        timer.resume()
+
+        return .started
     }
 
     // MARK: - ReplayGain
@@ -866,6 +1032,21 @@ class AudioEngineManager {
     }
 
     private func notifyTimeUpdate() {
+        // En modo stream, si la duración es 0 (song.duration no disponible en Navidrome),
+        // intentar leerla del AVPlayerItem cuando el ítem esté listo para reproducir.
+        // AVPlayerItem.duration solo es válido una vez status == .readyToPlay.
+        if isStreamMode, currentSongDuration <= 0,
+           let item = streamPlayer?.currentItem,
+           item.status == .readyToPlay {
+            let d = item.duration.seconds
+            if d.isFinite && !d.isNaN && d > 0 {
+                currentSongDuration = d
+                localNowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = d
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = localNowPlayingInfo
+                print("[AudioEngineManager] Duración obtenida de AVPlayerItem: \(String(format: "%.1f", d))s")
+            }
+        }
+
         let time = currentTime()
         plugin?.notifyListeners("onTimeUpdate", data: [
             "currentTime": time,

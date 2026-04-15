@@ -4,16 +4,21 @@ import type { PinnedPlaylist } from '../types/playlist'
 // En desarrollo, usar el proxy de Vite para evitar CORS
 // En producción/build, usar la URL directa del backend
 const isDev = import.meta.env.DEV
-// Prioridad: 1) runtime (env.js inyectado por Docker) → 2) baked en el build → 3) fallback por hostname
+// Prioridad: 1) dev tunnel override (localStorage, funciona en cualquier build) → 2) runtime (env.js inyectado por Docker) → 3) baked en el build → 4) fallback por hostname
+// Nota: leer localStorage es inofensivo en producción — si la clave no existe devuelve null y no cambia nada.
+// La UI para configurarlo está oculta tras un gesto secreto en Ajustes.
+const devTunnelUrl: string | null = typeof window !== 'undefined'
+  ? (localStorage.getItem('__AUDIORR_DEV_BACKEND_URL__') || null)
+  : null
 const runtimeUrl = typeof window !== 'undefined' ? (window as any).__AUDIORR_BACKEND_URL__ as string | undefined : undefined
 const envUrl = import.meta.env.VITE_API_URL as string | undefined
 const defaultBackendUrl = typeof window !== 'undefined'
   ? `${window.location.protocol}//${window.location.hostname}:2999`
   : 'http://localhost:2999'
 
-const backendUrl = (runtimeUrl || envUrl || defaultBackendUrl).replace(/\/$/, '')
-export const API_BASE_URL = isDev ? '' : backendUrl // En dev, usar proxy relativo; en prod, URL completa
-console.log('[backendApi] Using API Base:', isDev ? `proxy (dev) -> ${backendUrl}` : API_BASE_URL)
+const backendUrl = (devTunnelUrl || runtimeUrl || envUrl || defaultBackendUrl).replace(/\/$/, '')
+export const API_BASE_URL = isDev && !devTunnelUrl ? '' : backendUrl // En dev sin tunnel, usar proxy relativo; si hay tunnel o prod, URL completa
+console.log('[backendApi] Using API Base:', devTunnelUrl ? `dev tunnel -> ${backendUrl}` : isDev ? `proxy (dev) -> ${backendUrl}` : API_BASE_URL)
 
 interface AnalyzeSongPayload {
   streamUrl: string

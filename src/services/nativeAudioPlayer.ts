@@ -421,6 +421,7 @@ export class NativeAudioPlayer {
       bufferADuration: this.duration,
       bufferBDuration: this.nextSong.duration || 180,
       mode,
+      currentPlaybackTimeA: this.getCurrentTime(),
     })
 
     console.log(`[NativeAudioPlayer] Crossfade: ${config.transitionType} | fade=${config.fadeDuration.toFixed(1)}s | entry=${config.entryPoint.toFixed(1)}s`)

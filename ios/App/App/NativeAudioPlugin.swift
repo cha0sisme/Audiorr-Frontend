@@ -209,6 +209,10 @@ public class NativeAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         let trackPeak = call.getDouble("trackPeak") ?? 0
         let rgMultiplier = AudioEngineManager.computeReplayGainMultiplier(gainDb: replayGainDb, trackPeak: trackPeak)
 
+        // Guardar URL de streaming inmediatamente como fallback para crossfade.
+        // Si el archivo no descarga antes del trigger, executeStreamFallbackCrossfade lo usará.
+        audioManager.setNextStreamURL(remoteURL, replayGainMultiplier: rgMultiplier)
+
         Task {
             do {
                 let fileURL = try await AudioFileLoader.shared.load(remoteURL: remoteURL, songId: songId)

@@ -335,6 +335,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // --- Hooks ---
   const { settings } = useSettings()
   const { analyze } = useAudioAnalysis()
+  const isDjModeRef = useRef(settings.isDjMode)
 
   // --- Helper: determinar qué sistema de audio usar ---
   // En iOS nativo, siempre usamos NativeAudioPlayer (que comparte interfaz con WebAudioPlayer)
@@ -2729,16 +2730,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const configureWebAudioCallbacks = (player: WebAudioPlayer | NativeAudioPlayer) => {
     player.setCallbacks({
       onTimeUpdate: (currentTime, duration) => {
-        // Bloquear actualizaciones de duración durante crossfades nativos.
-        // Swift swapea el archivo interno antes de disparar onCrossfadeComplete,
-        // lo que hace que llegue un onTimeUpdate con la duración de la canción B
-        // mientras React aún cree que la canción actual es A -> división errónea -> salto ball.
-        if (!isCrossfadingRef.current) {
-          setDuration(duration)
+        // Cuando native transmite en stream mode sin metadatos de duración (p.ej. transcoding
+        // on-the-fly de Navidrome → AVPlayerItem.duration = kCMTimeIndefinite → 0),
+        // caemos al duration conocido de la canción actual (fue set en playSong vía song.duration).
+        // Tras handoff a AVAudioEngine el nativo empezará a enviar el valor real del archivo.
+        const effectiveDuration = duration > 0 ? duration : (currentSongRef.current?.duration ?? 0)
+
+        // Bloquear duración durante crossfade (Swift swapea archivo antes de onCrossfadeComplete,
+        // lo que haría que llegara un onTimeUpdate con la duración de la canción B mientras
+        // React aún cree que la actual es A → división errónea → salto en barra).
+        // Solo actualizar si effectiveDuration > 0 para no sobreescribir con 0.
+        if (!isCrossfadingRef.current && effectiveDuration > 0) {
+          setDuration(effectiveDuration)
         }
 
         // --- Sincronizar progreso (similar a HTML Audio, con throttle) ---
-        // Durante crossfade, si el progreso viene del nuevo player (muy pequeño) 
+        // Durante crossfade, si el progreso viene del nuevo player (muy pequeño)
         // pero aún mostramos la canción anterior, ignorar para evitar saltos.
         const isLikelyNextSongTime = isCrossfadingRef.current && currentTime < 30 && progressRef.current > 60
         if (isLikelyNextSongTime) return
@@ -2756,7 +2763,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         
         // 1️⃣ Scrobble a Last.fm
         const currentSong = currentSongRef.current
-        if (currentSong && duration > 0) {
+        if (currentSong && effectiveDuration > 0) {
           try {
             const scrobbleEnabled = localStorage.getItem('scrobbleEnabled')
             if (scrobbleEnabled === 'true' && !scrobblingDisabledRef.current) {
@@ -2770,7 +2777,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               // Solo procesar si la canción está registrada y aún no ha sido scrobbeada
               if (songData && !songData.scrobbled) {
                 // Calcular el umbral de scrobble: 50% de duración o 4 minutos, lo que sea menor
-                const scrobbleThreshold = Math.min(duration * 0.5, 240) // 240 segundos = 4 minutos
+                const scrobbleThreshold = Math.min(effectiveDuration * 0.5, 240) // 240 segundos = 4 minutos
 
                 // Calcular el tiempo transcurrido desde que empezó la reproducción
                 const timeSinceStart = (Date.now() - songData.startTime) / 1000
@@ -2792,7 +2799,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                     .then(success => {
                       if (success) {
                         console.log(
-                          `[Scrobble - WebAudio] Canción scrobbeada: ${currentSong.title} - ${currentSong.artist} (${Math.round(currentTime)}s/${Math.round(duration)}s)`
+                          `[Scrobble - WebAudio] Canción scrobbeada: ${currentSong.title} - ${currentSong.artist} (${Math.round(currentTime)}s/${Math.round(effectiveDuration)}s)`
                         )
                         // Notificar al backend via Socket.io para wrapped.db
                         scrobbleCallbackRef.current?.({
@@ -2801,7 +2808,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
                           artist: currentSong.artist,
                           album: currentSong.album,
                           albumId: currentSong.albumId,
-                          duration,
+                          duration: effectiveDuration,
                           playedAt: new Date(songData.startTime).toISOString(),
                           year: currentSong.year,
                           genre: currentSong.genre,
@@ -2845,16 +2852,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           !isCrossfadingRef.current &&
           timeSincePause > 5000 &&
           currentSongRef.current &&
-          duration > 0 &&
+          effectiveDuration > 0 &&
           hasNextSong
         ) {
           // === LÓGICA DE AUTOMIX (COPIADA DEL HTML AUDIO) ===
           let triggerTime: number | null = null
           let reason = ''
           const fadeDuration = crossfadeDurationRef.current
-          const fallbackSeconds = settings.isDjMode ? 12 : 8
+          const isDjMode = isDjModeRef.current
+          const fallbackSeconds = isDjMode ? 12 : 8
           const fallbackTriggerTime =
-            duration > fallbackSeconds ? duration - fallbackSeconds : duration - 1
+            effectiveDuration > fallbackSeconds ? effectiveDuration - fallbackSeconds : effectiveDuration - 1
 
           // CRÍTICO: Buffer de tiempo para cargar la siguiente canción antes del fade
           const LOAD_BUFFER_TIME = 2.5
@@ -2875,7 +2883,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             const diagnostics = currentAnalysis.diagnostics
             const structure = currentAnalysis.structure
 
-            if (!settings.isDjMode) {
+            if (!isDjMode) {
               const lastChorusFromStructure =
                 structure && structure.length > 0
                   ? Math.max(...structure.map(section => section.endTime ?? 0))
@@ -2906,7 +2914,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               reason = `Punto de mezcla inteligente en ${smartOutroTime.toFixed(
                 2
               )}s (trigger anticipado: ${triggerTime.toFixed(2)}s para compensar carga)`
-              if (settings.isDjMode) {
+              if (isDjMode) {
                 reason = `Modo DJ: ${reason}`
               }
             } else {
@@ -2914,12 +2922,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               const ignoredOutro = smartOutroTime.toFixed(2)
               reason =
                 reason ||
-                `Fallback forzado (${settings.isDjMode ? 'DJ' : 'Normal'}): ${fallbackSeconds}s restantes (análisis de ${ignoredOutro}s ignorado por estar muy cerca del final)`
+                `Fallback forzado (${isDjMode ? 'DJ' : 'Normal'}): ${fallbackSeconds}s restantes (análisis de ${ignoredOutro}s ignorado por estar muy cerca del final)`
             }
           } else {
             // Fallback normal si no hay análisis o punto de outro.
             triggerTime = fallbackTriggerTime
-            reason = `Fallback ${settings.isDjMode ? 'DJ' : 'Normal'}: ${fallbackSeconds}s restantes`
+            reason = `Fallback ${isDjMode ? 'DJ' : 'Normal'}: ${fallbackSeconds}s restantes`
           }
 
           // Enviar trigger time a nativo (una vez por canción) para automix en background.
@@ -2936,9 +2944,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             const automixConfig = calculateCrossfadeConfig({
               currentAnalysis: currentAnalysisForConfig ?? null,
               nextAnalysis: nextAnalysisForConfig ?? null,
-              bufferADuration: duration,
+              bufferADuration: effectiveDuration,
               bufferBDuration: nextSongForAutomix?.duration || 180,
-              mode: settings.isDjMode ? 'dj' : 'normal',
+              mode: isDjMode ? 'dj' : 'normal',
+              currentPlaybackTimeA: currentTime,
             })
             player.setAutomixTrigger(triggerTime, {
               entryPoint: automixConfig.entryPoint,
@@ -2956,7 +2965,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             // Si queda muy poco tiempo (< 3s), no intentar crossfade — la canción
             // terminará antes de que la descarga/preparación del siguiente archivo complete.
             // Dejar que onEnded haga la transición directa.
-            const remaining = duration - currentTime
+            const remaining = effectiveDuration - currentTime
             if (remaining < 3) {
               console.log(`[AUTOMIX-WEB] Omitiendo crossfade: solo quedan ${remaining.toFixed(1)}s — se usará transición directa al terminar`)
               return
@@ -3060,6 +3069,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           }
           return
         }
+        isCrossfadingRef.current = true
         setIsCrossfading(true)
       },
       onCrossfadeComplete: (nextSong, startOffset = 0) => {
@@ -3069,6 +3079,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           'offset inicial:',
           startOffset.toFixed(2)
         )
+        isCrossfadingRef.current = false
         setIsCrossfading(false)
         setIsPlaying(true)
         // Resetear para que el native backup timer se configure en la nueva canción.
@@ -3259,6 +3270,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             // Es la canción actual → actualizar currentAnalysis
             webAudioPlayerRef.current.setCurrentAnalysis(result)
             console.log(`[SYNC] ✅ currentAnalysis actualizado para canción en reproducción`)
+            // Resetear automixTrigger para que se recalcule con el análisis correcto.
+            // Sin esto, el trigger ya enviado al nativo usaba el fallback (entryPoint=3s < fadeDuration)
+            // y el startOffset quedaba en 0 → PlayerB empezaba desde el principio.
+            if (automixTriggerSentRef.current) {
+              automixTriggerSentRef.current = false
+              console.log(`[SYNC] ♻️ automixTrigger reseteado — análisis canción actual llegó tarde, se recalculará`)
+            }
           } else {
             // Verificar si es la siguiente canción en la cola
             const currentIdx = currentId
@@ -3273,6 +3291,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               // Es la siguiente canción → actualizar nextAnalysis en el player
               webAudioPlayerRef.current.setNextAnalysis(result)
               console.log(`[SYNC] ✅ nextAnalysis actualizado dinámicamente para: "${nextSongInQueue?.title}"`)
+              // Resetear automixTrigger para que se recalcule incluyendo el análisis de la sig. canción.
+              if (automixTriggerSentRef.current) {
+                automixTriggerSentRef.current = false
+                console.log(`[SYNC] ♻️ automixTrigger reseteado — análisis siguiente canción llegó tarde, se recalculará`)
+              }
             }
           }
         }
@@ -3318,9 +3341,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [analyze]) // Incluir analyze como dependencia
 
   // Efecto: Cambios en configuración de Web Audio (permitir alternancia en runtime)
-  // En nativo, siempre usamos NativeAudioPlayer — no hay alternancia.
+  // En nativo, siempre usamos NativeAudioPlayer — no hay alternancia de engine,
+  // pero sí hay que propagar cambios de configuración (isDjMode, volumen, etc.).
   useEffect(() => {
-    if (IS_NATIVE) return
+    isDjModeRef.current = settings.isDjMode
+    if (IS_NATIVE) {
+      if (webAudioPlayerRef.current) {
+        webAudioPlayerRef.current.setConfig({
+          crossfadeDuration: 8,
+          volume: volume,
+          isDjMode: settings.isDjMode,
+          useReplayGain: settings.useReplayGain,
+        })
+      }
+      return
+    }
     const currentUseWebAudio = shouldUseWebAudio()
 
     // Estado actual de reproducción antes del cambio

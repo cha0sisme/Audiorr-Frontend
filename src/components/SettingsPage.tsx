@@ -156,6 +156,86 @@ const OfflineIcon = ({ className }: { className?: string }) => (
   </svg>
 )
 
+const DEV_BACKEND_KEY = '__AUDIORR_DEV_BACKEND_URL__'
+
+const DevBackendOverride = ({ onDisable }: { onDisable: () => void }) => {
+  const [url, setUrl] = useState(() => localStorage.getItem(DEV_BACKEND_KEY) || '')
+  const [saved, setSaved] = useState(false)
+
+  const handleSave = () => {
+    if (url.trim()) {
+      localStorage.setItem(DEV_BACKEND_KEY, url.trim())
+    } else {
+      localStorage.removeItem(DEV_BACKEND_KEY)
+    }
+    setSaved(true)
+    setTimeout(() => window.location.reload(), 600)
+  }
+
+  const handleClear = () => {
+    localStorage.removeItem(DEV_BACKEND_KEY)
+    setUrl('')
+    setSaved(true)
+    setTimeout(() => window.location.reload(), 600)
+  }
+
+  return (
+    <div className="bg-orange-50 dark:bg-orange-950/30 rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-orange-200 dark:border-orange-800/60">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="p-3 bg-orange-500 rounded-xl text-white flex-shrink-0">
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-xl font-bold text-orange-900 dark:text-orange-100">Debug — Backend URL</h2>
+          <p className="text-sm text-orange-700 dark:text-orange-300">Modo desarrollador activo</p>
+        </div>
+        <button
+          onClick={onDisable}
+          className="text-xs text-orange-600 dark:text-orange-400 underline flex-shrink-0"
+        >
+          Desactivar
+        </button>
+      </div>
+      <div className="space-y-3">
+        <p className="text-sm text-orange-800 dark:text-orange-200">
+          Introduce una URL de Cloudflare Tunnel (u otro proxy) para conectar al backend sin VPN. Se aplica al recargar.
+        </p>
+        <input
+          type="url"
+          value={url}
+          onChange={e => { setUrl(e.target.value); setSaved(false) }}
+          placeholder="https://xxxx.trycloudflare.com"
+          className="w-full px-4 py-3 bg-white dark:bg-black/20 border border-orange-300 dark:border-orange-700 rounded-xl text-sm focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-white/30"
+        />
+        <div className="flex gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saved}
+            className="flex-1 py-2.5 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 dark:disabled:bg-orange-800 text-white font-semibold rounded-xl transition-colors text-sm"
+          >
+            {saved ? 'Guardado — recargando…' : 'Guardar y recargar'}
+          </button>
+          {url && (
+            <button
+              onClick={handleClear}
+              className="px-4 py-2.5 bg-white dark:bg-black/20 hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-700 dark:text-orange-300 font-semibold rounded-xl transition-colors text-sm border border-orange-300 dark:border-orange-700"
+            >
+              Limpiar
+            </button>
+          )}
+        </div>
+        {localStorage.getItem(DEV_BACKEND_KEY) && (
+          <p className="text-xs text-orange-600 dark:text-orange-400">
+            Activo: <span className="font-mono break-all">{localStorage.getItem(DEV_BACKEND_KEY)}</span>
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { settings } = useSettings()
   const audioCache = useAudioCache()
@@ -173,6 +253,9 @@ export default function SettingsPage() {
     }
   })
   const [scrobbleStatus, setScrobbleStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle')
+  const [devModeUnlocked, setDevModeUnlocked] = useState(
+    () => localStorage.getItem('__AUDIORR_DEV_MODE__') === 'true'
+  )
 
   useEffect(() => {
     if (!backendAvailable) return
@@ -585,6 +668,13 @@ export default function SettingsPage() {
         </SettingCard>
       )}
 
+      {/* Debug — visible al hacer clic en el número de versión del pie */}
+      {devModeUnlocked && <DevBackendOverride onDisable={() => {
+        localStorage.removeItem('__AUDIORR_DEV_MODE__')
+        localStorage.removeItem(DEV_BACKEND_KEY)
+        setDevModeUnlocked(false)
+      }} />}
+
       {/* Logout */}
       <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl sm:rounded-3xl p-5 sm:p-8 border border-gray-200/80 dark:border-white/[0.08]">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -611,6 +701,18 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+
+      {/* Versión — clic para activar modo desarrollador */}
+      <p
+        className="text-center text-xs text-gray-300 dark:text-white/20 cursor-default select-none pb-2"
+        onClick={() => {
+          if (devModeUnlocked) return
+          localStorage.setItem('__AUDIORR_DEV_MODE__', 'true')
+          setDevModeUnlocked(true)
+        }}
+      >
+        Audiorr v1.0
+      </p>
     </div>
   )
 }
