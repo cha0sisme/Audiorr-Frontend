@@ -8,6 +8,18 @@
 
 /* Begin PBXBuildFile section */
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
+		342286B92F90CB0900785736 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286B62F90CB0900785736 /* SearchView.swift */; };
+		342286BC2F90CB1800785736 /* NavidromeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286BA2F90CB1800785736 /* NavidromeService.swift */; };
+		342286BF2F90CB2800785736 /* NavidromeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286BD2F90CB2800785736 /* NavidromeModels.swift */; };
+		342286C12F90D07300785736 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C02F90D07300785736 /* AppTheme.swift */; };
+		342286C32F90D45200785736 /* PlayerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C22F90D45200785736 /* PlayerService.swift */; };
+		342286C72F90D87900785736 /* PlaylistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C52F90D87900785736 /* PlaylistsView.swift */; };
+		342286C82F90D87900785736 /* PlaylistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C42F90D87900785736 /* PlaylistDetailView.swift */; };
+		342286CA2F90DC2400785736 /* ColorExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C92F90DC2400785736 /* ColorExtractor.swift */; };
+		342286CD2F90DC3200785736 /* AlbumDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286CB2F90DC3200785736 /* AlbumDetailView.swift */; };
+		342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286CE2F910FCA00785736 /* ArtistDetailView.swift */; };
+		342286D12F920A0000785736 /* CredentialsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D02F920A0000785736 /* CredentialsStore.swift */; };
+		342286D32F920B0000785736 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D22F920B0000785736 /* LoginView.swift */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
@@ -29,6 +41,18 @@
 
 /* Begin PBXFileReference section */
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
+		342286B62F90CB0900785736 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		342286BA2F90CB1800785736 /* NavidromeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavidromeService.swift; sourceTree = "<group>"; };
+		342286BD2F90CB2800785736 /* NavidromeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavidromeModels.swift; sourceTree = "<group>"; };
+		342286C02F90D07300785736 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		342286C22F90D45200785736 /* PlayerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerService.swift; sourceTree = "<group>"; };
+		342286C42F90D87900785736 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
+		342286C52F90D87900785736 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
+		342286C92F90DC2400785736 /* ColorExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorExtractor.swift; sourceTree = "<group>"; };
+		342286CB2F90DC3200785736 /* AlbumDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumDetailView.swift; sourceTree = "<group>"; };
+		342286CE2F910FCA00785736 /* ArtistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistDetailView.swift; sourceTree = "<group>"; };
+		342286D02F920A0000785736 /* CredentialsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialsStore.swift; sourceTree = "<group>"; };
+		342286D22F920B0000785736 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		349110652F7BA76900342F6B /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -63,6 +87,79 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		342286B72F90CB0900785736 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				342286B62F90CB0900785736 /* SearchView.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		342286B82F90CB0900785736 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				342286B72F90CB0900785736 /* Search */,
+				342286C62F90D87900785736 /* Playlists */,
+				342286CC2F90DC3200785736 /* Albums */,
+				342286CF2F910FCA00785736 /* Artists */,
+				342286D42F920B0000785736 /* Settings */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		342286BB2F90CB1800785736 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				342286BA2F90CB1800785736 /* NavidromeService.swift */,
+				342286C02F90D07300785736 /* AppTheme.swift */,
+				342286C22F90D45200785736 /* PlayerService.swift */,
+				342286C92F90DC2400785736 /* ColorExtractor.swift */,
+				342286D02F920A0000785736 /* CredentialsStore.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		342286D42F920B0000785736 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				342286D22F920B0000785736 /* LoginView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		342286BE2F90CB2800785736 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				342286BD2F90CB2800785736 /* NavidromeModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		342286C62F90D87900785736 /* Playlists */ = {
+			isa = PBXGroup;
+			children = (
+				342286C42F90D87900785736 /* PlaylistDetailView.swift */,
+				342286C52F90D87900785736 /* PlaylistsView.swift */,
+			);
+			path = Playlists;
+			sourceTree = "<group>";
+		};
+		342286CC2F90DC3200785736 /* Albums */ = {
+			isa = PBXGroup;
+			children = (
+				342286CB2F90DC3200785736 /* AlbumDetailView.swift */,
+			);
+			path = Albums;
+			sourceTree = "<group>";
+		};
+		342286CF2F910FCA00785736 /* Artists */ = {
+			isa = PBXGroup;
+			children = (
+				342286CE2F910FCA00785736 /* ArtistDetailView.swift */,
+			);
+			path = Artists;
+			sourceTree = "<group>";
+		};
 		504EC2FB1FED79650016851F = {
 			isa = PBXGroup;
 			children = (
@@ -102,6 +199,9 @@
 				504EC3131FED79650016851F /* Info.plist */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
 				50B271D01FEDC1A000F3C39B /* public */,
+				342286B82F90CB0900785736 /* Views */,
+				342286BB2F90CB1800785736 /* Services */,
+				342286BE2F90CB2800785736 /* Models */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -189,13 +289,25 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				342286C72F90D87900785736 /* PlaylistsView.swift in Sources */,
+				342286C82F90D87900785736 /* PlaylistDetailView.swift in Sources */,
+				342286CA2F90DC2400785736 /* ColorExtractor.swift in Sources */,
+				342286BC2F90CB1800785736 /* NavidromeService.swift in Sources */,
 				AB01CD02EF03AB04CD05EF06 /* AudioBridgePlugin.swift in Sources */,
 				AB01CD02EF03AB04CD05EF08 /* NativeTabBarPlugin.swift in Sources */,
 				AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */,
+				342286B92F90CB0900785736 /* SearchView.swift in Sources */,
 				AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */,
+				342286BF2F90CB2800785736 /* NavidromeModels.swift in Sources */,
 				AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */,
+				342286C12F90D07300785736 /* AppTheme.swift in Sources */,
 				AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */,
 				AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */,
+				342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */,
+				342286D12F920A0000785736 /* CredentialsStore.swift in Sources */,
+				342286D32F920B0000785736 /* LoginView.swift in Sources */,
+				342286CD2F90DC3200785736 /* AlbumDetailView.swift in Sources */,
+				342286C32F90D45200785736 /* PlayerService.swift in Sources */,
 				AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */,
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,
 				DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */,
@@ -278,7 +390,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -335,7 +447,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -353,12 +465,12 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -380,12 +492,12 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

@@ -3,6 +3,7 @@ import Capacitor
 import AVFoundation
 import WebKit
 import CarPlay
+import SwiftUI
 
 // Extensión para buscar el WKWebView en la jerarquía de vistas
 private extension UIView {
@@ -145,6 +146,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                 // React probablemente ya envió nativeUpdateNowPlaying antes de
                 // que los handlers existieran (race condition) → JS re-envía el estado.
                 self.evalJS("window.dispatchEvent(new CustomEvent('_nativeReady'))")
+
+                // Puente de credenciales + backend URL
+                self.evalJS("""
+                    (function(){
+                        var cfg = localStorage.getItem('navidromeConfig');
+                        if (cfg) window.webkit.messageHandlers.nativeSyncConfig.postMessage(cfg);
+                        var bu = window.__AUDIORR_BACKEND_URL__
+                            || (window.location.protocol + '//' + window.location.hostname + ':2999');
+                        window.webkit.messageHandlers.nativeSyncBackendUrl.postMessage(bu);
+                    })();
+                """)
             }
         }
     }
@@ -159,6 +171,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         ucc.add(handler, name: "nativeHideNowPlaying")
         ucc.add(handler, name: "nativeViewerOpen")
         ucc.add(handler, name: "nativeViewerClose")
+        ucc.add(handler, name: "nativeSyncConfig")
+        ucc.add(handler, name: "nativeSyncBackendUrl")
     }
 
     func handleScriptMessage(_ message: WKScriptMessage) {
@@ -224,6 +238,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                     self.miniPlayerShadow?.isHidden    = true
                     self.tabBar?.isHidden              = true
                 }
+            }
+
+        case "nativeSyncConfig":
+            if let configString = message.body as? String {
+                UserDefaults.standard.set(configString, forKey: "navidromeConfig")
+                NavidromeService.shared.reloadCredentials()
+            }
+
+        case "nativeSyncBackendUrl":
+            if let urlString = message.body as? String, !urlString.isEmpty {
+                UserDefaults.standard.set(urlString, forKey: "audiorr_backend_url")
             }
 
         case "nativeViewerClose":
@@ -347,6 +372,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         }
     }
 
+    /// Versión pública para uso desde servicios Swift (PlayerService, etc.)
+    func evalJSPublic(_ script: String) {
+        evalJS(script)
+    }
+
     // ── Tab bar nativa ───────────────────────────────────────────────────────
 
     private func setupTabBar() {
@@ -393,10 +423,61 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
     // UITabBarDelegate
     func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
+        UISelectionFeedbackGenerator().selectionChanged()
+
+        // Tags con vista nativa SwiftUI
+        switch item.tag {
+        case 2: showNativeTab(2) { AnyView(PlaylistsView()) }; return
+        case 4: showNativeTab(4) { self.makeSearchView() };    return
+        default: break
+        }
+
+        // Tab con WKWebView: ocultar todas las vistas nativas
+        hideAllNativeTabs()
+
         let routes = ["/", "/artists", "/playlists", "/audiorr", "/search"]
         guard item.tag < routes.count else { return }
-        UISelectionFeedbackGenerator().selectionChanged()
         evalJS("window.location.hash = '#\(routes[item.tag])'")
+    }
+
+    // ── Native tab views (child VCs sobre el WKWebView) ─────────────────────
+
+    private var nativeTabVCs: [Int: UIHostingController<AnyView>] = [:]
+
+    private func showNativeTab(_ tag: Int, makeView: () -> AnyView) {
+        guard let rootVC = window?.rootViewController else { return }
+        nativeTabVCs.forEach { $0.value.view.isHidden = true }
+
+        if nativeTabVCs[tag] == nil {
+            let hostVC = UIHostingController(rootView: makeView())
+            hostVC.view.translatesAutoresizingMaskIntoConstraints = false
+            hostVC.view.overrideUserInterfaceStyle = AppTheme.shared.isDark ? .dark : .light
+            rootVC.addChild(hostVC)
+            rootVC.view.addSubview(hostVC.view)
+            NSLayoutConstraint.activate([
+                hostVC.view.leadingAnchor.constraint(equalTo:  rootVC.view.leadingAnchor),
+                hostVC.view.trailingAnchor.constraint(equalTo: rootVC.view.trailingAnchor),
+                hostVC.view.topAnchor.constraint(equalTo:      rootVC.view.topAnchor),
+                hostVC.view.bottomAnchor.constraint(equalTo:   rootVC.view.bottomAnchor),
+            ])
+            hostVC.didMove(toParent: rootVC)
+            nativeTabVCs[tag] = hostVC
+        }
+        nativeTabVCs[tag]?.view.isHidden = false
+    }
+
+    private func hideAllNativeTabs() {
+        nativeTabVCs.forEach { $0.value.view.isHidden = true }
+    }
+
+    private func makeSearchView() -> AnyView {
+        var view = SearchView()
+        // Album navigation is now handled natively via NavigationLink inside SearchView.
+        // Artist navigation still falls back to JS routing until ArtistView is migrated.
+        view.onPlaySong = { song in
+            Task { @MainActor in PlayerService.shared.play(song: song) }
+        }
+        return AnyView(view)
     }
 
     // ── Mini-player nativo ───────────────────────────────────────────────────
@@ -615,6 +696,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         // tema de la app (igual que UITabBar sigue el sistema). Sin esto, colorOverlay
         // y UIBlurEffect quedan fijados al modo del sistema iOS, ignorando el theme switcher.
         miniPlayerShadow?.overrideUserInterfaceStyle = isDark ? .dark : .light
+
+        // Propagar tema a todas las vistas SwiftUI nativas
+        if AppTheme.shared.isDark != isDark {
+            AppTheme.shared.isDark = isDark
+            let style: UIUserInterfaceStyle = isDark ? .dark : .light
+            nativeTabVCs.values.forEach { $0.view.overrideUserInterfaceStyle = style }
+        }
 
         miniPlayerShouldShow = isVisible
         if isVisible && !viewerIsOpen {
