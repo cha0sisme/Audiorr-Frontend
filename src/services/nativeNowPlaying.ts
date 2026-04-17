@@ -10,6 +10,12 @@ export interface NowPlayingUpdateOptions {
   progress:   number
   duration:   number
   isVisible:  boolean
+  /** coverArt ID para construir URL de alta resolución en el viewer nativo */
+  coverArt?:  string
+  /** IDs for viewer navigation */
+  songId?:    string
+  albumId?:   string
+  artistId?:  string
   /** Texto de estado opcional: "AutoMix" o "Reproduciendo en {device}" */
   subtitle?:  string
   /** true = modo oscuro activo — el lado Swift debe adaptar sus colores */
@@ -18,7 +24,11 @@ export interface NowPlayingUpdateOptions {
 
 function postMessage(name: string, data: unknown) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(window as any).webkit?.messageHandlers?.[name]?.postMessage(data)
+  const handler = (window as any).webkit?.messageHandlers?.[name]
+  if (!handler) {
+    console.warn('[nativeNowPlaying] postMessage FAILED: no handler for', name)
+  }
+  handler?.postMessage(data)
 }
 
 export const nativeNowPlaying = {
@@ -40,6 +50,23 @@ export const nativeNowPlaying = {
   hideViewer(): void {
     if (!isNative) return
     postMessage('nativeViewerClose', {})
+  },
+
+  /** Envía estado enriquecido al viewer nativo (queue, shuffle, repeat, remote, etc.) */
+  updateViewerState(data: {
+    songId: string
+    albumId: string
+    artistId: string
+    coverArt: string
+    shuffle: boolean
+    repeat: string
+    isCrossfading: boolean
+    isRemote: boolean
+    remoteDeviceName?: string
+    queue: Array<{ id: string; title: string; artist: string; album: string; albumId: string; coverArt: string; duration: number }>
+  }): void {
+    if (!isNative) return
+    postMessage('nativeUpdateViewerState', data)
   },
 
   addListener(event: 'tap' | 'playPause' | 'next' | 'previous', fn: () => void): { remove: () => void } {

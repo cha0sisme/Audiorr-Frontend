@@ -12,19 +12,21 @@ final class SettingsViewModel: ObservableObject {
     @Published var lastfmHasSecret = false
     @Published var scrobbleStatus: ScrobbleStatus = .idle
 
-    @Published var hasBackend = false
+    @Published var isBackendAvailable = false
 
     private let settingsKey = "audiorr_settings"
 
     enum ScrobbleStatus { case idle, testing, success, error }
 
     func load() {
-        hasBackend = NavidromeService.shared.backendURL() != nil
         loadJSSettings()
         loadScrobble()
 
-        if hasBackend {
-            Task { await loadLastFmConfig() }
+        Task {
+            isBackendAvailable = await NavidromeService.shared.checkBackendAvailable()
+            if isBackendAvailable {
+                await loadLastFmConfig()
+            }
         }
     }
 
@@ -57,7 +59,7 @@ final class SettingsViewModel: ObservableObject {
         // Bridge to JS localStorage so React picks it up
         let escaped = json.replacingOccurrences(of: "'", with: "\\'")
         let script = "localStorage.setItem('\(settingsKey)', '\(escaped)')"
-        (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(script)
+        JSBridge.shared.eval(script)
     }
 
     func toggleDjMode() {
@@ -81,7 +83,7 @@ final class SettingsViewModel: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: "scrobbleEnabled")
 
         let script = "localStorage.setItem('scrobbleEnabled', '\(enabled ? "true" : "false")')"
-        (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(script)
+        JSBridge.shared.eval(script)
 
         scrobbleStatus = .idle
     }
@@ -163,12 +165,13 @@ final class SettingsViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "navidromeConfig")
         UserDefaults.standard.removeObject(forKey: "audiorr_backend_url")
 
-        // Clear JS side too
-        let script = """
-        localStorage.removeItem('navidromeConfig');
-        window.location.reload();
-        """
-        (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(script)
+        // Clear JS side
+        let script = "localStorage.removeItem('navidromeConfig')"
+        JSBridge.shared.eval(script)
+
+        // Show login screen
+        (UIApplication.shared.delegate as? AppDelegate)?.showLogin()
+        // TODO: migrate login to SwiftUI fullScreenCover on ContentView
     }
 }
 
@@ -180,149 +183,38 @@ struct SettingsView: View {
     @State private var showLogoutConfirm = false
     @State private var showSaveAlert = false
     @State private var alertMessage = ""
+    @State private var scrollY: CGFloat = 0
+
+    private let collapseThreshold: CGFloat = 44
+
+    private var stickyOpacity: CGFloat {
+        min(max((scrollY - collapseThreshold * 0.4) / (collapseThreshold * 0.6), 0), 1)
+    }
+    private var largeTitleOpacity: CGFloat {
+        1 - min(max(scrollY / collapseThreshold, 0), 1)
+    }
 
     var body: some View {
-        List {
-            // ── Apariencia ──
-            Section {
-                HStack {
-                    Label("Modo oscuro", systemImage: "moon.fill")
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { theme.isDark },
-                        set: { newValue in
-                            (UIApplication.shared.delegate as? AppDelegate)?.applyTheme(isDark: newValue)
-                        }
-                    ))
-                    .labelsHidden()
-                }
-            } header: {
-                Text("Apariencia")
-            }
-
-            // ── Reproduccion ──
-            if vm.hasBackend {
-                Section {
-                    HStack {
-                        Label("Modo DJ", systemImage: "dial.medium.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { vm.isDjMode },
-                            set: { _ in vm.toggleDjMode() }
-                        ))
-                        .labelsHidden()
-                    }
-
-                    HStack {
-                        Label("ReplayGain", systemImage: "speaker.wave.2.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { vm.useReplayGain },
-                            set: { _ in vm.toggleReplayGain() }
-                        ))
-                        .labelsHidden()
-                    }
-                } header: {
-                    Text("Reproduccion")
-                } footer: {
-                    Text("Modo DJ activa mezclas dinamicas. ReplayGain normaliza el volumen entre canciones.")
-                }
-            }
-
-            // ── Last.fm ──
-            if vm.hasBackend {
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Clave de API", systemImage: "key.fill")
-                            .font(.subheadline.weight(.medium))
-                        TextField("Introduce tu clave de API", text: $vm.lastfmApiKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.subheadline)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-
-                        HStack(spacing: 12) {
-                            Button("Guardar") {
-                                Task {
-                                    let ok = await vm.saveLastFmApiKey()
-                                    alertMessage = ok ? "Clave guardada." : "Error al guardar."
-                                    showSaveAlert = true
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-
-                            Button("Eliminar", role: .destructive) {
-                                Task {
-                                    let ok = await vm.deleteLastFmApiKey()
-                                    alertMessage = ok ? "Clave eliminada." : "Error al eliminar."
-                                    showSaveAlert = true
-                                }
-                            }
-                            .controlSize(.small)
-                        }
-
-                        if vm.lastfmHasSecret && vm.lastfmApiKey.isEmpty {
-                            Text("Hay un secreto guardado en el backend.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-
-                    // Scrobbling toggle
-                    HStack {
-                        Label("Scrobbling", systemImage: "arrow.up.right.circle.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { vm.scrobbleEnabled },
-                            set: { vm.toggleScrobble($0) }
-                        ))
-                        .labelsHidden()
-                    }
-
-                    if vm.scrobbleEnabled {
-                        HStack {
-                            scrobbleStatusBadge
-                            Spacer()
-                            Button("Probar") { vm.testScrobble() }
-                                .font(.subheadline)
-                                .disabled(vm.scrobbleStatus == .testing)
-                        }
-                    }
-                } header: {
-                    Text("Last.fm")
-                } footer: {
-                    if vm.scrobbleEnabled {
-                        Text("Las escuchas se registraran automaticamente tras reproducir al menos el 50% o 4 minutos.")
-                    }
-                }
-            }
-
-            // ── Servidor ──
-            Section {
-                if let creds = NavidromeService.shared.credentials {
-                    LabeledContent("Servidor", value: creds.serverUrl)
-                        .font(.subheadline)
-                    LabeledContent("Usuario", value: creds.username)
-                        .font(.subheadline)
-                }
-
-                Button(role: .destructive) {
-                    showLogoutConfirm = true
-                } label: {
-                    Label("Cerrar sesion", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-            } header: {
-                Text("Servidor")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                largeHeader
+                settingsContent
             }
         }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
+        .ignoresSafeArea(edges: .top)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+            scrollY = y
+        }
         .background(Color(.systemBackground))
-        .navigationTitle("Configuracion")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Configuracion")
+                    .font(.headline)
+                    .lineLimit(1)
+                    .opacity(stickyOpacity)
+            }
+        }
         .preferredColorScheme(theme.colorScheme)
         .onAppear { vm.load() }
         .alert("Last.fm", isPresented: $showSaveAlert) {
@@ -339,6 +231,213 @@ struct SettingsView: View {
             Text("Se borrara la configuracion del servidor.")
         }
     }
+
+    // MARK: - Large header
+
+    private var largeHeader: some View {
+        HStack(alignment: .bottom) {
+            Text("Configuracion")
+                .font(.system(size: 34, weight: .bold))
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 20)
+        .padding(.top, UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.top ?? 59)
+        .opacity(largeTitleOpacity)
+    }
+
+    // MARK: - Settings content
+
+    private var settingsContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            // ── Apariencia ──
+            settingsSection(header: "Apariencia") {
+                settingsRow {
+                    Label("Modo oscuro", systemImage: "moon.fill")
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { theme.isDark },
+                        set: { newValue in
+                            AppTheme.shared.isDark = newValue
+                            UserDefaults.standard.set(newValue, forKey: "audiorr_isDark")
+                            JSBridge.shared.eval("document.documentElement.classList.toggle('dark', \(newValue))")
+                        }
+                    ))
+                    .labelsHidden()
+                }
+            }
+
+            // ── Reproduccion ──
+            if vm.isBackendAvailable {
+                settingsSection(
+                    header: "Reproduccion",
+                    footer: "Modo DJ activa mezclas dinamicas. ReplayGain normaliza el volumen entre canciones."
+                ) {
+                    settingsRow {
+                        Label("Modo DJ", systemImage: "dial.medium.fill")
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { vm.isDjMode },
+                            set: { _ in vm.toggleDjMode() }
+                        ))
+                        .labelsHidden()
+                    }
+                    Divider().padding(.leading, 16)
+                    settingsRow {
+                        Label("ReplayGain", systemImage: "speaker.wave.2.fill")
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { vm.useReplayGain },
+                            set: { _ in vm.toggleReplayGain() }
+                        ))
+                        .labelsHidden()
+                    }
+                }
+            }
+
+            // ── Last.fm ──
+            if vm.isBackendAvailable {
+                settingsSection(
+                    header: "Last.fm",
+                    footer: vm.scrobbleEnabled
+                        ? "Las escuchas se registraran automaticamente tras reproducir al menos el 50% o 4 minutos."
+                        : nil
+                ) {
+                    settingsRow {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Clave de API", systemImage: "key.fill")
+                                .font(.subheadline.weight(.medium))
+                            TextField("Introduce tu clave de API", text: $vm.lastfmApiKey)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.subheadline)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+
+                            HStack(spacing: 12) {
+                                Button("Guardar") {
+                                    Task {
+                                        let ok = await vm.saveLastFmApiKey()
+                                        alertMessage = ok ? "Clave guardada." : "Error al guardar."
+                                        showSaveAlert = true
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+
+                                Button("Eliminar", role: .destructive) {
+                                    Task {
+                                        let ok = await vm.deleteLastFmApiKey()
+                                        alertMessage = ok ? "Clave eliminada." : "Error al eliminar."
+                                        showSaveAlert = true
+                                    }
+                                }
+                                .controlSize(.small)
+                            }
+
+                            if vm.lastfmHasSecret && vm.lastfmApiKey.isEmpty {
+                                Text("Hay un secreto guardado en el backend.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Divider().padding(.leading, 16)
+                    settingsRow {
+                        Label("Scrobbling", systemImage: "arrow.up.right.circle.fill")
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { vm.scrobbleEnabled },
+                            set: { vm.toggleScrobble($0) }
+                        ))
+                        .labelsHidden()
+                    }
+                    if vm.scrobbleEnabled {
+                        Divider().padding(.leading, 16)
+                        settingsRow {
+                            scrobbleStatusBadge
+                            Spacer()
+                            Button("Probar") { vm.testScrobble() }
+                                .font(.subheadline)
+                                .disabled(vm.scrobbleStatus == .testing)
+                        }
+                    }
+                }
+            }
+
+            // ── Servidor ──
+            settingsSection(header: "Servidor") {
+                if let creds = NavidromeService.shared.credentials {
+                    settingsRow {
+                        Text("Servidor")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text(creds.serverUrl)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    Divider().padding(.leading, 16)
+                    settingsRow {
+                        Text("Usuario")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text(creds.username)
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    Divider().padding(.leading, 16)
+                }
+                settingsRow {
+                    Button(role: .destructive) {
+                        showLogoutConfirm = true
+                    } label: {
+                        Label("Cerrar sesion", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 100)
+    }
+
+    // MARK: - Section / row helpers
+
+    private func settingsSection<Content: View>(
+        header: String,
+        footer: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(header.uppercased())
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            if let footer {
+                Text(footer)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private func settingsRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+    }
+
+    // MARK: - Scrobble badge
 
     @ViewBuilder
     private var scrobbleStatusBadge: some View {

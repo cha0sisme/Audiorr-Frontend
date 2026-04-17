@@ -1,16 +1,17 @@
 import SwiftUI
 
-// MARK: - LoginView
+// MARK: - LoginView (Apple Music style)
 
 struct LoginView: View {
     var onSuccess: (() -> Void)?
-
-    @Environment(\.dismiss) private var dismiss
 
     @State private var serverUrl = ""
     @State private var username  = ""
     @State private var password  = ""
     @State private var status: LoginStatus = .idle
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case server, user, password }
 
     private var canSubmit: Bool {
         !serverUrl.trimmingCharacters(in: .whitespaces).isEmpty &&
@@ -20,54 +21,79 @@ struct LoginView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        GeometryReader { geo in
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    // Header
-                    VStack(alignment: .leading, spacing: 6) {
-                        Image(systemName: "music.note.house.fill")
-                            .font(.system(size: 42))
-                            .foregroundStyle(.tint)
-                            .padding(.bottom, 4)
-                        Text("Conectar a Navidrome")
-                            .font(.system(size: 26, weight: .bold))
-                        Text("Introduce los datos de tu servidor para acceder a tu biblioteca.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.top, 8)
+                VStack(spacing: 0) {
+                    Spacer()
+                        .frame(height: max(geo.size.height * 0.08, 40))
+
+                    // App icon
+                    Image("AppIcon-512@2x")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 100, height: 100)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+                        .padding(.bottom, 24)
+
+                    // Title
+                    Text("Audiorr")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .padding(.bottom, 6)
+
+                    Text("Conecta con tu servidor Navidrome\npara acceder a tu biblioteca de musica.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .padding(.bottom, 36)
 
                     // Fields
                     VStack(spacing: 0) {
-                        field(label: "URL del servidor", placeholder: "http://192.168.1.10:4533", text: $serverUrl)
-                            .textContentType(.URL)
-                            .keyboardType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Divider().padding(.leading, 16)
-                        field(label: "Usuario", placeholder: "admin", text: $username)
-                            .textContentType(.username)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        Divider().padding(.leading, 16)
-                        secureField(label: "Contraseña", placeholder: "••••••••", text: $password)
-                            .textContentType(.password)
+                        loginField(
+                            icon: "globe",
+                            label: "URL del servidor",
+                            placeholder: "http://192.168.1.10:4533",
+                            text: $serverUrl,
+                            field: .server,
+                            isSecure: false
+                        )
+                        divider
+                        loginField(
+                            icon: "person",
+                            label: "Usuario",
+                            placeholder: "admin",
+                            text: $username,
+                            field: .user,
+                            isSecure: false
+                        )
+                        divider
+                        loginField(
+                            icon: "lock",
+                            label: "Contrasena",
+                            placeholder: "••••••••",
+                            text: $password,
+                            field: .password,
+                            isSecure: true
+                        )
                     }
-                    .background(Color(.secondarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .padding(.horizontal, 20)
 
-                    // Status message
+                    // Error / Success
                     if case .error(let msg) = status {
-                        Label(msg, systemImage: "exclamationmark.circle.fill")
+                        Label(msg, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.red)
-                            .padding(.horizontal, 4)
+                            .padding(.top, 14)
+                            .padding(.horizontal, 24)
                     }
                     if case .success = status {
-                        Label("Conectado correctamente", systemImage: "checkmark.circle.fill")
+                        Label("Conectado", systemImage: "checkmark.circle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.green)
-                            .padding(.horizontal, 4)
+                            .padding(.top, 14)
                     }
 
                     // Connect button
@@ -77,70 +103,97 @@ struct LoginView: View {
                                 ProgressView()
                                     .tint(.white)
                             } else {
-                                Text("Conectar")
+                                Text("Iniciar sesion")
                                     .fontWeight(.semibold)
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
+                        .frame(height: 52)
                     }
-                    .background(canSubmit ? Color.accentColor : Color.secondary.opacity(0.3),
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(
+                        canSubmit
+                            ? AnyShapeStyle(Color.accentColor)
+                            : AnyShapeStyle(Color.secondary.opacity(0.25))
+                    )
                     .foregroundStyle(canSubmit ? .white : .secondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .disabled(!canSubmit)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 24)
                     .animation(.easeInOut(duration: 0.2), value: canSubmit)
+
+                    Spacer(minLength: 40)
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 40)
+                .frame(minHeight: geo.size.height)
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancelar") { dismiss() }
-                }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .background(Color(.systemGroupedBackground))
+        .onSubmit {
+            switch focusedField {
+            case .server:   focusedField = .user
+            case .user:     focusedField = .password
+            case .password: if canSubmit { connect() }
+            case nil:       break
             }
         }
     }
 
-    // MARK: - Field builders
+    // MARK: - Field builder
 
-    private func field(label: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 12)
-                .padding(.horizontal, 16)
-            TextField(placeholder, text: text)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-        }
+    private var divider: some View {
+        Divider().padding(.leading, 52)
     }
 
-    private func secureField(label: String, placeholder: String, text: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption)
+    @ViewBuilder
+    private func loginField(icon: String, label: String, placeholder: String,
+                            text: Binding<String>, field: Field, isSecure: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
-                .padding(.top, 12)
-                .padding(.horizontal, 16)
-            SecureField(placeholder, text: text)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
+                .frame(width: 20, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 2) {
+                if !text.wrappedValue.isEmpty {
+                    Text(label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                Group {
+                    if isSecure {
+                        SecureField(placeholder, text: text)
+                            .textContentType(.password)
+                    } else if field == .server {
+                        TextField(placeholder, text: text)
+                            .textContentType(.URL)
+                            .keyboardType(.URL)
+                    } else {
+                        TextField(placeholder, text: text)
+                            .textContentType(.username)
+                    }
+                }
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .focused($focusedField, equals: field)
+            }
+            .animation(.easeInOut(duration: 0.15), value: text.wrappedValue.isEmpty)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
     }
 
     // MARK: - Connect action
 
     private func connect() {
+        focusedField = nil
         status = .loading
         let rawUrl = serverUrl.trimmingCharacters(in: .whitespaces)
                                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let user = username.trimmingCharacters(in: .whitespaces)
 
         Task {
-            // Convert plain password to enc:HEX token (same as navidromeApi.ts)
             let hex = password.utf8.map { String(format: "%02x", $0) }.joined()
             let token = "enc:\(hex)"
 
@@ -149,7 +202,7 @@ struct LoginView: View {
             let pingURLStr = "\(rawUrl)/rest/ping.view?u=\(u)&p=\(p)&v=1.16.0&c=audiorr&f=json"
 
             guard let url = URL(string: pingURLStr) else {
-                await MainActor.run { status = .error("URL inválida") }
+                await MainActor.run { status = .error("URL invalida") }
                 return
             }
 
@@ -168,21 +221,20 @@ struct LoginView: View {
 
                 let creds = NavidromeCredentials(serverUrl: rawUrl, username: user, token: token)
                 NavidromeService.shared.saveCredentials(creds)
-                // Bridge credentials to WKWebView localStorage so Capacitor tabs keep working
+
+                // Bridge credentials to WKWebView localStorage
                 if let data = try? JSONEncoder().encode(creds),
                    let json = String(data: data, encoding: .utf8) {
                     let escaped = json
                         .replacingOccurrences(of: "\\", with: "\\\\")
                         .replacingOccurrences(of: "'", with: "\\'")
                     let script = "localStorage.setItem('navidromeConfig', '\(escaped)')"
-                    (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(script)
+                    JSBridge.shared.eval(script)
                 }
 
                 await MainActor.run {
                     status = .success
-                    // Brief delay so the success state is visible before dismissing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         onSuccess?()
                     }
                 }

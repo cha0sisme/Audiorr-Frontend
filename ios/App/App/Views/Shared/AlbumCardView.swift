@@ -1,0 +1,151 @@
+import SwiftUI
+
+// MARK: - Shared album card (Apple Music style)
+
+/// Reusable album cell — cover art, title, explicit badge, configurable subtitle.
+/// Used in HomeView, ArtistDetailView, SeeAllGridView.
+///
+/// Two axes via `axis`:
+/// - `.horizontal`: fixed-width card for horizontal scroll rows.
+/// - `.grid`: flexible width that fills its container (LazyVGrid).
+///
+/// Two subtitle modes via `subtitle`:
+/// - `.artist`: shows the album artist name (default — HomeView, SeeAllGridView).
+/// - `.year`: shows the release year (ArtistDetailView discography).
+struct AlbumCardView: View {
+    let album: NavidromeAlbum
+    var subtitle: Subtitle = .artist
+    /// Pass `true` when the host page has a light background (palette-driven).
+    /// When `nil`, standard system colors are used.
+    var isLight: Bool? = nil
+    var axis: Axis = .horizontal
+    var size: CGFloat = 150
+    var heroNamespace: Namespace.ID?
+
+    @State private var coverImage: UIImage?
+
+    private var isGrid: Bool { axis == .grid }
+    private var titleColor: Color {
+        guard let isLight else { return .primary }
+        return isLight ? .black : .white
+    }
+    private var subtitleColor: Color {
+        guard let isLight else { return .secondary }
+        return isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ZStack {
+                if let img = coverImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    coverPlaceholder
+                }
+            }
+            .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
+            .if(!isGrid) { $0.frame(width: size, height: size) }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+            .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(album.id)", in: heroNamespace!) }
+
+            HStack(spacing: 5) {
+                Text(album.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(titleColor)
+                    .lineLimit(1)
+
+                if album.isExplicit {
+                    ExplicitBadge(color: subtitleColor)
+                }
+            }
+            .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
+
+            subtitleView
+                .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
+        }
+        .task(id: album.id) {
+            if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
+                coverImage = cached
+                return
+            }
+            guard let url = NavidromeService.shared.coverURL(id: album.coverArt, size: 300) else { return }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return }
+            AlbumCoverCache.shared.setImage(img, for: album.coverArt)
+            coverImage = img
+        }
+    }
+
+    @ViewBuilder
+    private var subtitleView: some View {
+        switch subtitle {
+        case .artist:
+            Text(album.artist)
+                .font(.caption)
+                .foregroundStyle(subtitleColor)
+                .lineLimit(1)
+        case .year:
+            if let year = album.year {
+                Text(String(year))
+                    .font(.caption)
+                    .foregroundStyle(subtitleColor)
+            }
+        }
+    }
+
+    private var coverPlaceholder: some View {
+        ZStack {
+            Color(.tertiarySystemFill)
+            Image(systemName: "music.note")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    enum Subtitle {
+        case artist
+        case year
+    }
+
+    enum Axis {
+        case horizontal, grid
+    }
+}
+
+// MARK: - In-memory image cache for album covers
+
+final class AlbumCoverCache: @unchecked Sendable {
+    static let shared = AlbumCoverCache()
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 300
+    }
+
+    func image(for coverArtId: String?) -> UIImage? {
+        guard let id = coverArtId else { return nil }
+        return cache.object(forKey: id as NSString)
+    }
+
+    func setImage(_ image: UIImage, for coverArtId: String?) {
+        guard let id = coverArtId else { return }
+        cache.setObject(image, forKey: id as NSString)
+    }
+}
+
+// MARK: - Conditional modifier helper
+
+extension View {
+    @ViewBuilder
+    func `if`<T: View>(_ condition: Bool, transform: (Self) -> T) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}

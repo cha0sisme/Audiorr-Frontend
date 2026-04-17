@@ -21,14 +21,15 @@ import SwiftUI
 ///   contrasts with the page background.
 struct HorizontalScrollSection<Content: View, Action: View>: View {
     let title: String?
-    let isLight: Bool
+    /// Pass `true`/`false` for palette-driven pages. `nil` uses system colors.
+    let isLight: Bool?
     let spacing: CGFloat
     @ViewBuilder let content: () -> Content
     @ViewBuilder let action: () -> Action
 
     init(
         title: String? = nil,
-        isLight: Bool = false,
+        isLight: Bool? = nil,
         spacing: CGFloat = 14,
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder action: @escaping () -> Action = { EmptyView() }
@@ -40,6 +41,11 @@ struct HorizontalScrollSection<Content: View, Action: View>: View {
         self.action = action
     }
 
+    private var titleColor: Color {
+        guard let isLight else { return .primary }
+        return isLight ? .black : .white
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if title != nil || Action.self != EmptyView.self {
@@ -47,7 +53,7 @@ struct HorizontalScrollSection<Content: View, Action: View>: View {
                     if let title {
                         Text(title)
                             .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(isLight ? Color.black : .white)
+                            .foregroundStyle(titleColor)
                     }
                     Spacer(minLength: 8)
                     action()

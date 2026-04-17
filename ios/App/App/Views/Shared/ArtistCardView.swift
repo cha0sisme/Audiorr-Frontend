@@ -13,6 +13,7 @@ struct ArtistCardView: View {
     /// Pass `true` when the host page has a light background (palette-driven).
     /// When `nil`, standard system colors are used.
     var isLight: Bool? = nil
+    var heroNamespace: Namespace.ID?
 
     @State private var avatarImage: UIImage?
     @State private var didFinishLoading = false
@@ -60,6 +61,7 @@ struct ArtistCardView: View {
             .frame(width: size, height: size)
             .clipShape(Circle())
             .overlay(Circle().stroke(Color(.separator).opacity(0.15), lineWidth: 0.5))
+            .modifier(OptionalHeroSource(id: "artist_\(artist.id)", namespace: heroNamespace))
 
             Text(artist.name)
                 .font(.system(size: 16, weight: .semibold))
@@ -106,6 +108,21 @@ struct ArtistCardView: View {
         withAnimation(.easeOut(duration: 0.25)) {
             avatarImage = img
             didFinishLoading = true
+        }
+    }
+}
+
+// MARK: - Conditional hero source modifier
+
+private struct OptionalHeroSource: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID?
+
+    func body(content: Content) -> some View {
+        if let ns = namespace {
+            content.matchedGeometryEffect(id: id, in: ns)
+        } else {
+            content
         }
     }
 }

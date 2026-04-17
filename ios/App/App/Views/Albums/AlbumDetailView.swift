@@ -48,9 +48,14 @@ final class AlbumDetailViewModel: ObservableObject {
     }
 
     private func fetchCover() async -> UIImage? {
+        if let cached = AlbumCoverCache.shared.image(for: initialAlbum.coverArt) {
+            return cached
+        }
         guard let url = api.coverURL(id: initialAlbum.coverArt, size: 600) else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-        return UIImage(data: data)
+        guard let img = UIImage(data: data) else { return nil }
+        AlbumCoverCache.shared.setImage(img, for: initialAlbum.coverArt)
+        return img
     }
 }
 
@@ -59,11 +64,15 @@ final class AlbumDetailViewModel: ObservableObject {
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
+    var heroNamespace: Namespace.ID?
+    var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
 
-    init(album: NavidromeAlbum) {
+    init(album: NavidromeAlbum, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
+        self.heroNamespace = heroNamespace
+        self.onDismiss = onDismiss
     }
 
     // MARK: Scroll-derived values
@@ -105,6 +114,15 @@ struct AlbumDetailView: View {
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
         .toolbar {
+            if let onDismiss {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onDismiss) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(isLight ? Color.accentColor : .white)
+                    }
+                }
+            }
             ToolbarItem(placement: .principal) {
                 Text(vm.displayAlbum.name)
                     .font(.headline)
@@ -219,6 +237,7 @@ struct AlbumDetailView: View {
             coverArtImage
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(vm.initialAlbum.id)", in: heroNamespace!) }
                 .shadow(
                     color: vm.palette.isSolid
                         ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
@@ -353,4 +372,31 @@ struct AlbumDetailView: View {
         }
     }
 
+}
+
+// MARK: - Album hero overlay modifier
+
+struct AlbumHeroOverlay: ViewModifier {
+    @Binding var selectedAlbum: NavidromeAlbum?
+    var namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+
+            if let album = selectedAlbum {
+                AlbumDetailView(
+                    album: album,
+                    heroNamespace: namespace,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
+                            selectedAlbum = nil
+                        }
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(1)
+            }
+        }
+    }
 }

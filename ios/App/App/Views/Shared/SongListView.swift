@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Shared song list (Apple Music style)
 
@@ -15,6 +16,7 @@ struct SongListView: View {
     let songs: [NavidromeSong]
     let palette: AlbumPalette
     var showAlbumInMenu: Bool = true
+    var showArtistInMenu: Bool = true
     var showArtist: Bool = true
 
     @State private var navAlbum:  NavidromeAlbum?  = nil
@@ -26,7 +28,7 @@ struct SongListView: View {
     /// ScrollView's viewport width. Used to hard-clamp every row so content
     /// (long titles, etc.) cannot expand the row beyond the viewport.
     private var screenWidth: CGFloat {
-        UIScreen.main.bounds.width
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 390
     }
 
     var body: some View {
@@ -57,66 +59,71 @@ struct SongListView: View {
     @ViewBuilder
     private func rowView(for song: NavidromeSong, at idx: Int) -> some View {
         HStack(spacing: 0) {
-            SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    PlayerService.shared.playPlaylist(songs, startingAt: idx)
-                }
+            Button {
+                PlayerService.shared.playPlaylist(songs, startingAt: idx)
+            } label: {
+                SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
             menuButton(for: song)
-                .frame(width: 48)
         }
     }
 
-    // MARK: - ··· menu button
+    // MARK: - ··· menu button (UIKit — instant, no gesture delay)
 
-    @ViewBuilder
     private func menuButton(for song: NavidromeSong) -> some View {
-        let textColor: Color = isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.45)
+        let tint: UIColor = isLight
+            ? UIColor.black.withAlphaComponent(0.30)
+            : UIColor.white.withAlphaComponent(0.45)
 
-        Menu {
-            Button {
-                PlayerService.shared.insertNext(song)
-            } label: {
-                Label("Reproducir a continuación", systemImage: "text.line.first.and.arrowtriangle.forward")
-            }
+        return InstantMenuButton(tint: tint) {
+            // — Playback section
+            let playNext = UIAction(
+                title: "Reproducir a continuación",
+                image: UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
+            ) { _ in PlayerService.shared.insertNext(song) }
 
-            Button {
-                PlayerService.shared.addToQueue(song)
-            } label: {
-                Label("Añadir a la cola", systemImage: "text.badge.plus")
-            }
+            let addQueue = UIAction(
+                title: "Añadir a la cola",
+                image: UIImage(systemName: "text.badge.plus")
+            ) { _ in PlayerService.shared.addToQueue(song) }
+
+            let playbackSection = UIMenu(title: "", options: .displayInline, children: [playNext, addQueue])
+
+            // — Album section
+            var sections: [UIMenuElement] = [playbackSection]
 
             if showAlbumInMenu, let albumId = song.albumId, !albumId.isEmpty {
-                Divider()
-                Button {
+                let goAlbum = UIAction(
+                    title: "Ir al álbum",
+                    image: UIImage(systemName: "music.note")
+                ) { _ in
                     navAlbum = NavidromeAlbum(
                         id: albumId, name: song.album, artist: song.artist,
                         coverArt: song.coverArt, songCount: nil, duration: nil,
                         year: song.year, genre: song.genre, explicitStatus: nil
                     )
-                } label: {
-                    Label("Ir al álbum", systemImage: "music.note")
                 }
+                sections.append(UIMenu(title: "", options: .displayInline, children: [goAlbum]))
             }
 
-            if let artistId = song.artistId, !artistId.isEmpty {
-                Divider()
-                Button {
+            // — Artist section
+            if showArtistInMenu, let artistId = song.artistId, !artistId.isEmpty {
+                let goArtist = UIAction(
+                    title: "Ir al artista",
+                    image: UIImage(systemName: "person.crop.circle")
+                ) { _ in
                     navArtist = NavidromeArtist(id: artistId, name: song.artist, albumCount: nil)
-                } label: {
-                    Label("Ir al artista", systemImage: "person.crop.circle")
                 }
+                sections.append(UIMenu(title: "", options: .displayInline, children: [goArtist]))
             }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(textColor)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+
+            return UIMenu(children: sections)
         }
-        .tint(.primary)
+        .frame(width: 48, height: 44)
     }
 }
 
@@ -176,6 +183,29 @@ private struct SongRowView: View {
     private func formatSeconds(_ s: Double) -> String {
         let t = Int(s)
         return String(format: "%d:%02d", t / 60, t % 60)
+    }
+}
+
+// MARK: - Instant ··· menu (UIKit, zero gesture delay)
+
+/// Wraps a `UIButton` with `showsMenuAsPrimaryAction = true`.
+/// The menu appears on first touch — no SwiftUI gesture disambiguation.
+private struct InstantMenuButton: UIViewRepresentable {
+    let tint: UIColor
+    let menuBuilder: () -> UIMenu
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
+        button.showsMenuAsPrimaryAction = true
+        button.tintColor = tint
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        button.menu = menuBuilder()
+        button.tintColor = tint
     }
 }
 

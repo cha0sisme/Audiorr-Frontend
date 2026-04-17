@@ -1,5 +1,12 @@
 import Foundation
 import UIKit
+import Combine
+
+// MARK: - SmartMix status (mirrors React's SmartMixStatus)
+
+enum SmartMixStatus: String {
+    case idle, analyzing, ready, error
+}
 
 /// Puente entre las vistas SwiftUI y AudioEngineManager.
 /// Permite reproducir canciones directamente desde Swift sin pasar por JS/React.
@@ -12,6 +19,12 @@ final class PlayerService {
     static let shared = PlayerService()
     private let api = NavidromeService.shared
     private init() {}
+
+    // MARK: - SmartMix observable state
+
+    /// Current SmartMix status for a given playlist (set by React via nativeSmartMixStatus).
+    @Published private(set) var smartMixStatus: SmartMixStatus = .idle
+    @Published private(set) var smartMixPlaylistId: String?
 
     // MARK: - Play
 
@@ -70,6 +83,9 @@ final class PlayerService {
             }
         }
 
+        // Guardar en NowPlayingState directamente
+        NowPlayingState.shared.setQueue(songs: [song], startIndex: 0)
+
         // Notificar a React para que PlayerContext y el mini-player estén sincronizados
         notifyReact(song: song, streamURL: streamURL)
     }
@@ -78,6 +94,10 @@ final class PlayerService {
     @MainActor
     func playPlaylist(_ songs: [NavidromeSong], startingAt index: Int = 0) {
         guard index < songs.count else { return }
+
+        // Guardar cola nativamente — el viewer la lee directamente
+        NowPlayingState.shared.setQueue(songs: songs, startIndex: index)
+
         // Notificar a React la cola completa para que gestione crossfade y next/prev
         let songsJSON = songs.enumerated().map { i, s in
             let esc: (String) -> String = { str in
@@ -87,7 +107,7 @@ final class PlayerService {
             let url = api.streamURL(songId: s.id)?.absoluteString ?? ""
             return """
             {id:'\(esc(s.id))',title:'\(esc(s.title))',artist:'\(esc(s.artist))',\
-            album:'\(esc(s.album))',albumId:'\(esc(s.albumId ?? ""))',\
+            artistId:'\(esc(s.artistId ?? ""))',album:'\(esc(s.album))',albumId:'\(esc(s.albumId ?? ""))',\
             coverArt:'\(esc(s.coverArt ?? ""))',duration:\(s.duration ?? 0),path:'\(esc(url))'}
             """
         }.joined(separator: ",")
@@ -98,8 +118,7 @@ final class PlayerService {
         }));
         """
         DispatchQueue.main.async {
-            guard let app = UIApplication.shared.delegate as? AppDelegate else { return }
-            app.evalJSPublic(js)
+            JSBridge.shared.eval(js)
         }
     }
 
@@ -118,11 +137,14 @@ final class PlayerService {
              .replacingOccurrences(of: "'",  with: "\\'")
         }
 
+        let artistId = song.artistId ?? ""
+
         let js = """
         window.dispatchEvent(new CustomEvent('_swiftPlaySong', { detail: {
             id:       '\(esc(song.id))',
             title:    '\(esc(song.title))',
             artist:   '\(esc(song.artist))',
+            artistId: '\(esc(artistId))',
             album:    '\(esc(song.album))',
             albumId:  '\(esc(albumId))',
             coverArt: '\(esc(coverArt))',
@@ -132,8 +154,7 @@ final class PlayerService {
         """
 
         DispatchQueue.main.async {
-            guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
-            appDelegate.evalJSPublic(js)
+            JSBridge.shared.eval(js)
         }
     }
 
@@ -145,7 +166,7 @@ final class PlayerService {
         guard let url = api.streamURL(songId: song.id) else { return }
         let js = songEventJS(song: song, url: url, eventName: "_swiftInsertNext")
         DispatchQueue.main.async {
-            (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(js)
+            JSBridge.shared.eval(js)
         }
     }
 
@@ -155,7 +176,7 @@ final class PlayerService {
         guard let url = api.streamURL(songId: song.id) else { return }
         let js = songEventJS(song: song, url: url, eventName: "_swiftAddToQueue")
         DispatchQueue.main.async {
-            (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(js)
+            JSBridge.shared.eval(js)
         }
     }
 
@@ -169,6 +190,7 @@ final class PlayerService {
             id:       '\(esc(song.id))',
             title:    '\(esc(song.title))',
             artist:   '\(esc(song.artist))',
+            artistId: '\(esc(song.artistId ?? ""))',
             album:    '\(esc(song.album))',
             albumId:  '\(esc(song.albumId ?? ""))',
             coverArt: '\(esc(song.coverArt ?? ""))',
@@ -176,5 +198,68 @@ final class PlayerService {
             url:      '\(url.absoluteString)'
         }}));
         """
+    }
+
+    // MARK: - Toggle play/pause
+
+    /// Despacha togglePlayPause a React.
+    @MainActor
+    func togglePlayPause() {
+        let js = "window.dispatchEvent(new CustomEvent('_swiftTogglePlayPause'));"
+        DispatchQueue.main.async {
+            JSBridge.shared.eval(js)
+        }
+    }
+
+    // MARK: - SmartMix bridge
+
+    /// Pide a React que genere la SmartMix para una playlist.
+    @MainActor
+    func generateSmartMix(playlistId: String, songs: [NavidromeSong]) {
+        let songsJSON = songs.map { s in
+            let esc: (String) -> String = { str in
+                str.replacingOccurrences(of: "\\", with: "\\\\")
+                   .replacingOccurrences(of: "'", with: "\\'")
+            }
+            let url = api.streamURL(songId: s.id)?.absoluteString ?? ""
+            return """
+            {id:'\(esc(s.id))',title:'\(esc(s.title))',artist:'\(esc(s.artist))',\
+            artistId:'\(esc(s.artistId ?? ""))',album:'\(esc(s.album))',albumId:'\(esc(s.albumId ?? ""))',\
+            coverArt:'\(esc(s.coverArt ?? ""))',duration:\(s.duration ?? 0),path:'\(esc(url))'}
+            """
+        }.joined(separator: ",")
+
+        let js = """
+        window.dispatchEvent(new CustomEvent('_swiftGenerateSmartMix', {
+            detail: { playlistId: '\(playlistId)', songs: [\(songsJSON)] }
+        }));
+        """
+        smartMixPlaylistId = playlistId
+        smartMixStatus = .analyzing
+
+        DispatchQueue.main.async {
+            JSBridge.shared.eval(js)
+        }
+    }
+
+    /// Pide a React que reproduzca la SmartMix ya generada.
+    @MainActor
+    func playSmartMix(playlistId: String) {
+        let js = """
+        window.dispatchEvent(new CustomEvent('_swiftPlaySmartMix', {
+            detail: { playlistId: '\(playlistId)' }
+        }));
+        """
+        DispatchQueue.main.async {
+            JSBridge.shared.eval(js)
+        }
+    }
+
+    /// Called from AppDelegate when React reports SmartMix status change.
+    func updateSmartMixStatus(playlistId: String, status: String) {
+        DispatchQueue.main.async {
+            self.smartMixPlaylistId = playlistId
+            self.smartMixStatus = SmartMixStatus(rawValue: status) ?? .idle
+        }
     }
 }

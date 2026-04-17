@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - View Model
 
@@ -9,23 +10,52 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
+    @Published var isBackendAvailable = false
+    @Published var smartMixStatus: SmartMixStatus = .idle
+    @Published var isStarred = false
 
     private let api = NavidromeService.shared
+    private var cancellables = Set<AnyCancellable>()
     let initialPlaylist: NavidromePlaylist
 
     init(playlist: NavidromePlaylist) {
         self.initialPlaylist = playlist
         self.playlist = playlist
+        self.isStarred = Self.loadStarred(id: playlist.id)
+
+        // Observe SmartMix status from PlayerService
+        PlayerService.shared.$smartMixStatus
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in
+                guard let self,
+                      PlayerService.shared.smartMixPlaylistId == self.initialPlaylist.id
+                else { return }
+                self.smartMixStatus = status
+            }
+            .store(in: &cancellables)
+
+        PlayerService.shared.$smartMixPlaylistId
+            .receive(on: RunLoop.main)
+            .sink { [weak self] pid in
+                guard let self else { return }
+                if pid != self.initialPlaylist.id {
+                    self.smartMixStatus = .idle
+                }
+            }
+            .store(in: &cancellables)
     }
 
     var displayPlaylist: NavidromePlaylist { playlist ?? initialPlaylist }
 
     func load() async {
+        guard songs.isEmpty else { return }
         isLoading = true
         defer { isLoading = false }
 
         async let songsTask = api.getPlaylistSongs(playlistId: initialPlaylist.id)
         async let imageTask = fetchCover()
+        let backendAvailable = await api.checkBackendAvailable()
+        self.isBackendAvailable = backendAvailable
 
         let (songsResult, image) = await (try? songsTask, imageTask)
 
@@ -41,6 +71,26 @@ final class PlaylistDetailViewModel: ObservableObject {
             }.value
             self.palette = extracted
         }
+    }
+
+    // MARK: - Starred (UserDefaults)
+
+    private static let starredKey = "starredPlaylists"
+
+    private static func loadStarred(id: String) -> Bool {
+        let set = UserDefaults.standard.stringArray(forKey: starredKey) ?? []
+        return set.contains(id)
+    }
+
+    func toggleStarred() {
+        var set = UserDefaults.standard.stringArray(forKey: Self.starredKey) ?? []
+        if isStarred {
+            set.removeAll { $0 == initialPlaylist.id }
+        } else {
+            set.append(initialPlaylist.id)
+        }
+        UserDefaults.standard.set(set, forKey: Self.starredKey)
+        isStarred.toggle()
     }
 
     /// Backend cover first, Navidrome as fallback — mirrors PlaylistCoverView logic.
@@ -66,11 +116,15 @@ final class PlaylistDetailViewModel: ObservableObject {
 struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
+    var heroNamespace: Namespace.ID?
+    var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
 
-    init(playlist: NavidromePlaylist) {
+    init(playlist: NavidromePlaylist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
+        self.heroNamespace = heroNamespace
+        self.onDismiss = onDismiss
     }
 
     // MARK: Scroll-derived values
@@ -106,6 +160,15 @@ struct PlaylistDetailView: View {
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
         .toolbar {
+            if let onDismiss {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onDismiss) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(isLight ? Color.accentColor : .white)
+                    }
+                }
+            }
             ToolbarItem(placement: .principal) {
                 Text(vm.displayPlaylist.name)
                     .font(.headline)
@@ -195,6 +258,7 @@ struct PlaylistDetailView: View {
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(vm.initialPlaylist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
 
             Spacer(minLength: 20)
@@ -213,8 +277,8 @@ struct PlaylistDetailView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
 
-            // Play button — centered
-            playButton
+            // Action buttons — centered
+            actionButtons
                 .padding(.top, 18)
                 .padding(.bottom, 28)
         }
@@ -235,26 +299,117 @@ struct PlaylistDetailView: View {
             .lineLimit(1)
     }
 
-    private var playButton: some View {
+    private var actionButtons: some View {
         let fillColor: Color  = Color(vm.palette.buttonFillColor)
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
 
-        return Button {
-            guard !vm.songs.isEmpty else { return }
-            PlayerService.shared.playPlaylist(vm.songs)
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "play.fill")
-                Text("Reproducir")
-                    .fontWeight(.semibold)
+        return HStack(spacing: 12) {
+            // Play
+            Button {
+                guard !vm.songs.isEmpty else { return }
+                PlayerService.shared.playPlaylist(vm.songs)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "play.fill")
+                    Text("Reproducir")
+                        .fontWeight(.semibold)
+                }
+                .font(.system(size: 15))
+                .foregroundStyle(labelColor)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 10)
+                .background(fillColor, in: Capsule())
             }
-            .font(.system(size: 15))
-            .foregroundStyle(labelColor)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 10)
-            .background(fillColor, in: Capsule())
+
+            // Shuffle
+            Button {
+                guard !vm.songs.isEmpty else { return }
+                PlayerService.shared.playPlaylist(vm.songs.shuffled())
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
+            }
+
+            // SmartMix (only when backend is available)
+            if vm.isBackendAvailable {
+                smartMixButton(fillColor: fillColor, labelColor: labelColor)
+            }
+
+            // Star (Apple Music style)
+            Button {
+                vm.toggleStarred()
+            } label: {
+                Image(systemName: vm.isStarred ? "star.fill" : "star")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(vm.isStarred ? .yellow : labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        fillColor.opacity(vm.isStarred ? 0.85 : 1),
+                        in: Circle()
+                    )
+            }
         }
         .disabled(vm.isLoading)
+    }
+
+    @ViewBuilder
+    private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
+        let status = vm.smartMixStatus
+
+        Button {
+            switch status {
+            case .idle, .error:
+                PlayerService.shared.generateSmartMix(
+                    playlistId: vm.initialPlaylist.id,
+                    songs: vm.songs
+                )
+            case .ready:
+                PlayerService.shared.playSmartMix(playlistId: vm.initialPlaylist.id)
+            case .analyzing:
+                break // disabled
+            }
+        } label: {
+            HStack(spacing: 6) {
+                switch status {
+                case .idle:
+                    Image(systemName: "sparkles")
+                case .analyzing:
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(labelColor)
+                case .ready:
+                    Image(systemName: "sparkles")
+                case .error:
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+                Text(smartMixLabel(for: status))
+                    .fontWeight(.semibold)
+            }
+            .font(.system(size: 14))
+            .foregroundStyle(labelColor)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                status == .ready
+                    ? fillColor.opacity(0.9)
+                    : fillColor.opacity(0.7),
+                in: Capsule()
+            )
+        }
+        .disabled(status == .analyzing || vm.songs.isEmpty)
+    }
+
+    private func smartMixLabel(for status: SmartMixStatus) -> String {
+        switch status {
+        case .idle:      return "SmartMix"
+        case .analyzing: return "Analizando…"
+        case .ready:     return "SmartMix"
+        case .error:     return "Reintentar"
+        }
     }
 
     // MARK: - Song list
@@ -380,6 +535,33 @@ struct PlaylistCoverView: View {
             Image(systemName: "music.note.list")
                 .font(.system(size: isFlexible ? 40 : max(size * 0.3, 24)))
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Playlist hero overlay modifier
+
+struct PlaylistHeroOverlay: ViewModifier {
+    @Binding var selectedPlaylist: NavidromePlaylist?
+    var namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+
+            if let playlist = selectedPlaylist {
+                PlaylistDetailView(
+                    playlist: playlist,
+                    heroNamespace: namespace,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
+                            selectedPlaylist = nil
+                        }
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(1)
+            }
         }
     }
 }

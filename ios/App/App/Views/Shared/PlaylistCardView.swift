@@ -15,6 +15,7 @@ struct PlaylistCardView: View {
     var isLight: Bool? = nil
     var axis: Axis = .horizontal
     var size: CGFloat = 150
+    var heroNamespace: Namespace.ID?
 
     private var isGrid: Bool { axis == .grid }
     private var titleColor: Color {
@@ -31,6 +32,7 @@ struct PlaylistCardView: View {
             PlaylistCoverView(playlist: playlist, size: isGrid ? .infinity : size)
                 .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(playlist.id)", in: heroNamespace!) }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(playlist.name)
@@ -52,15 +54,3 @@ struct PlaylistCardView: View {
     }
 }
 
-// MARK: - Conditional modifier helper
-
-private extension View {
-    @ViewBuilder
-    func `if`<T: View>(_ condition: Bool, transform: (Self) -> T) -> some View {
-        if condition {
-            transform(self)
-        } else {
-            self
-        }
-    }
-}

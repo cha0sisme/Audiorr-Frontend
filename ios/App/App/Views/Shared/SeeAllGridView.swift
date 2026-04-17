@@ -24,12 +24,19 @@ enum SeeAllDestination: Hashable {
 /// items than the visible limit. Tapping navigates to `SeeAllGridView`.
 struct SeeAllCard: View {
     let remaining: Int
-    let isLight: Bool
+    /// `nil` uses system colors; `true`/`false` for palette-driven pages.
+    var isLight: Bool? = nil
     /// Match the height of the sibling cells (albums = 150, artists = 120).
     var size: CGFloat = 150
 
-    private var bg: Color { isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.10) }
-    private var fg: Color { isLight ? Color.secondary : Color.white.opacity(0.70) }
+    private var bg: Color {
+        guard let isLight else { return Color(.tertiarySystemFill) }
+        return isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.10)
+    }
+    private var fg: Color {
+        guard let isLight else { return .secondary }
+        return isLight ? Color.secondary : Color.white.opacity(0.70)
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -60,11 +67,18 @@ struct SeeAllCard: View {
 /// Round variant for artist sections.
 struct SeeAllArtistCard: View {
     let remaining: Int
-    let isLight: Bool
+    /// `nil` uses system colors; `true`/`false` for palette-driven pages.
+    var isLight: Bool? = nil
     var size: CGFloat = 120
 
-    private var bg: Color { isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.10) }
-    private var fg: Color { isLight ? Color.secondary : Color.white.opacity(0.70) }
+    private var bg: Color {
+        guard let isLight else { return Color(.tertiarySystemFill) }
+        return isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.10)
+    }
+    private var fg: Color {
+        guard let isLight else { return .secondary }
+        return isLight ? Color.secondary : Color.white.opacity(0.70)
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -112,7 +126,7 @@ struct SeeAllGridView: View {
                 LazyVGrid(columns: albumColumns, spacing: 20) {
                     ForEach(items) { album in
                         NavigationLink(value: album) {
-                            SeeAllAlbumCell(album: album)
+                            AlbumCardView(album: album, axis: .grid)
                         }
                         .buttonStyle(.plain)
                     }
@@ -146,62 +160,9 @@ struct SeeAllGridView: View {
         }
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
-        .navigationDestination(for: NavidromeAlbum.self) { album in
-            AlbumDetailView(album: album)
-        }
-        .navigationDestination(for: NavidromePlaylist.self) { playlist in
-            PlaylistDetailView(playlist: playlist)
-        }
-        .navigationDestination(for: NavidromeArtist.self) { artist in
-            ArtistDetailView(artist: artist)
-        }
+        .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
+        .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
+        .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
     }
 }
 
-// MARK: - Grid cells (standard light/dark — SeeAllGridView has no palette)
-
-private struct SeeAllAlbumCell: View {
-    let album: NavidromeAlbum
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            AsyncImage(url: NavidromeService.shared.coverURL(id: album.coverArt, size: 300)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default: placeholder(icon: "music.note")
-                }
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-
-            HStack(spacing: 5) {
-                Text(album.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                if album.isExplicit {
-                    ExplicitBadge()
-                }
-            }
-
-            if let year = album.year {
-                Text(String(year))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-}
-
-// MARK: - Shared placeholder
-
-private func placeholder(icon: String) -> some View {
-    ZStack {
-        Color(.tertiarySystemFill)
-        Image(systemName: icon)
-            .font(.system(size: 28))
-            .foregroundStyle(.secondary)
-    }
-}

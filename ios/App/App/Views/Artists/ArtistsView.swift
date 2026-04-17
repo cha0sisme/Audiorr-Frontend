@@ -133,6 +133,8 @@ struct ArtistsView: View {
     @StateObject private var vm = ArtistsViewModel()
     @State private var showSettings = false
     @State private var scrollY: CGFloat = 0
+    @Namespace private var heroNS
+    @State private var selectedArtist: NavidromeArtist?
 
     private let collapseThreshold: CGFloat = 44
 
@@ -157,41 +159,26 @@ struct ArtistsView: View {
                     scrollY = y
                 }
             }
+            .modifier(ArtistHeroOverlay(selectedArtist: $selectedArtist, namespace: heroNS))
             .background(Color(.systemBackground))
-            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
+            .toolbarBackground(selectedArtist != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
             .task { await vm.load() }
             .refreshable { await vm.load() }
-            .navigationDestination(for: NavidromeArtist.self) { artist in
-                ArtistDetailView(artist: artist)
-            }
-            .navigationDestination(for: NavidromeAlbum.self) { album in
-                AlbumDetailView(album: album)
-            }
-            .navigationDestination(for: NavidromePlaylist.self) { playlist in
-                PlaylistDetailView(playlist: playlist)
-            }
-            .navigationDestination(for: SeeAllDestination.self) { dest in
-                SeeAllGridView(destination: dest)
-            }
+            .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
+            .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
+            .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
+            .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
             }
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Artistas")
-                        .font(.headline)
-                        .lineLimit(1)
-                        .opacity(stickyOpacity)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
+                if selectedArtist == nil {
+                    ToolbarItem(placement: .principal) {
+                        Text("Artistas")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .opacity(stickyOpacity)
                     }
-                    .opacity(stickyOpacity)
                 }
             }
         }
@@ -204,13 +191,6 @@ struct ArtistsView: View {
             Text("Artistas")
                 .font(.system(size: 34, weight: .bold))
             Spacer()
-            Button {
-                showSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
@@ -225,14 +205,7 @@ struct ArtistsView: View {
     @ViewBuilder
     private func content(proxy: ScrollViewProxy) -> some View {
         if vm.isLoading {
-            VStack(spacing: 16) {
-                ProgressView()
-                Text("Cargando artistas...")
-                    .font(.subheadline)
-                    .foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 80)
+            loadingSkeleton
         } else if !vm.isConfigured {
             notConfiguredView
         } else if vm.allArtists.isEmpty {
@@ -289,10 +262,15 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.featuredArtists) { artist in
-                            NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140)
+                            Button {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                    selectedArtist = artist
+                                }
+                            } label: {
+                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
+                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -314,10 +292,15 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.recentArtists) { artist in
-                            NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140)
+                            Button {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                    selectedArtist = artist
+                                }
+                            } label: {
+                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
+                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -350,10 +333,15 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.genreArtists) { artist in
-                            NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140)
+                            Button {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                    selectedArtist = artist
+                                }
+                            } label: {
+                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
+                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -439,6 +427,61 @@ struct ArtistsView: View {
                                 .background(.bar)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Loading skeleton
+
+    private var loadingSkeleton: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            // Two horizontal sections mimicking featured / recent
+            ForEach(0..<2, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(width: 180, height: 22)
+                        .padding(.horizontal, 16)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(0..<5, id: \.self) { _ in
+                                VStack(spacing: 8) {
+                                    Circle()
+                                        .fill(Color(.tertiarySystemFill))
+                                        .frame(width: 140, height: 140)
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(.tertiarySystemFill))
+                                        .frame(width: 100, height: 14)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+            }
+
+            // List rows mimicking the A-Z section
+            VStack(alignment: .leading, spacing: 0) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: 200, height: 22)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+
+                ForEach(0..<6, id: \.self) { _ in
+                    HStack(spacing: 14) {
+                        Circle()
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(width: 48, height: 48)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(width: 140, height: 16)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
                 }
             }
         }

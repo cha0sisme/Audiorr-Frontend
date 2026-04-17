@@ -68,10 +68,22 @@ final class NavidromeService: ObservableObject {
         return URL(string: "\(base)/rest/getCoverArt.view?\(authQuery())&id=\(id)&size=\(size)")
     }
 
+
+
     /// URL base del backend de Audiorr (puerto 2999 por defecto).
-    /// nil si no está disponible o no se ha bridgeado todavía.
+    /// Prioridad: 1) UserDefaults (bridgeado desde React)
+    ///            2) Derivado del serverUrl de Navidrome (mismo host, puerto 2999)
     func backendURL() -> String? {
-        UserDefaults.standard.string(forKey: "audiorr_backend_url")
+        if let stored = UserDefaults.standard.string(forKey: "audiorr_backend_url"),
+           !stored.isEmpty, !stored.contains("capacitor:") {
+            return stored
+        }
+        // Derivar del servidor Navidrome: mismo host, puerto 2999
+        guard let serverUrl = credentials?.serverUrl,
+              let components = URLComponents(string: serverUrl),
+              let host = components.host else { return nil }
+        let scheme = components.scheme ?? "http"
+        return "\(scheme)://\(host):2999"
     }
 
     /// URL de la cover generada por el backend para una playlist.
@@ -80,6 +92,25 @@ final class NavidromeService: ObservableObject {
         guard let base = backendURL() else { return nil }
         let t = Int(Date().timeIntervalSince1970 / 300)
         return URL(string: "\(base)/api/playlists/\(playlistId)/cover.png?_t=\(t)")
+    }
+
+    /// Check if the Audiorr backend is reachable (HEAD /api/health, 5s timeout).
+    /// Cached for 30s to avoid hammering the server on every view load.
+    func checkBackendAvailable() async -> Bool {
+        let cacheKey = "backendAvailable"
+        if let cached = cacheGet(cacheKey) as? Bool { return cached }
+
+        guard let base = backendURL(),
+              let url = URL(string: "\(base)/api/health")
+        else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+
+        let available = (try? await URLSession.shared.data(for: request)) != nil
+        cacheSet(cacheKey, value: available, ttl: 30)
+        return available
     }
 
     func streamURL(songId: String) -> URL? {
@@ -355,6 +386,127 @@ final class NavidromeService: ObservableObject {
             return true
         }
         return false
+    }
+
+    // MARK: - Home page: albums by year range
+
+    func getAlbumsByYearRange(fromYear: Int, toYear: Int, size: Int = 100) async -> [NavidromeAlbum] {
+        guard let base = baseURL() else { return [] }
+        let urlStr = "\(base)/rest/getAlbumList2.view?\(authQuery())&type=byYear&fromYear=\(fromYear)&toYear=\(toYear)&size=\(size)"
+        guard let url = URL(string: urlStr) else { return [] }
+
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(AlbumListResponse.self, from: data),
+              response.status == "ok"
+        else { return [] }
+        return response.albumList2?.album ?? []
+    }
+
+    /// Recent releases — albums released in the last `months` months, sorted newest first.
+    func getRecentReleases(months: Int = 6, size: Int = 18) async -> [NavidromeAlbum] {
+        let cacheKey = "recentReleases_\(months)_\(size)"
+        if let cached = cacheGet(cacheKey) as? [NavidromeAlbum] { return cached }
+
+        let now = Date()
+        let calendar = Calendar.current
+        guard let cutoff = calendar.date(byAdding: .month, value: -months, to: now) else { return [] }
+        let fromYear = calendar.component(.year, from: cutoff)
+        let toYear = calendar.component(.year, from: now)
+
+        let desiredSize = max(size * 2, 100)
+        var pool = await getAlbumsByYearRange(fromYear: fromYear, toYear: toYear, size: desiredSize)
+        if pool.isEmpty {
+            pool = await getAlbumList(type: "newest", size: desiredSize)
+        }
+
+        // Filter by year and sort newest first
+        let filtered = pool
+            .filter { ($0.year ?? 0) >= fromYear }
+            .sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+        let result = Array(filtered.prefix(size))
+        cacheSet(cacheKey, value: result)
+        return result
+    }
+
+    // MARK: - Home page: backend API endpoints
+
+    /// Build a URLRequest with Navidrome auth headers for backend API calls.
+    /// The backend uses `X-Navidrome-User` / `X-Navidrome-Token` to identify the user.
+    private func backendRequest(url: URL, method: String = "GET") -> URLRequest? {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let creds = credentials {
+            request.setValue(creds.username, forHTTPHeaderField: "X-Navidrome-User")
+            if let token = creds.token {
+                request.setValue(token, forHTTPHeaderField: "X-Navidrome-Token")
+            }
+        }
+        return request
+    }
+
+    /// Top 10 most played songs this week.
+    func getTopWeekly() async -> [TopWeeklySong] {
+        guard let base = backendURL(),
+              let url = URL(string: "\(base)/api/stats/top-weekly"),
+              let request = backendRequest(url: url)
+        else { return [] }
+
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        return (try? JSONDecoder().decode([TopWeeklySong].self, from: data)) ?? []
+    }
+
+    /// Recently played contexts (albums, playlists, artists).
+    func getRecentContexts() async -> [RecentContext] {
+        guard let base = backendURL(),
+              let username = credentials?.username
+        else { return [] }
+
+        let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username
+        guard let url = URL(string: "\(base)/api/stats/recent-contexts?username=\(encoded)"),
+              let request = backendRequest(url: url)
+        else { return [] }
+
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        return (try? JSONDecoder().decode([RecentContext].self, from: data)) ?? []
+    }
+
+    /// User's daily mixes. Response is `{ mixes: [...] }`.
+    func getDailyMixes() async -> [DailyMix] {
+        guard let base = backendURL(),
+              let url = URL(string: "\(base)/api/daily-mixes"),
+              let request = backendRequest(url: url)
+        else { return [] }
+
+        struct Response: Decodable { let mixes: [DailyMix] }
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.mixes ?? []
+    }
+
+    /// Generate daily mixes.
+    func generateDailyMixes() async -> GenerateMixesResult? {
+        guard let base = backendURL(),
+              let url = URL(string: "\(base)/api/daily-mixes/generate"),
+              var request = backendRequest(url: url, method: "POST")
+        else { return nil }
+
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        return try? JSONDecoder().decode(GenerateMixesResult.self, from: data)
+    }
+
+    /// Artist image URL from backend (Last.fm / Spotify).
+    func artistImageURL(name: String) async -> URL? {
+        guard let base = backendURL(),
+              let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "\(base)/api/artist/image?name=\(encoded)")
+        else { return nil }
+
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let imageUrl = dict["imageUrl"] as? String,
+              let result = URL(string: imageUrl)
+        else { return nil }
+        return result
     }
 
     // MARK: - Artist avatar

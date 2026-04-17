@@ -21,6 +21,7 @@ export interface Song {
   id: string
   title: string
   artist: string
+  artistId?: string
   album: string
   albumId?: string
   playlistId?: string
@@ -869,6 +870,7 @@ class NavidromeAPI {
       id: song.id,
       title: song.title,
       artist: song.artist,
+      artistId: song.artistId,
       album: song.album,
       albumId: albumId || song.albumId,
       playlistId: playlistId || song.playlistId,

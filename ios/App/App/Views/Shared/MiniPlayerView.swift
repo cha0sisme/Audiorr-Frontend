@@ -1,0 +1,115 @@
+import SwiftUI
+
+/// Mini player nativo para `.tabViewBottomAccessory`.
+/// Replica el layout del mini-player UIKit anterior (artwork 42×42, 3 botones, progress bar).
+/// El styling Liquid Glass lo aplica automáticamente el TabView accessory.
+struct MiniPlayerView: View {
+    private var state = NowPlayingState.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Progress bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.07))
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.30))
+                        .frame(width: geo.size.width * progressFraction)
+                }
+            }
+            .frame(height: 2.5)
+
+            // Content
+            HStack(spacing: 10) {
+                // Artwork
+                artworkImage
+                    .frame(width: 42, height: 42)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+                // Text
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.title)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(state.artist)
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    if let subtitle = state.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(subtitle.hasPrefix("AutoMix") ? .cyan : .green)
+                            .lineLimit(1)
+                            .transition(.opacity)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Controls
+                HStack(spacing: 2) {
+                    controlButton("backward.fill", size: 20) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        JSBridge.shared.send("_nativePrevious")
+                    }
+                    controlButton(state.isPlaying ? "pause.fill" : "play.fill", size: 23) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        JSBridge.shared.send("_nativePlayPause")
+                    }
+                    controlButton("forward.fill", size: 20) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        JSBridge.shared.send("_nativeNext")
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 67.5) // 70 total - 2.5 progress
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            NowPlayingState.shared.viewerIsOpen = true
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.subtitle)
+    }
+
+    // MARK: - Helpers
+
+    private var progressFraction: CGFloat {
+        state.duration > 0 ? CGFloat(state.progress / state.duration) : 0
+    }
+
+    @ViewBuilder
+    private var artworkImage: some View {
+        if let urlStr = state.artworkUrl, let url = URL(string: urlStr) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                default:
+                    Rectangle()
+                        .fill(Color(.secondarySystemFill))
+                }
+            }
+        } else {
+            Rectangle()
+                .fill(Color(.secondarySystemFill))
+        }
+    }
+
+    private func controlButton(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+                .foregroundStyle(.primary)
+                .frame(width: 40, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}

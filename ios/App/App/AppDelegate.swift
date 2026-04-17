@@ -13,23 +13,6 @@ private extension UIView {
     }
 }
 
-// UIWindow personalizada: garantiza que las vistas nativas (tab bar, mini-player)
-// reciban los toques ANTES que WKWebView, independientemente del z-order.
-class NativeAwareWindow: UIWindow {
-    // Vistas nativas registradas para tener prioridad de hit-test
-    var priorityViews: [UIView] = []
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // Probamos las vistas prioritarias de arriba hacia abajo (último añadido = encima)
-        for view in priorityViews.reversed() {
-            guard !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled else { continue }
-            let local = view.convert(point, from: self)
-            if let hit = view.hitTest(local, with: event) { return hit }
-        }
-        return super.hitTest(point, with: event)
-    }
-}
-
 // Wrapper para evitar retain cycle con WKUserContentController
 private class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     weak var delegate: AppDelegate?
@@ -40,34 +23,19 @@ private class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 }
 
 @UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestureRecognizerDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
 
-    // ── Estado interno ──────────────────────────────────────────────────────
-    private var nativeUIReady    = false
+    // ── Estado interno ─────────────���────────────────────────────────────────
+    private var nativeUIReady = false
     weak var webViewRef: WKWebView?
 
-    // Tab bar
-    private var tabBar: UITabBar?
+    // Auth / Login
+    private var loginHostVC: UIHostingController<AnyView>?
+    private var isShowingLogin = false
 
-    // Mini-player
-    private var nowPlayingContainer:   UIView?
-    private var miniPlayerShadow:      UIView?
-    private var artworkView:           UIImageView?
-    private var titleLabel:            UILabel?
-    private var artistLabel:           UILabel?
-    private var playPauseButton:       UIButton?
-    private var subtitleLabel:         UILabel?
-    private var progressFill:          NSLayoutConstraint?
-    private var currentArtworkUrl:     String?
-    private var artworkTask:           URLSessionDataTask?
-    // Indica si el mini-player debería mostrarse (hay canción activa)
-    private var miniPlayerShouldShow = false
-    // Indica si el full-screen viewer está abierto (para no interferir con sus animaciones)
-    private var viewerIsOpen         = false
-
-    // ── App lifecycle ────────────────────────────────────────────────────────
+    // ── App lifecycle ─────────────────────��──────────────────────────────────
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
@@ -79,8 +47,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             print("[Audiorr] AVAudioSession setup failed: \(error)")
         }
 
-        // Configurar buffer del sistema según la ruta actual (por si ya está
-        // conectado a CarPlay al arrancar la app)
         configureIOBufferForRoute()
 
         // Restore persisted theme preference
@@ -88,12 +54,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             AppTheme.shared.isDark = UserDefaults.standard.bool(forKey: "audiorr_isDark")
         }
 
-        // Tell iOS this app is a media player. This enables the "tap album art to open app"
-        // behavior on the Dynamic Island and Lock Screen Now Playing widget.
         UIApplication.shared.beginReceivingRemoteControlEvents()
 
-        // Detectar desconexión de Bluetooth / CarPlay / auriculares para pausar la reproducción,
-        // igual que hacen Spotify y Apple Music.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleRouteChange),
@@ -101,31 +63,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             object: nil
         )
 
-        // Manejar interrupciones de la sesión de audio (llamadas, Siri, otra app).
-        // Sin esto, la sesión puede quedar en un estado inválido y el widget de
-        // Now Playing no se recupera hasta reiniciar la app.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAudioInterruption),
             name: AVAudioSession.interruptionNotification,
             object: nil
         )
-
-        // Reemplazar UIWindow con NativeAwareWindow para que UITabBar y el mini-player
-        // reciban los toques antes que WKWebView (fix: "solo funciona tras hacer scroll").
-        // Con scene lifecycle (iOS 13+), MainSceneDelegate crea NativeAwareWindow directamente,
-        // así que este bloque solo aplica al fallback sin scenes.
-        if let existing = window, !(existing is NativeAwareWindow) {
-            let native: NativeAwareWindow
-            if #available(iOS 13.0, *), let scene = existing.windowScene {
-                native = NativeAwareWindow(windowScene: scene)
-            } else {
-                native = NativeAwareWindow(frame: existing.frame)
-            }
-            native.rootViewController = existing.rootViewController
-            self.window = native
-            native.makeKeyAndVisible()
-        }
 
         return true
     }
@@ -134,39 +77,48 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard let webView = self.window?.rootViewController?.view.firstWKWebView else { return }
 
-            // Swipe-back nativo
             webView.allowsBackForwardNavigationGestures = true
-            // Evita que el UIScrollView de WKWebView retenga los toques (causaba que
-            // el tab bar nativo no respondiera hasta hacer scroll)
             webView.scrollView.delaysContentTouches = false
 
             // Setup nativo (solo una vez)
             if !self.nativeUIReady {
                 self.nativeUIReady = true
                 self.webViewRef    = webView
+                JSBridge.shared.webView = webView
                 self.setupMessageHandlers(webView: webView)
-                self.setupTabBar()
-                self.setupNowPlayingBar()
-                // Notificar al JS que los message handlers están listos.
-                // React probablemente ya envió nativeUpdateNowPlaying antes de
-                // que los handlers existieran (race condition) → JS re-envía el estado.
-                self.evalJS("window.dispatchEvent(new CustomEvent('_nativeReady'))")
+
+                JSBridge.shared.send("_nativeReady")
 
                 // Puente de credenciales + backend URL
-                self.evalJS("""
+                JSBridge.shared.eval("""
                     (function(){
                         var cfg = localStorage.getItem('navidromeConfig');
                         if (cfg) window.webkit.messageHandlers.nativeSyncConfig.postMessage(cfg);
-                        var bu = window.__AUDIORR_BACKEND_URL__
-                            || (window.location.protocol + '//' + window.location.hostname + ':2999');
-                        window.webkit.messageHandlers.nativeSyncBackendUrl.postMessage(bu);
+                        var bu = window.__AUDIORR_BACKEND_URL__;
+                        if (!bu || bu.indexOf('capacitor:') === 0) {
+                            var keys = Object.keys(localStorage);
+                            for (var i = 0; i < keys.length; i++) {
+                                if (keys[i].indexOf('backendUrl') >= 0) {
+                                    var v = localStorage.getItem(keys[i]);
+                                    if (v && v.indexOf('http') === 0) { bu = v; break; }
+                                }
+                            }
+                        }
+                        if (bu && bu.indexOf('capacitor:') !== 0) {
+                            window.webkit.messageHandlers.nativeSyncBackendUrl.postMessage(bu);
+                        }
                     })();
                 """)
+
+                // Check auth — show login if no credentials
+                if !self.isShowingLogin {
+                    self.checkAuthAndShowLoginIfNeeded()
+                }
             }
         }
     }
 
-    // ── JS → Native: message handlers ───────────────────────────────────────
+    // ── JS → Native: message handlers ───────────────��───────────────────────
 
     private func setupMessageHandlers(webView: WKWebView) {
         let ucc     = webView.configuration.userContentController
@@ -178,71 +130,36 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         ucc.add(handler, name: "nativeViewerClose")
         ucc.add(handler, name: "nativeSyncConfig")
         ucc.add(handler, name: "nativeSyncBackendUrl")
+        ucc.add(handler, name: "nativeSmartMixStatus")
+        ucc.add(handler, name: "nativeUpdateViewerState")
     }
 
     func handleScriptMessage(_ message: WKScriptMessage) {
         switch message.name {
 
         case "nativeSetActiveTab":
-            guard let body  = message.body as? [String: Any],
-                  let index = body["index"] as? Int else { return }
-            DispatchQueue.main.async {
-                self.tabBar?.selectedItem = self.tabBar?.items?[safe: index]
-            }
+            // Tab selection now handled by SwiftUI TabView — no-op
+            break
 
         case "nativeUpdateNowPlaying":
             guard let body = message.body as? [String: Any] else { return }
-            let titleText    = body["title"]     as? String ?? ""
-            let artistText   = body["artist"]    as? String ?? ""
-            let artworkUrl   = body["artworkUrl"] as? String
-            let isPlaying    = body["isPlaying"] as? Bool   ?? false
-            let progress     = body["progress"]  as? Double ?? 0
-            let duration     = body["duration"]  as? Double ?? 1
-            let isVisible    = body["isVisible"] as? Bool   ?? true
-            let isDark       = body["isDark"]    as? Bool   ?? false
-            let subtitleText = body["subtitle"]  as? String
             DispatchQueue.main.async {
-                self.updateNowPlaying(
-                    title: titleText, artist: artistText,
-                    artworkUrl: artworkUrl, isPlaying: isPlaying,
-                    progress: progress, duration: duration, isVisible: isVisible,
-                    isDark: isDark, subtitle: subtitleText
-                )
+                NowPlayingState.shared.update(from: body)
             }
 
         case "nativeHideNowPlaying":
             DispatchQueue.main.async {
-                self.miniPlayerShouldShow = false
-                self.nowPlayingContainer?.isHidden = true
+                NowPlayingState.shared.hide()
             }
 
         case "nativeViewerOpen":
             DispatchQueue.main.async {
-                self.viewerIsOpen = true
-                let tabBarH = self.tabBar?.frame.height ?? 80
-                // Desactivar interacción INMEDIATAMENTE — no esperar a la animación.
-                // NativeAwareWindow.hitTest comprueba isUserInteractionEnabled,
-                // así que esto previene que el tab bar / mini-player roben toques
-                // al WKWebView (donde vive el NowPlayingViewer).
-                self.miniPlayerShadow?.isUserInteractionEnabled = false
-                self.tabBar?.isUserInteractionEnabled           = false
+                NowPlayingState.shared.viewerIsOpen = true
+            }
 
-                // Eliminar los 49pt extra del safe area para que el WKWebView
-                // use la geometría real del dispositivo (el viewer es full-screen,
-                // el tab bar está oculto).
-                if let rootVC = self.window?.rootViewController {
-                    rootVC.additionalSafeAreaInsets = .zero
-                }
-
-                UIView.animate(withDuration: 0.24, delay: 0, options: .curveEaseIn) {
-                    self.nowPlayingContainer?.alpha     = 0
-                    self.nowPlayingContainer?.transform = CGAffineTransform(translationX: 0, y: 16)
-                    self.tabBar?.transform              = CGAffineTransform(translationX: 0, y: tabBarH)
-                } completion: { _ in
-                    self.nowPlayingContainer?.isHidden = true
-                    self.miniPlayerShadow?.isHidden    = true
-                    self.tabBar?.isHidden              = true
-                }
+        case "nativeViewerClose":
+            DispatchQueue.main.async {
+                NowPlayingState.shared.viewerIsOpen = false
             }
 
         case "nativeSyncConfig":
@@ -256,31 +173,22 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                 UserDefaults.standard.set(urlString, forKey: "audiorr_backend_url")
             }
 
-        case "nativeViewerClose":
+        case "nativeUpdateViewerState":
+            print("[AppDelegate] nativeUpdateViewerState received, body type: \(type(of: message.body))")
+            guard let body = message.body as? [String: Any] else {
+                print("[AppDelegate] nativeUpdateViewerState FAILED: body is not [String: Any]")
+                return
+            }
+            print("[AppDelegate] nativeUpdateViewerState OK: keys=\(body.keys.sorted())")
             DispatchQueue.main.async {
-                self.viewerIsOpen = false
-                let tabBarH = self.tabBar?.frame.height ?? 80
+                NowPlayingState.shared.updateViewerState(from: body)
+            }
 
-                // Restaurar los 49pt del tab bar en el safe area
-                if let rootVC = self.window?.rootViewController {
-                    rootVC.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 49, right: 0)
-                }
-
-                // Restaurar interacción y visibilidad
-                self.miniPlayerShadow?.isHidden                = false
-                self.miniPlayerShadow?.isUserInteractionEnabled = true
-                self.tabBar?.isHidden  = false
-                self.tabBar?.isUserInteractionEnabled           = true
-                self.tabBar?.transform = CGAffineTransform(translationX: 0, y: tabBarH)
-                if self.miniPlayerShouldShow {
-                    self.nowPlayingContainer?.isHidden = false
-                }
-                UIView.animate(withDuration: 0.38, delay: 0.06,
-                               usingSpringWithDamping: 0.82, initialSpringVelocity: 0, options: []) {
-                    self.nowPlayingContainer?.alpha     = self.miniPlayerShouldShow ? 1 : 0
-                    self.nowPlayingContainer?.transform = .identity
-                    self.tabBar?.transform              = .identity
-                }
+        case "nativeSmartMixStatus":
+            if let body = message.body as? [String: Any],
+               let playlistId = body["playlistId"] as? String,
+               let status = body["status"] as? String {
+                PlayerService.shared.updateSmartMixStatus(playlistId: playlistId, status: status)
             }
 
         default:
@@ -296,39 +204,23 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
         else { return }
 
-        // oldDeviceUnavailable = el dispositivo de salida anterior se desconectó
-        // (ej: se quitan auriculares, se desconecta Bluetooth, se desconecta CarPlay)
         if reason == .oldDeviceUnavailable {
             print("[Audiorr] Audio route lost (Bluetooth/CarPlay/headphones disconnected) → pausing")
-            evalJS("window.dispatchEvent(new CustomEvent('_audioRouteLost'))")
+            JSBridge.shared.send("_audioRouteLost")
         }
 
-        // Ajustar buffer del sistema según la ruta de audio.
-        // CarPlay wireless (WiFi) introduce jitter que causa buffer underruns con el
-        // ioBufferDuration por defecto (~5-10ms). Aumentar a 40ms absorbe el jitter.
-        // Apps nativas (AVPlayer/AVAudioEngine) hacen esto automáticamente, pero
-        // WebAudio en WKWebView no — necesita ayuda a nivel de AVAudioSession.
         configureIOBufferForRoute()
     }
 
-    /// Ajusta `preferredIOBufferDuration` según si la salida actual es CarPlay.
-    /// CarPlay wireless usa WiFi, que introduce jitter variable. Un buffer de 40ms
-    /// (~1920 samples a 48kHz) absorbe ese jitter sin latencia perceptible en música.
-    /// Sin esto, WebAudio en WKWebView sufre underruns constantes → audio entrecortado.
     private func configureIOBufferForRoute() {
         let session = AVAudioSession.sharedInstance()
         let isCarPlay = session.currentRoute.outputs.contains { $0.portType == .carAudio }
 
         do {
             if isCarPlay {
-                // Buffer grande para absorber jitter WiFi de CarPlay wireless.
-                // 0.04s es suficiente para WiFi con interferencias moderadas.
-                // No afecta la latencia percibida (es música, no audio interactivo).
                 try session.setPreferredIOBufferDuration(0.04)
                 print("[Audiorr] CarPlay detected — IO buffer set to 0.04s (actual: \(session.ioBufferDuration)s)")
             } else {
-                // Volver al buffer estándar para altavoz/auriculares.
-                // 0.02s (20ms) es un buen balance latencia/estabilidad.
                 try session.setPreferredIOBufferDuration(0.02)
                 print("[Audiorr] Standard output — IO buffer set to 0.02s (actual: \(session.ioBufferDuration)s)")
             }
@@ -348,7 +240,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         switch type {
         case .began:
             print("[Audiorr] Audio session interrupted")
-            evalJS("window.dispatchEvent(new CustomEvent('_audioSessionInterrupted'))")
+            JSBridge.shared.send("_audioSessionInterrupted")
 
         case .ended:
             print("[Audiorr] Audio session interruption ended — reactivating")
@@ -362,24 +254,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                 rawValue: (userInfo[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
             )
             let shouldResume = options.contains(.shouldResume)
-            evalJS("window.dispatchEvent(new CustomEvent('_audioSessionResumed', { detail: { shouldResume: \(shouldResume) } }))")
+            JSBridge.shared.send("_audioSessionResumed", detail: "{ shouldResume: \(shouldResume) }")
 
         @unknown default:
             break
         }
     }
 
-    // ── Native → JS ──────────────────────────────────────────────────────────
-
-    private func evalJS(_ script: String) {
-        DispatchQueue.main.async {
-            self.webViewRef?.evaluateJavaScript(script, completionHandler: nil)
-        }
-    }
+    // ── Native → JS (legacy, kept for evalJSPublic callers) ─────────────────
 
     /// Versión pública para uso desde servicios Swift (PlayerService, etc.)
+    /// Prefer JSBridge.shared.eval() for new code.
     func evalJSPublic(_ script: String) {
-        evalJS(script)
+        JSBridge.shared.eval(script)
     }
 
     /// Apply dark/light theme from SwiftUI settings toggle.
@@ -387,462 +274,73 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         AppTheme.shared.isDark = isDark
         UserDefaults.standard.set(isDark, forKey: "audiorr_isDark")
 
-        let style: UIUserInterfaceStyle = isDark ? .dark : .light
-        nativeTabVCs.values.forEach { $0.view.overrideUserInterfaceStyle = style }
-        miniPlayerShadow?.overrideUserInterfaceStyle = style
-
         // Sync to JS side
         let script = "document.documentElement.classList.toggle('dark', \(isDark))"
-        evalJS(script)
+        JSBridge.shared.eval(script)
     }
 
-    // ── Tab bar nativa ───────────────────────────────────────────────────────
+    // ── Auth / Login ─────���──────────────────────────────────────────────────
 
-    private func setupTabBar() {
-        guard let win   = window,
-              let rootVC = win.rootViewController else { return }
-
-        let audioIcon = UIImage(named: "AudiorrTabIcon")?.withRenderingMode(.alwaysTemplate)
-        let tabs = [
-            UITabBarItem(title: "Inicio",    image: UIImage(systemName: "house.fill"),           tag: 0),
-            UITabBarItem(title: "Artistas",  image: UIImage(systemName: "person.2.fill"),        tag: 1),
-            UITabBarItem(title: "Playlists", image: UIImage(systemName: "music.note.list"),      tag: 2),
-            UITabBarItem(title: "Audiorr",   image: audioIcon,                                    tag: 3),
-            UITabBarItem(title: "Buscar",    image: UIImage(systemName: "magnifyingglass"),      tag: 4),
-        ]
-
-        let bar = UITabBar()
-        bar.delegate     = self
-        bar.items        = tabs
-        bar.selectedItem = tabs[0]
-
-        // Apariencia explícita
-        let appearance = UITabBarAppearance()
-        appearance.configureWithDefaultBackground()
-        bar.standardAppearance = appearance
-        if #available(iOS 15.0, *) { bar.scrollEdgeAppearance = appearance }
-
-        // Añadir a la UIWindow directamente
-        let safeBottom = win.safeAreaInsets.bottom
-        let barHeight  = CGFloat(49) + safeBottom
-        bar.frame = CGRect(x: 0,
-                           y: win.bounds.height - barHeight,
-                           width: win.bounds.width,
-                           height: barHeight)
-        bar.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
-
-        win.addSubview(bar)
-        win.bringSubviewToFront(bar)
-        (win as? NativeAwareWindow)?.priorityViews.append(bar)
-
-        rootVC.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 49, right: 0)
-
-        self.tabBar = bar
-    }
-
-    // UITabBarDelegate
-    func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
-        UISelectionFeedbackGenerator().selectionChanged()
-
-        // Tags con vista nativa SwiftUI
-        switch item.tag {
-        case 1: showNativeTab(1) { AnyView(ArtistsView()) };   return
-        case 2: showNativeTab(2) { AnyView(PlaylistsView()) }; return
-        case 3: showNativeTab(3) { AnyView(NavigationStack { SettingsView() }) }; return
-        case 4: showNativeTab(4) { self.makeSearchView() };    return
-        default: break
+    func checkAuthAndShowLoginIfNeeded() {
+        if NavidromeService.shared.credentials == nil {
+            showLogin()
         }
-
-        // Tab con WKWebView: ocultar todas las vistas nativas
-        hideAllNativeTabs()
-
-        let routes = ["/", "/artists", "/playlists", "/audiorr", "/search"]
-        guard item.tag < routes.count else { return }
-        evalJS("window.location.hash = '#\(routes[item.tag])'")
     }
 
-    // ── Native tab views (child VCs sobre el WKWebView) ─────────────────────
+    func showLogin() {
+        guard let win = window, !isShowingLogin else { return }
+        isShowingLogin = true
 
-    private var nativeTabVCs: [Int: UIHostingController<AnyView>] = [:]
+        let loginView = LoginView(onSuccess: { [weak self] in
+            self?.dismissLogin()
+        })
+        let hostVC = UIHostingController(rootView: AnyView(
+            loginView
+                .preferredColorScheme(AppTheme.shared.isDark ? .dark : .light)
+        ))
+        hostVC.view.translatesAutoresizingMaskIntoConstraints = false
+        hostVC.view.overrideUserInterfaceStyle = AppTheme.shared.isDark ? .dark : .light
 
-    private func showNativeTab(_ tag: Int, makeView: () -> AnyView) {
-        guard let rootVC = window?.rootViewController else { return }
-        nativeTabVCs.forEach { $0.value.view.isHidden = true }
-
-        if nativeTabVCs[tag] == nil {
-            let hostVC = UIHostingController(rootView: makeView())
-            hostVC.view.translatesAutoresizingMaskIntoConstraints = false
-            hostVC.view.overrideUserInterfaceStyle = AppTheme.shared.isDark ? .dark : .light
-            rootVC.addChild(hostVC)
-            rootVC.view.addSubview(hostVC.view)
-            NSLayoutConstraint.activate([
-                hostVC.view.leadingAnchor.constraint(equalTo:  rootVC.view.leadingAnchor),
-                hostVC.view.trailingAnchor.constraint(equalTo: rootVC.view.trailingAnchor),
-                hostVC.view.topAnchor.constraint(equalTo:      rootVC.view.topAnchor),
-                hostVC.view.bottomAnchor.constraint(equalTo:   rootVC.view.bottomAnchor),
-            ])
-            hostVC.didMove(toParent: rootVC)
-            nativeTabVCs[tag] = hostVC
-        }
-        nativeTabVCs[tag]?.view.isHidden = false
-    }
-
-    private func hideAllNativeTabs() {
-        nativeTabVCs.forEach { $0.value.view.isHidden = true }
-    }
-
-    private func makeSearchView() -> AnyView {
-        var view = SearchView()
-        // Album navigation is now handled natively via NavigationLink inside SearchView.
-        // Artist navigation still falls back to JS routing until ArtistView is migrated.
-        view.onPlaySong = { song in
-            Task { @MainActor in PlayerService.shared.play(song: song) }
-        }
-        return AnyView(view)
-    }
-
-    // ── Mini-player nativo ───────────────────────────────────────────────────
-
-    private func setupNowPlayingBar() {
-        guard let win = window else { return }
-
-        // Shadow wrapper (fuera del clipsToBounds)
-        let shadow = UIView()
-        shadow.translatesAutoresizingMaskIntoConstraints = false
-        shadow.layer.shadowColor   = UIColor.black.cgColor
-        shadow.layer.shadowOpacity = 0.14
-        shadow.layer.shadowRadius  = 20
-        shadow.layer.shadowOffset  = CGSize(width: 0, height: -4)
-        shadow.layer.cornerRadius  = 26
-        // Empezar sin interacción — se activa cuando el mini-player se muestra.
-        // Sin esto, el shadow (en priorityViews) intercepta toques del WKWebView
-        // aunque el container hijo esté hidden.
-        shadow.isUserInteractionEnabled = false
-
-        // Contenedor con blur
-        let container = UIView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.layer.cornerRadius = 26
-        container.layer.cornerCurve  = .continuous
-        container.clipsToBounds      = true
-        container.isHidden           = true
-
-        // Blur base — iOS 26+ usa UIGlassEffect (Liquid Glass, mismo material que UITabBar);
-        // versiones anteriores usan UIBlurEffect con systemChromeMaterial.
-        let glassEffect: UIVisualEffect
-        if #available(iOS 26.0, *) {
-            glassEffect = UIGlassEffect()
-        } else {
-            glassEffect = UIBlurEffect(style: .systemChromeMaterial)
-        }
-        let blur = UIVisualEffectView(effect: glassEffect)
-        blur.translatesAutoresizingMaskIntoConstraints = false
-
-        // Color overlay — solo necesario en iOS < 26; en iOS 26 UIGlassEffect
-        // gestiona su propio color/material igual que UITabBar.
-        let colorOverlay = UIView()
-        colorOverlay.translatesAutoresizingMaskIntoConstraints = false
-        colorOverlay.backgroundColor = UIColor { traits in
-            if #available(iOS 26.0, *) { return .clear }
-            return traits.userInterfaceStyle == .dark
-                ? UIColor(red: 28/255, green: 28/255, blue: 30/255, alpha: 0.80)
-                : UIColor.white.withAlphaComponent(0.55)
-        }
-
-        // Progress track
-        let track = UIView()
-        track.translatesAutoresizingMaskIntoConstraints = false
-        track.backgroundColor = UIColor.label.withAlphaComponent(0.07)
-
-        let fill = UIView()
-        fill.translatesAutoresizingMaskIntoConstraints = false
-        fill.backgroundColor = UIColor.label.withAlphaComponent(0.30)
-
-        // Artwork
-        let artwork = UIImageView()
-        artwork.translatesAutoresizingMaskIntoConstraints = false
-        artwork.layer.cornerRadius = 9
-        artwork.layer.cornerCurve  = .continuous
-        artwork.clipsToBounds      = true
-        artwork.contentMode        = .scaleAspectFill
-        artwork.backgroundColor    = UIColor.secondarySystemFill
-
-        // Botones
-        let prevBtn  = buildButton(symbol: "backward.fill", size: 20, action: #selector(previousTapped))
-        let nextBtn  = buildButton(symbol: "forward.fill",  size: 20, action: #selector(nextTapped))
-        let playBtn  = buildButton(symbol: "play.fill",     size: 23, action: #selector(playPauseTapped))
-
-        // Etiquetas
-        let titleLbl = UILabel()
-        titleLbl.translatesAutoresizingMaskIntoConstraints = false
-        titleLbl.font          = .systemFont(ofSize: 13.5, weight: .semibold)
-        titleLbl.textColor     = .label
-        titleLbl.lineBreakMode = .byTruncatingTail
-
-        let artistLbl = UILabel()
-        artistLbl.translatesAutoresizingMaskIntoConstraints = false
-        artistLbl.font          = .systemFont(ofSize: 12, weight: .regular)
-        artistLbl.textColor     = .secondaryLabel
-        artistLbl.lineBreakMode = .byTruncatingTail
-
-        let subtitleLbl = UILabel()
-        subtitleLbl.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLbl.font          = .systemFont(ofSize: 10, weight: .semibold)
-        subtitleLbl.textColor     = .systemCyan
-        subtitleLbl.lineBreakMode = .byTruncatingTail
-        subtitleLbl.isHidden      = true
-
-        // Jerarquía
-        container.addSubview(blur)
-        // colorOverlay en container (no en blur.contentView): dentro del contentView de
-        // UIVisualEffectView el traitCollection puede quedar aislado por el efecto, impidiendo
-        // que UIColor dinámicos se reevalúen al cambiar overrideUserInterfaceStyle. Fuera del
-        // contentView el overlay hereda los traits del shadow/container correctamente.
-        container.addSubview(colorOverlay)
-        container.addSubview(track)
-        container.addSubview(fill)
-        container.addSubview(artwork)
-        container.addSubview(prevBtn)
-        container.addSubview(nextBtn)
-        container.addSubview(playBtn)
-        container.addSubview(titleLbl)
-        container.addSubview(artistLbl)
-        container.addSubview(subtitleLbl)
-        shadow.addSubview(container)
-        win.addSubview(shadow)
-        win.bringSubviewToFront(shadow)
-        // Registrar en NativeAwareWindow para hit-test prioritario
-        (win as? NativeAwareWindow)?.priorityViews.append(shadow)
-
-        // Fill width constraint (actualizado dinámicamente)
-        let fillWidthConstraint = fill.widthAnchor.constraint(equalToConstant: 0)
-        fillWidthConstraint.isActive = true
-
+        guard let rootVC = win.rootViewController else { return }
+        rootVC.addChild(hostVC)
+        rootVC.view.addSubview(hostVC.view)
         NSLayoutConstraint.activate([
-            // Blur llena el contenedor (mismo material que UITabBar)
-            blur.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            blur.topAnchor.constraint(equalTo: container.topAnchor),
-            blur.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-
-            // Color overlay llena el container (encima del blur, debajo de los controles)
-            colorOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            colorOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            colorOverlay.topAnchor.constraint(equalTo: container.topAnchor),
-            colorOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-
-            // Progress track
-            track.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            track.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            track.topAnchor.constraint(equalTo: container.topAnchor),
-            track.heightAnchor.constraint(equalToConstant: 2.5),
-
-            // Progress fill
-            fill.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            fill.topAnchor.constraint(equalTo: container.topAnchor),
-            fill.heightAnchor.constraint(equalToConstant: 2.5),
-
-            // Artwork
-            artwork.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            artwork.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            artwork.widthAnchor.constraint(equalToConstant: 42),
-            artwork.heightAnchor.constraint(equalToConstant: 42),
-
-            // Next
-            nextBtn.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
-            nextBtn.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            nextBtn.widthAnchor.constraint(equalToConstant: 40),
-            nextBtn.heightAnchor.constraint(equalToConstant: 44),
-
-            // Play/pause
-            playBtn.trailingAnchor.constraint(equalTo: nextBtn.leadingAnchor, constant: -2),
-            playBtn.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            playBtn.widthAnchor.constraint(equalToConstant: 40),
-            playBtn.heightAnchor.constraint(equalToConstant: 44),
-
-            // Previous
-            prevBtn.trailingAnchor.constraint(equalTo: playBtn.leadingAnchor, constant: -2),
-            prevBtn.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            prevBtn.widthAnchor.constraint(equalToConstant: 40),
-            prevBtn.heightAnchor.constraint(equalToConstant: 44),
-
-            // Title
-            titleLbl.leadingAnchor.constraint(equalTo: artwork.trailingAnchor, constant: 10),
-            titleLbl.trailingAnchor.constraint(equalTo: prevBtn.leadingAnchor, constant: -8),
-            titleLbl.bottomAnchor.constraint(equalTo: container.centerYAnchor, constant: -1),
-
-            // Artist
-            artistLbl.leadingAnchor.constraint(equalTo: artwork.trailingAnchor, constant: 10),
-            artistLbl.trailingAnchor.constraint(equalTo: prevBtn.leadingAnchor, constant: -8),
-            artistLbl.topAnchor.constraint(equalTo: container.centerYAnchor, constant: 2),
-
-            // Subtitle (shown below artist when active)
-            subtitleLbl.leadingAnchor.constraint(equalTo: artwork.trailingAnchor, constant: 10),
-            subtitleLbl.trailingAnchor.constraint(equalTo: prevBtn.leadingAnchor, constant: -8),
-            subtitleLbl.topAnchor.constraint(equalTo: artistLbl.bottomAnchor, constant: 1),
-
-            // Shadow wrapper posición — relativo a la window
-            // El tab bar ocupa 49pt por encima del safe-area bottom → sumamos ese offset
-            shadow.leadingAnchor.constraint(equalTo: win.leadingAnchor, constant: 16),
-            shadow.trailingAnchor.constraint(equalTo: win.trailingAnchor, constant: -16),
-            shadow.bottomAnchor.constraint(equalTo: win.safeAreaLayoutGuide.bottomAnchor, constant: -(49 + 8)),
-            shadow.heightAnchor.constraint(equalToConstant: 70),
-
-            // Container llena el shadow
-            container.leadingAnchor.constraint(equalTo: shadow.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: shadow.trailingAnchor),
-            container.topAnchor.constraint(equalTo: shadow.topAnchor),
-            container.bottomAnchor.constraint(equalTo: shadow.bottomAnchor),
+            hostVC.view.leadingAnchor.constraint(equalTo: rootVC.view.leadingAnchor),
+            hostVC.view.trailingAnchor.constraint(equalTo: rootVC.view.trailingAnchor),
+            hostVC.view.topAnchor.constraint(equalTo: rootVC.view.topAnchor),
+            hostVC.view.bottomAnchor.constraint(equalTo: rootVC.view.bottomAnchor),
         ])
+        hostVC.didMove(toParent: rootVC)
 
-        // Tap para abrir full player — delegate evita que intercepte taps en botones
-        let tap = UITapGestureRecognizer(target: self, action: #selector(nowPlayingTapped))
-        tap.delegate = self
-        container.addGestureRecognizer(tap)
-
-        self.nowPlayingContainer = container
-        self.miniPlayerShadow    = shadow
-        self.artworkView         = artwork
-        self.titleLabel          = titleLbl
-        self.artistLabel         = artistLbl
-        self.subtitleLabel       = subtitleLbl
-        self.playPauseButton     = playBtn
-        self.progressFill        = fillWidthConstraint
+        rootVC.view.bringSubviewToFront(hostVC.view)
+        loginHostVC = hostVC
     }
 
-    private func updateNowPlaying(title: String, artist: String, artworkUrl: String?,
-                                  isPlaying: Bool, progress: Double, duration: Double,
-                                  isVisible: Bool, isDark: Bool = false, subtitle: String? = nil) {
-        // Forzar el modo dark/light enviado por JS para que el mini-player siga el
-        // tema de la app (igual que UITabBar sigue el sistema). Sin esto, colorOverlay
-        // y UIBlurEffect quedan fijados al modo del sistema iOS, ignorando el theme switcher.
-        miniPlayerShadow?.overrideUserInterfaceStyle = isDark ? .dark : .light
+    private func dismissLogin() {
+        guard isShowingLogin else { return }
+        isShowingLogin = false
 
-        // Propagar tema a todas las vistas SwiftUI nativas
-        if AppTheme.shared.isDark != isDark {
-            AppTheme.shared.isDark = isDark
-            let style: UIUserInterfaceStyle = isDark ? .dark : .light
-            nativeTabVCs.values.forEach { $0.view.overrideUserInterfaceStyle = style }
+        UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0, options: []) {
+            self.loginHostVC?.view.alpha = 0
+            self.loginHostVC?.view.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+        } completion: { _ in
+            self.loginHostVC?.willMove(toParent: nil)
+            self.loginHostVC?.view.removeFromSuperview()
+            self.loginHostVC?.removeFromParent()
+            self.loginHostVC = nil
+
+            // Re-sync credentials with JS side
+            JSBridge.shared.eval("""
+                (function(){
+                    var cfg = localStorage.getItem('navidromeConfig');
+                    if (cfg) window.webkit.messageHandlers.nativeSyncConfig.postMessage(cfg);
+                    var bu = window.__AUDIORR_BACKEND_URL__
+                        || (window.location.protocol + '//' + window.location.hostname + ':2999');
+                    window.webkit.messageHandlers.nativeSyncBackendUrl.postMessage(bu);
+                    window.location.reload();
+                })();
+            """)
         }
-
-        miniPlayerShouldShow = isVisible
-        if isVisible && !viewerIsOpen {
-            // Restaurar estado visual por si una animación anterior lo dejó oculto
-            nowPlayingContainer?.isHidden  = false
-            nowPlayingContainer?.alpha     = 1
-            nowPlayingContainer?.transform = .identity
-            // Habilitar interacción en el shadow para que el tap gesture funcione
-            miniPlayerShadow?.isUserInteractionEnabled = true
-        } else if !isVisible {
-            nowPlayingContainer?.isHidden = true
-            // Desactivar interacción del shadow cuando el mini-player está oculto.
-            // Sin esto, el shadow (siempre visible en la jerarquía de priorityViews)
-            // intercepta toques destinados al WKWebView (ej. filas de SongTable).
-            miniPlayerShadow?.isUserInteractionEnabled = false
-        }
-        titleLabel?.text  = title
-        artistLabel?.text = artist
-
-        // Subtitle (AutoMix · Xs / Reproduciendo en…) — smooth fade transitions
-        let newSubtitle = (subtitle ?? "").isEmpty ? nil : subtitle
-        let currentSubtitle = subtitleLabel?.text
-        let wasVisible = !(subtitleLabel?.isHidden ?? true)
-
-        if let sub = newSubtitle {
-            let isAutoMix = sub.hasPrefix("AutoMix")
-            subtitleLabel?.textColor = isAutoMix ? .systemCyan : .systemGreen
-
-            if !wasVisible {
-                // Fade in
-                subtitleLabel?.text    = sub
-                subtitleLabel?.alpha   = 0
-                subtitleLabel?.isHidden = false
-                UIView.animate(withDuration: 0.2) {
-                    self.subtitleLabel?.alpha = 1
-                }
-            } else if currentSubtitle != sub {
-                // Cross-fade between different subtitles
-                UIView.animate(withDuration: 0.15, animations: {
-                    self.subtitleLabel?.alpha = 0
-                }) { _ in
-                    self.subtitleLabel?.text = sub
-                    UIView.animate(withDuration: 0.15) {
-                        self.subtitleLabel?.alpha = 1
-                    }
-                }
-            }
-        } else if wasVisible {
-            // Fade out
-            UIView.animate(withDuration: 0.2, animations: {
-                self.subtitleLabel?.alpha = 0
-            }) { _ in
-                self.subtitleLabel?.isHidden = true
-            }
-        }
-
-        let conf    = UIImage.SymbolConfiguration(pointSize: 23, weight: .regular)
-        let symbol  = isPlaying ? "pause.fill" : "play.fill"
-        playPauseButton?.setImage(UIImage(systemName: symbol, withConfiguration: conf), for: .normal)
-
-        if let container = nowPlayingContainer {
-            let w        = container.bounds.width
-            let fraction = duration > 0 ? CGFloat(progress / duration) : 0
-            progressFill?.constant = w * fraction
-        }
-
-        if artworkUrl != currentArtworkUrl {
-            currentArtworkUrl = artworkUrl
-            artworkTask?.cancel()
-            artworkView?.image = nil
-
-            if let urlStr = artworkUrl, let url = URL(string: urlStr) {
-                artworkTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                    guard let data = data, let image = UIImage(data: data) else { return }
-                    DispatchQueue.main.async { self?.artworkView?.image = image }
-                }
-                artworkTask?.resume()
-            }
-        }
-    }
-
-    // ── Acciones del mini-player ─────────────────────────────────────────────
-
-    @objc private func nowPlayingTapped() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        evalJS("window.dispatchEvent(new CustomEvent('native-nowplaying-tap'))")
-    }
-
-    @objc private func playPauseTapped() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        evalJS("window.dispatchEvent(new CustomEvent('_nativePlayPause'))")
-    }
-
-    @objc private func previousTapped() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        evalJS("window.dispatchEvent(new CustomEvent('_nativePrevious'))")
-    }
-
-    @objc private func nextTapped() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        evalJS("window.dispatchEvent(new CustomEvent('_nativeNext'))")
-    }
-
-    // ── UIGestureRecognizerDelegate ──────────────────────────────────────────
-    // Evita que el tap gesture del mini-player intercepte taps destinados a botones
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        return !(touch.view is UIControl)
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private func buildButton(symbol: String, size: CGFloat, action: Selector) -> UIButton {
-        let btn  = UIButton(type: .system)
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        let conf = UIImage.SymbolConfiguration(pointSize: size, weight: .regular)
-        btn.setImage(UIImage(systemName: symbol, withConfiguration: conf), for: .normal)
-        btn.tintColor = .label
-        btn.addTarget(self, action: action, for: .touchUpInside)
-        return btn
     }
 
     // ── ApplicationDelegateProxy (Capacitor) ─────────────────────────────────
@@ -851,9 +349,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
     func applicationDidEnterBackground(_ application: UIApplication) {}
 
     func applicationWillEnterForeground(_ application: UIApplication) {
-        // Re-activar la sesión de audio al volver del background.
-        // iOS puede desactivar la sesión si otra app tomó la prioridad de audio.
-        // Hacerlo ANTES de que WKWebView despierte para que AudioContext.resume() funcione.
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default,
@@ -864,12 +359,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             print("[Audiorr] Failed to reactivate AVAudioSession on foreground: \(error)")
         }
 
-        // Re-aplicar buffer óptimo (iOS puede resetear preferencias tras background)
         configureIOBufferForRoute()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {}
 
+    // Capacitor's ApplicationDelegateProxy requires this method.
+    @available(iOS, deprecated: 26.0)
     func application(_ app: UIApplication, open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
@@ -881,7 +377,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
                                                            restorationHandler: restorationHandler)
     }
 
-    // ── Scene configuration (CarPlay) ───────────────────────────────────────
+    // ── Scene configuration (CarPlay) ───────────���───────────────────────────
 
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
@@ -891,15 +387,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
             config.delegateClass = CarPlaySceneDelegate.self
             return config
         }
-        // Default scene (main app) — no delegate, AppDelegate.window sigue funcionando
         return UISceneConfiguration(name: "Default", sessionRole: connectingSceneSession.role)
-    }
-}
-
-// ── Extensión Array safe subscript ──────────────────────────────────────────
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }

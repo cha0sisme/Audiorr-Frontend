@@ -26,11 +26,14 @@ final class ArtistDetailViewModel: ObservableObject {
 
     init(artist: NavidromeArtist) {
         self.artist = artist
+        // Pre-populate from cache so the hero transition shows the real avatar
+        self.avatarImage = ArtistImageCache.shared.image(for: artist.id)
     }
 
     /// Critical first pass: albums + avatar + top songs. Everything else loads
     /// in `loadSecondary()` so the page paints ASAP.
     func load() async {
+        guard albums.isEmpty else { return }
         isLoading = true
         defer { isLoading = false }
 
@@ -57,6 +60,7 @@ final class ArtistDetailViewModel: ObservableObject {
     /// Secondary pass: biography, similar artists, collaborations, playlists.
     /// Triggered once the hero + critical lists are visible.
     func loadSecondary() async {
+        guard info == nil else { return }
         infoIsLoading = true
         playlistsAreLoading = true
 
@@ -82,9 +86,14 @@ final class ArtistDetailViewModel: ObservableObject {
     }
 
     private func fetchAvatar() async -> UIImage? {
+        if let cached = ArtistImageCache.shared.image(for: artist.id) {
+            return cached
+        }
         guard let avatarURL = await api.artistAvatarURL(artistId: artist.id) else { return nil }
         guard let (data, _) = try? await URLSession.shared.data(from: avatarURL) else { return nil }
-        return UIImage(data: data)
+        guard let img = UIImage(data: data) else { return nil }
+        ArtistImageCache.shared.setImage(img, for: artist.id)
+        return img
     }
 }
 
@@ -93,13 +102,17 @@ final class ArtistDetailViewModel: ObservableObject {
 struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
+    var heroNamespace: Namespace.ID?
+    var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 400
     private let avatarSize: CGFloat = 160
     private let horizontalLimit = 8
 
-    init(artist: NavidromeArtist) {
+    init(artist: NavidromeArtist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
+        self.heroNamespace = heroNamespace
+        self.onDismiss = onDismiss
     }
 
     private var scrollProgress: CGFloat  { min(max(scrollY / heroHeight, 0), 1) }
@@ -154,6 +167,15 @@ struct ArtistDetailView: View {
             await vm.loadSecondary()
         }
         .toolbar {
+            if let onDismiss {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onDismiss) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(isLight ? Color.accentColor : .white)
+                    }
+                }
+            }
             ToolbarItem(placement: .principal) {
                 Text(vm.artist.name)
                     .font(.headline)
@@ -245,6 +267,7 @@ struct ArtistDetailView: View {
             Spacer(minLength: 90)
 
             avatarView
+                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "artist_\(vm.artist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
 
             Spacer(minLength: 16)
@@ -363,7 +386,7 @@ struct ArtistDetailView: View {
                 .padding(.horizontal, 16)
 
                 let visible = vm.showAllSongs ? vm.topSongs : Array(vm.topSongs.prefix(5))
-                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtist: false)
+                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtistInMenu: false, showArtist: false)
                     .id(vm.showAllSongs)
             }
         }
@@ -385,7 +408,7 @@ struct ArtistDetailView: View {
                     ) {
                         ForEach(visibleAlbums) { album in
                             NavigationLink(value: album) {
-                                AlbumHorizontalCell(album: album, isLight: isLight)
+                                AlbumCardView(album: album, subtitle: .year, isLight: isLight)
                             }
                             .buttonStyle(.plain)
                         }
@@ -424,7 +447,7 @@ struct ArtistDetailView: View {
                         LazyVGrid(columns: gridColumns, spacing: 20) {
                             ForEach(vm.albums) { album in
                                 NavigationLink(value: album) {
-                                    AlbumGridCell(album: album, isLight: isLight)
+                                    AlbumCardView(album: album, subtitle: .year, isLight: isLight, axis: .grid)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -449,7 +472,7 @@ struct ArtistDetailView: View {
             HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
-                        AlbumHorizontalCell(album: album, isLight: isLight)
+                        AlbumCardView(album: album, subtitle: .artist, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -601,98 +624,6 @@ struct ArtistDetailView: View {
     }
 }
 
-// MARK: - Album cells
-
-private struct AlbumHorizontalCell: View {
-    let album: NavidromeAlbum
-    let isLight: Bool
-    private let size: CGFloat = 150
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            AsyncImage(url: NavidromeService.shared.coverURL(id: album.coverArt, size: 300)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default: coverPlaceholder
-                }
-            }
-            .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
-
-            HStack(spacing: 5) {
-                Text(album.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(isLight ? Color.black : .white)
-                    .lineLimit(1)
-
-                if album.isExplicit {
-                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.55))
-                }
-            }
-            .frame(width: size, alignment: .leading)
-
-            if let year = album.year {
-                Text(String(year))
-                    .font(.caption)
-                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55))
-                    .frame(width: size, alignment: .leading)
-            }
-        }
-    }
-
-    private var coverPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct AlbumGridCell: View {
-    let album: NavidromeAlbum
-    let isLight: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            AsyncImage(url: NavidromeService.shared.coverURL(id: album.coverArt, size: 300)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default:
-                    ZStack {
-                        Color(.tertiarySystemFill)
-                        Image(systemName: "music.note")
-                            .font(.system(size: 28))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
-
-            HStack(spacing: 5) {
-                Text(album.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(isLight ? Color.black : .white)
-                    .lineLimit(1)
-
-                if album.isExplicit {
-                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.55))
-                }
-            }
-
-            if let year = album.year {
-                Text(String(year))
-                    .font(.caption)
-                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55))
-            }
-        }
-    }
-}
-
 // MARK: - Similar artist placeholder (loading skeleton)
 
 private struct SimilarArtistPlaceholder: View {
@@ -704,6 +635,33 @@ private struct SimilarArtistPlaceholder: View {
         VStack(spacing: 10) {
             Circle().fill(bg).frame(width: size, height: size)
             Rectangle().fill(bg).frame(width: 80, height: 10).clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+    }
+}
+
+// MARK: - Artist hero overlay modifier
+
+struct ArtistHeroOverlay: ViewModifier {
+    @Binding var selectedArtist: NavidromeArtist?
+    var namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        ZStack {
+            content
+
+            if let artist = selectedArtist {
+                ArtistDetailView(
+                    artist: artist,
+                    heroNamespace: namespace,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
+                            selectedArtist = nil
+                        }
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(1)
+            }
         }
     }
 }

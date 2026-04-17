@@ -24,6 +24,7 @@
 		3499AA022F91756800785736 /* HorizontalScrollSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA012F91756800785736 /* HorizontalScrollSection.swift */; };
 		3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA032F91756800785736 /* SeeAllGridView.swift */; };
 		3499AA062F91756800785736 /* PlaylistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA052F91756800785736 /* PlaylistCardView.swift */; };
+		3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA092FA5000000000001 /* AlbumCardView.swift */; };
 		3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA072FA3000000000001 /* ArtistCardView.swift */; };
 		342286D32F920B0000785736 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D22F920B0000785736 /* LoginView.swift */; };
 		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
@@ -44,6 +45,19 @@
 		AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */; };
 		CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */; };
 		DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */; };
+		3400CC012FA4000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400CC002FA4000000000001 /* HomeView.swift */; };
+		3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD002FA6000000000001 /* NowPlayingState.swift */; };
+		3400DD032FA6000000000003 /* JSBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD022FA6000000000002 /* JSBridge.swift */; };
+		3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD042FA6000000000004 /* MiniPlayerView.swift */; };
+		3400EE012FA7000000000001 /* NowPlayingViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE002FA7000000000001 /* NowPlayingViewerView.swift */; };
+		3400EE042FA7000000000003 /* ProgressBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE032FA7000000000003 /* ProgressBarView.swift */; };
+		3400EE062FA7000000000005 /* PlaybackControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE052FA7000000000005 /* PlaybackControlsView.swift */; };
+		3400EE082FA7000000000007 /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE072FA7000000000007 /* CanvasView.swift */; };
+		3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE092FA7000000000009 /* CanvasService.swift */; };
+		3400EE0C2FA700000000000B /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0B2FA700000000000B /* LyricsView.swift */; };
+		3400EE0E2FA700000000000D /* LyricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0D2FA700000000000D /* LyricsService.swift */; };
+		3400EE102FA700000000000F /* QueuePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0F2FA700000000000F /* QueuePanelView.swift */; };
+		3400DD072FA6000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD062FA6000000000006 /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +78,7 @@
 		3499AA012F91756800785736 /* HorizontalScrollSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HorizontalScrollSection.swift; sourceTree = "<group>"; };
 		3499AA032F91756800785736 /* SeeAllGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeeAllGridView.swift; sourceTree = "<group>"; };
 		3499AA052F91756800785736 /* PlaylistCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistCardView.swift; sourceTree = "<group>"; };
+		3499AA092FA5000000000001 /* AlbumCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumCardView.swift; sourceTree = "<group>"; };
 		3499AA072FA3000000000001 /* ArtistCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistCardView.swift; sourceTree = "<group>"; };
 		342286D22F920B0000785736 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		3400BB002FA2000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -87,6 +102,19 @@
 		AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNowPlayingPlugin.swift; sourceTree = "<group>"; };
 		CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
+		3400CC002FA4000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		3400DD002FA6000000000001 /* NowPlayingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingState.swift; sourceTree = "<group>"; };
+		3400DD022FA6000000000002 /* JSBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSBridge.swift; sourceTree = "<group>"; };
+		3400DD042FA6000000000004 /* MiniPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerView.swift; sourceTree = "<group>"; };
+		3400EE002FA7000000000001 /* NowPlayingViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingViewerView.swift; sourceTree = "<group>"; };
+		3400EE032FA7000000000003 /* ProgressBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressBarView.swift; sourceTree = "<group>"; };
+		3400EE052FA7000000000005 /* PlaybackControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackControlsView.swift; sourceTree = "<group>"; };
+		3400EE072FA7000000000007 /* CanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
+		3400EE092FA7000000000009 /* CanvasService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasService.swift; sourceTree = "<group>"; };
+		3400EE0B2FA700000000000B /* LyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsView.swift; sourceTree = "<group>"; };
+		3400EE0D2FA700000000000D /* LyricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsService.swift; sourceTree = "<group>"; };
+		3400EE0F2FA700000000000F /* QueuePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuePanelView.swift; sourceTree = "<group>"; };
+		3400DD062FA6000000000006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,13 +137,37 @@
 			path = Search;
 			sourceTree = "<group>";
 		};
+		3400EE022FA7000000000002 /* NowPlaying */ = {
+			isa = PBXGroup;
+			children = (
+				3400EE002FA7000000000001 /* NowPlayingViewerView.swift */,
+				3400EE032FA7000000000003 /* ProgressBarView.swift */,
+				3400EE052FA7000000000005 /* PlaybackControlsView.swift */,
+				3400EE072FA7000000000007 /* CanvasView.swift */,
+				3400EE0B2FA700000000000B /* LyricsView.swift */,
+				3400EE0F2FA700000000000F /* QueuePanelView.swift */,
+			);
+			path = NowPlaying;
+			sourceTree = "<group>";
+		};
+		3400CC022FA4000000000002 /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				3400CC002FA4000000000001 /* HomeView.swift */,
+			);
+			path = Home;
+			sourceTree = "<group>";
+		};
 		342286B82F90CB0900785736 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				3400DD062FA6000000000006 /* ContentView.swift */,
+				3400CC022FA4000000000002 /* Home */,
 				342286B72F90CB0900785736 /* Search */,
 				342286C62F90D87900785736 /* Playlists */,
 				342286CC2F90DC3200785736 /* Albums */,
 				342286CF2F910FCA00785736 /* Artists */,
+				3400EE022FA7000000000002 /* NowPlaying */,
 				342286D42F920B0000785736 /* Settings */,
 				342286D22F91756800785736 /* Shared */,
 			);
@@ -130,6 +182,10 @@
 				342286C22F90D45200785736 /* PlayerService.swift */,
 				342286C92F90DC2400785736 /* ColorExtractor.swift */,
 				342286D02F920A0000785736 /* CredentialsStore.swift */,
+				3400DD002FA6000000000001 /* NowPlayingState.swift */,
+				3400DD022FA6000000000002 /* JSBridge.swift */,
+				3400EE092FA7000000000009 /* CanvasService.swift */,
+				3400EE0D2FA700000000000D /* LyricsService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -176,6 +232,8 @@
 				3499AA032F91756800785736 /* SeeAllGridView.swift */,
 				3499AA052F91756800785736 /* PlaylistCardView.swift */,
 				3499AA072FA3000000000001 /* ArtistCardView.swift */,
+				3499AA092FA5000000000001 /* AlbumCardView.swift */,
+				3400DD042FA6000000000004 /* MiniPlayerView.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -343,10 +401,24 @@
 				3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */,
 				3499AA062F91756800785736 /* PlaylistCardView.swift in Sources */,
 				3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */,
+				3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */,
 				342286C32F90D45200785736 /* PlayerService.swift in Sources */,
 				AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */,
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,
 				DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */,
+				3400CC012FA4000000000001 /* HomeView.swift in Sources */,
+				3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */,
+				3400DD032FA6000000000003 /* JSBridge.swift in Sources */,
+				3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */,
+				3400DD072FA6000000000007 /* ContentView.swift in Sources */,
+				3400EE012FA7000000000001 /* NowPlayingViewerView.swift in Sources */,
+				3400EE042FA7000000000003 /* ProgressBarView.swift in Sources */,
+				3400EE062FA7000000000005 /* PlaybackControlsView.swift in Sources */,
+				3400EE082FA7000000000007 /* CanvasView.swift in Sources */,
+				3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */,
+				3400EE0C2FA700000000000B /* LyricsView.swift in Sources */,
+				3400EE0E2FA700000000000D /* LyricsService.swift in Sources */,
+				3400EE102FA700000000000F /* QueuePanelView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -426,7 +498,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -483,7 +555,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -506,7 +578,7 @@
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -533,7 +605,7 @@
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
