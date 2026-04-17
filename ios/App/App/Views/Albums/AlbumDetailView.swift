@@ -111,6 +111,7 @@ struct AlbumDetailView: View {
             }
         }
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
         .toolbar {
@@ -348,7 +349,7 @@ struct AlbumDetailView: View {
     // MARK: - Song list
 
     private var songListSection: some View {
-        Group {
+        VStack(spacing: 0) {
             if vm.isLoading {
                 ProgressView()
                     .tint(isLight ? .secondary : .white)

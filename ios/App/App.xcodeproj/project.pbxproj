@@ -28,26 +28,16 @@
 		3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA072FA3000000000001 /* ArtistCardView.swift */; };
 		342286D32F920B0000785736 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D22F920B0000785736 /* LoginView.swift */; };
 		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
-		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
-		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
-		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
-		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */; };
 		AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */; };
-		AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */; };
 		AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */; };
-		AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */; };
-		AB01CD02EF03AB04CD05EF06 /* AudioBridgePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */; };
-		AB01CD02EF03AB04CD05EF08 /* NativeTabBarPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */; };
-		AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */; };
 		CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */; };
 		DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */; };
 		3400CC012FA4000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400CC002FA4000000000001 /* HomeView.swift */; };
 		3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD002FA6000000000001 /* NowPlayingState.swift */; };
-		3400DD032FA6000000000003 /* JSBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD022FA6000000000002 /* JSBridge.swift */; };
 		3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD042FA6000000000004 /* MiniPlayerView.swift */; };
 		3400EE012FA7000000000001 /* NowPlayingViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE002FA7000000000001 /* NowPlayingViewerView.swift */; };
 		3400EE042FA7000000000003 /* ProgressBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE032FA7000000000003 /* ProgressBarView.swift */; };
@@ -57,7 +47,17 @@
 		3400EE0C2FA700000000000B /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0B2FA700000000000B /* LyricsView.swift */; };
 		3400EE0E2FA700000000000D /* LyricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0D2FA700000000000D /* LyricsService.swift */; };
 		3400EE102FA700000000000F /* QueuePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0F2FA700000000000F /* QueuePanelView.swift */; };
+		3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE112FA7000000000010 /* DevicePickerView.swift */; };
+		3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE132FA7000000000012 /* AddToPlaylistView.swift */; };
 		3400DD072FA6000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD062FA6000000000006 /* ContentView.swift */; };
+		3400FF012FA8000000000001 /* BackendService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF002FA8000000000001 /* BackendService.swift */; };
+		3400FF032FA8000000000003 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF022FA8000000000002 /* PersistenceService.swift */; };
+		3400FF052FA8000000000005 /* DJMixingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF042FA8000000000004 /* DJMixingService.swift */; };
+		3400FF072FA8000000000007 /* QueueManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF062FA8000000000006 /* QueueManager.swift */; };
+		3400FF092FA8000000000009 /* ScrobbleService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF082FA8000000000008 /* ScrobbleService.swift */; };
+		3400FF0B2FA800000000000B /* AnalysisCacheService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0A2FA800000000000A /* AnalysisCacheService.swift */; };
+		3400FF0D2FA800000000000D /* SmartMixManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0C2FA800000000000C /* SmartMixManager.swift */; };
+		3400FF0F2FA800000000000F /* ConnectService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0E2FA800000000000E /* ConnectService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -83,28 +83,19 @@
 		342286D22F920B0000785736 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		3400BB002FA2000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		349110652F7BA76900342F6B /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
-		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 		AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineManager.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileLoader.swift; sourceTree = "<group>"; };
-		AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAudioPlugin.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfadeExecutor.swift; sourceTree = "<group>"; };
-		AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudiorrBridgeViewController.swift; sourceTree = "<group>"; };
-		AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBridgePlugin.swift; sourceTree = "<group>"; };
-		AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabBarPlugin.swift; sourceTree = "<group>"; };
-		AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNowPlayingPlugin.swift; sourceTree = "<group>"; };
 		CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
 		3400CC002FA4000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		3400DD002FA6000000000001 /* NowPlayingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingState.swift; sourceTree = "<group>"; };
-		3400DD022FA6000000000002 /* JSBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSBridge.swift; sourceTree = "<group>"; };
 		3400DD042FA6000000000004 /* MiniPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerView.swift; sourceTree = "<group>"; };
 		3400EE002FA7000000000001 /* NowPlayingViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingViewerView.swift; sourceTree = "<group>"; };
 		3400EE032FA7000000000003 /* ProgressBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressBarView.swift; sourceTree = "<group>"; };
@@ -114,7 +105,17 @@
 		3400EE0B2FA700000000000B /* LyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsView.swift; sourceTree = "<group>"; };
 		3400EE0D2FA700000000000D /* LyricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsService.swift; sourceTree = "<group>"; };
 		3400EE0F2FA700000000000F /* QueuePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuePanelView.swift; sourceTree = "<group>"; };
+		3400EE112FA7000000000010 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
+		3400EE132FA7000000000012 /* AddToPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToPlaylistView.swift; sourceTree = "<group>"; };
 		3400DD062FA6000000000006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		3400FF002FA8000000000001 /* BackendService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendService.swift; sourceTree = "<group>"; };
+		3400FF022FA8000000000002 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
+		3400FF042FA8000000000004 /* DJMixingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJMixingService.swift; sourceTree = "<group>"; };
+		3400FF062FA8000000000006 /* QueueManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueManager.swift; sourceTree = "<group>"; };
+		3400FF082FA8000000000008 /* ScrobbleService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrobbleService.swift; sourceTree = "<group>"; };
+		3400FF0A2FA800000000000A /* AnalysisCacheService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisCacheService.swift; sourceTree = "<group>"; };
+		3400FF0C2FA800000000000C /* SmartMixManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartMixManager.swift; sourceTree = "<group>"; };
+		3400FF0E2FA800000000000E /* ConnectService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -122,7 +123,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,6 +146,8 @@
 				3400EE072FA7000000000007 /* CanvasView.swift */,
 				3400EE0B2FA700000000000B /* LyricsView.swift */,
 				3400EE0F2FA700000000000F /* QueuePanelView.swift */,
+				3400EE112FA7000000000010 /* DevicePickerView.swift */,
+				3400EE132FA7000000000012 /* AddToPlaylistView.swift */,
 			);
 			path = NowPlaying;
 			sourceTree = "<group>";
@@ -183,9 +185,16 @@
 				342286C92F90DC2400785736 /* ColorExtractor.swift */,
 				342286D02F920A0000785736 /* CredentialsStore.swift */,
 				3400DD002FA6000000000001 /* NowPlayingState.swift */,
-				3400DD022FA6000000000002 /* JSBridge.swift */,
 				3400EE092FA7000000000009 /* CanvasService.swift */,
 				3400EE0D2FA700000000000D /* LyricsService.swift */,
+				3400FF002FA8000000000001 /* BackendService.swift */,
+				3400FF022FA8000000000002 /* PersistenceService.swift */,
+				3400FF062FA8000000000006 /* QueueManager.swift */,
+				3400FF082FA8000000000008 /* ScrobbleService.swift */,
+				3400FF0A2FA800000000000A /* AnalysisCacheService.swift */,
+				3400FF0C2FA800000000000C /* SmartMixManager.swift */,
+				3400FF042FA8000000000004 /* DJMixingService.swift */,
+				3400FF0E2FA800000000000E /* ConnectService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -268,24 +277,16 @@
 			isa = PBXGroup;
 			children = (
 				349110652F7BA76900342F6B /* App.entitlements */,
-				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
-				AB01CD02EF03AB04CD05EF07 /* AudioBridgePlugin.swift */,
-				AB01CD02EF03AB04CD05EF09 /* NativeTabBarPlugin.swift */,
-				AB01CD02EF03AB04CD05EF0B /* NativeNowPlayingPlugin.swift */,
 				AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */,
 				AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */,
-				AA11BB22CC33DD44EE55FF15 /* NativeAudioPlugin.swift */,
 				AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */,
-				AA11BB22CC33DD44EE55FF19 /* AudiorrBridgeViewController.swift */,
 				CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */,
 				DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */,
-				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
 				504EC3131FED79650016851F /* Info.plist */,
 				2FAD9762203C412B000D30F8 /* config.xml */,
-				50B271D01FEDC1A000F3C39B /* public */,
 				342286B82F90CB0900785736 /* Views */,
 				342286BB2F90CB1800785736 /* Services */,
 				342286BE2F90CB2800785736 /* Models */,
@@ -309,9 +310,6 @@
 			dependencies = (
 			);
 			name = App;
-			packageProductDependencies = (
-				4D22ABE82AF431CB00220026 /* CapApp-SPM */,
-			);
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
@@ -342,9 +340,6 @@
 				Base,
 			);
 			mainGroup = 504EC2FB1FED79650016851F;
-			packageReferences = (
-				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
-			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -360,10 +355,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */,
-				50B271D11FEDC1A000F3C39B /* public in Resources */,
 				504EC30F1FED79650016851F /* Assets.xcassets in Resources */,
-				50379B232058CBB4000EE86E /* capacitor.config.json in Resources */,
-				504EC30D1FED79650016851F /* Main.storyboard in Resources */,
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -380,15 +372,11 @@
 				342286C82F90D87900785736 /* PlaylistDetailView.swift in Sources */,
 				342286CA2F90DC2400785736 /* ColorExtractor.swift in Sources */,
 				342286BC2F90CB1800785736 /* NavidromeService.swift in Sources */,
-				AB01CD02EF03AB04CD05EF06 /* AudioBridgePlugin.swift in Sources */,
-				AB01CD02EF03AB04CD05EF08 /* NativeTabBarPlugin.swift in Sources */,
-				AB01CD02EF03AB04CD05EF0A /* NativeNowPlayingPlugin.swift in Sources */,
 				342286B92F90CB0900785736 /* SearchView.swift in Sources */,
 				AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */,
 				342286BF2F90CB2800785736 /* NavidromeModels.swift in Sources */,
 				AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */,
 				342286C12F90D07300785736 /* AppTheme.swift in Sources */,
-				AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */,
 				AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */,
 				342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */,
 				3400AA012FA1000000000001 /* ArtistsView.swift in Sources */,
@@ -403,14 +391,20 @@
 				3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */,
 				3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */,
 				342286C32F90D45200785736 /* PlayerService.swift in Sources */,
-				AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */,
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,
 				DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */,
 				3400CC012FA4000000000001 /* HomeView.swift in Sources */,
 				3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */,
-				3400DD032FA6000000000003 /* JSBridge.swift in Sources */,
 				3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */,
 				3400DD072FA6000000000007 /* ContentView.swift in Sources */,
+				3400FF012FA8000000000001 /* BackendService.swift in Sources */,
+				3400FF032FA8000000000003 /* PersistenceService.swift in Sources */,
+				3400FF052FA8000000000005 /* DJMixingService.swift in Sources */,
+				3400FF072FA8000000000007 /* QueueManager.swift in Sources */,
+				3400FF092FA8000000000009 /* ScrobbleService.swift in Sources */,
+				3400FF0B2FA800000000000B /* AnalysisCacheService.swift in Sources */,
+				3400FF0D2FA800000000000D /* SmartMixManager.swift in Sources */,
+				3400FF0F2FA800000000000F /* ConnectService.swift in Sources */,
 				3400EE012FA7000000000001 /* NowPlayingViewerView.swift in Sources */,
 				3400EE042FA7000000000003 /* ProgressBarView.swift in Sources */,
 				3400EE062FA7000000000005 /* PlaybackControlsView.swift in Sources */,
@@ -419,20 +413,14 @@
 				3400EE0C2FA700000000000B /* LyricsView.swift in Sources */,
 				3400EE0E2FA700000000000D /* LyricsService.swift in Sources */,
 				3400EE102FA700000000000F /* QueuePanelView.swift in Sources */,
+				3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */,
+				3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXVariantGroup section */
-		504EC30B1FED79650016851F /* Main.storyboard */ = {
-			isa = PBXVariantGroup;
-			children = (
-				504EC30C1FED79650016851F /* Base */,
-			);
-			name = Main.storyboard;
-			sourceTree = "<group>";
-		};
 		504EC3101FED79650016851F /* LaunchScreen.storyboard */ = {
 			isa = PBXVariantGroup;
 			children = (
@@ -641,21 +629,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCLocalSwiftPackageReference section */
-		D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "CapApp-SPM";
-		};
-/* End XCLocalSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		4D22ABE82AF431CB00220026 /* CapApp-SPM */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */;
-			productName = "CapApp-SPM";
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 504EC2FC1FED79650016851F /* Project object */;
 }

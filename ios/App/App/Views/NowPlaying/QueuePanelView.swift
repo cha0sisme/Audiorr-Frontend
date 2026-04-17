@@ -3,36 +3,38 @@ import SwiftUI
 /// Panel de cola presentado como sheet desde el Now Playing viewer.
 struct QueuePanelView: View {
     private var state = NowPlayingState.shared
+    private var connect = ConnectService.shared
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Group {
-            if state.queue.isEmpty {
-                emptyState
-            } else {
-                queueList
+        NavigationStack {
+            Group {
+                if state.queue.isEmpty {
+                    emptyState
+                } else {
+                    queueList
+                }
+            }
+            .navigationTitle("Cola")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cerrar") { dismiss() }
+                }
             }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(.ultraThinMaterial)
-        .preferredColorScheme(.dark)
     }
 
     // MARK: - Empty
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "music.note.list")
-                .font(.system(size: 40))
-                .foregroundStyle(.white.opacity(0.2))
-            Text("Cola vacía")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.4))
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
+        ContentUnavailableView(
+            "Cola vacía",
+            systemImage: "music.note.list",
+            description: Text("No hay canciones en cola.")
+        )
     }
 
     // MARK: - Queue List
@@ -41,14 +43,33 @@ struct QueuePanelView: View {
         let currentIndex = state.queue.firstIndex(where: { $0.id == state.songId })
 
         return List {
+            // Remote banner
+            if state.isRemote, let deviceName = state.remoteDeviceName {
+                Section {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Cola remota")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Reproduciendo en \(deviceName)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+
             // Currently playing
             if let idx = currentIndex {
                 Section {
                     queueRow(song: state.queue[idx], isCurrent: true)
-                        .listRowBackground(Color.white.opacity(0.08))
                 } header: {
                     Text("Reproduciendo")
-                        .foregroundStyle(.white.opacity(0.5))
                 }
 
                 // Upcoming songs
@@ -57,24 +78,25 @@ struct QueuePanelView: View {
                     Section {
                         ForEach(upcoming) { song in
                             queueRow(song: song, isCurrent: false)
-                                .listRowBackground(Color.clear)
                         }
                         .onDelete { offsets in
+                            guard !state.isRemote else { return }
                             deleteUpcoming(offsets: offsets, currentIndex: idx)
                         }
                         .onMove { source, destination in
+                            guard !state.isRemote else { return }
                             moveUpcoming(source: source, destination: destination, currentIndex: idx)
                         }
                     } header: {
                         HStack {
                             Text("A continuación")
-                                .foregroundStyle(.white.opacity(0.5))
                             Spacer()
-                            Button("Limpiar") {
-                                clearUpcoming(currentIndex: idx)
+                            if !state.isRemote {
+                                Button("Limpiar") {
+                                    clearUpcoming(currentIndex: idx)
+                                }
+                                .font(.caption)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.5))
                         }
                     }
                 }
@@ -83,13 +105,12 @@ struct QueuePanelView: View {
                 Section {
                     ForEach(state.queue) { song in
                         queueRow(song: song, isCurrent: false)
-                            .listRowBackground(Color.clear)
                     }
                 }
             }
         }
         .listStyle(.plain)
-        .environment(\.editMode, .constant(.active))
+        .environment(\.editMode, state.isRemote ? .constant(.inactive) : .constant(.active))
     }
 
     // MARK: - Queue Row
@@ -98,38 +119,35 @@ struct QueuePanelView: View {
         Button {
             guard !isCurrent else { return }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            JSBridge.shared.send("_nativeQueuePlay", detail: "{ songId: \"\(song.id)\" }")
+
+            if state.isRemote {
+                // Remote: send command to play this song on the remote device
+                connect.sendRemoteCommand(
+                    action: "playFromQueue",
+                    value: song.id,
+                    targetDeviceId: nil
+                )
+            } else {
+                // Local: play from this position
+                if let idx = QueueManager.shared.queue.firstIndex(where: { $0.id == song.id }) {
+                    QueueManager.shared.play(queue: QueueManager.shared.queue, startIndex: idx)
+                }
+            }
         } label: {
             HStack(spacing: 12) {
                 // Cover art
-                if let url = NavidromeService.shared.coverURL(id: song.coverArt, size: 80) {
-                    AsyncImage(url: url) { phase in
-                        if case .success(let image) = phase {
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else {
-                            coverPlaceholder
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                } else {
-                    coverPlaceholder
-                        .frame(width: 44, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                }
+                songCover(coverArt: song.coverArt)
 
                 // Song info
                 VStack(alignment: .leading, spacing: 2) {
                     Text(song.title)
-                        .font(.subheadline.weight(isCurrent ? .bold : .regular))
-                        .foregroundStyle(.white)
+                        .font(.subheadline.weight(isCurrent ? .semibold : .regular))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(song.artist)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
 
@@ -138,17 +156,47 @@ struct QueuePanelView: View {
                 // Duration
                 Text(formatDuration(song.duration))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(.secondary)
 
                 // Now playing indicator
                 if isCurrent {
-                    Image(systemName: "speaker.wave.2.fill")
+                    Image(systemName: state.isRemote ? "antenna.radiowaves.left.and.right" : "speaker.wave.2.fill")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(state.isRemote ? .green : .primary)
                 }
             }
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Cover
+
+    @ViewBuilder
+    private func songCover(coverArt: String) -> some View {
+        if let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    coverPlaceholder
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        } else {
+            coverPlaceholder
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+    }
+
+    private var coverPlaceholder: some View {
+        ZStack {
+            Color(.tertiarySystemFill)
+            Image(systemName: "music.note")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Actions
@@ -173,15 +221,6 @@ struct QueuePanelView: View {
     }
 
     // MARK: - Helpers
-
-    private var coverPlaceholder: some View {
-        ZStack {
-            Color(.secondarySystemFill)
-            Image(systemName: "music.note")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-        }
-    }
 
     private func formatDuration(_ seconds: Double) -> String {
         let total = Int(max(0, seconds))

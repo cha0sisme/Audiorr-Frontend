@@ -104,6 +104,7 @@ struct HomeView: View {
     @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
     @State private var selectedAlbum: NavidromeAlbum?
+    @State private var selectedPlaylist: NavidromePlaylist?
 
     private let collapseThreshold: CGFloat = 44
 
@@ -140,10 +141,11 @@ struct HomeView: View {
                 scrollY = y
             }
             .modifier(AlbumHeroOverlay(selectedAlbum: $selectedAlbum, namespace: heroNS))
+            .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: heroNS))
             .background(Color(.systemBackground))
-            .toolbarBackground(selectedAlbum != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
+            .toolbarBackground((selectedAlbum != nil || selectedPlaylist != nil) ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
             .toolbar {
-                if selectedAlbum == nil {
+                if selectedAlbum == nil && selectedPlaylist == nil {
                     ToolbarItem(placement: .principal) {
                         Text("Inicio")
                             .font(.headline)
@@ -158,6 +160,9 @@ struct HomeView: View {
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .task { await vm.load() }
             .refreshable { await vm.load() }
+            .onReceive(NotificationCenter.default.publisher(for: .audiorrDidLogin)) { _ in
+                Task { await vm.load() }
+            }
             .preferredColorScheme(theme.colorScheme)
         }
     }
@@ -226,7 +231,9 @@ struct HomeView: View {
                     id: entry.songId, title: entry.title, artist: entry.artist,
                     artistId: nil, album: entry.album, albumId: entry.albumId,
                     coverArt: entry.coverArt, duration: 0, track: nil,
-                    year: nil, genre: nil, explicitStatus: nil
+                    year: nil, genre: nil, explicitStatus: nil,
+                    replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                    replayGainAlbumGain: nil, replayGainAlbumPeak: nil
                 )
             }
             if let idx = allSongs.firstIndex(where: { $0.id == song.songId }) {
@@ -405,10 +412,15 @@ struct HomeView: View {
                 // Show mixes
                 HorizontalScrollSection(title: "Tus mixes diarios") {
                     ForEach(vm.dailyMixPlaylists) { playlist in
-                        NavigationLink(value: playlist) {
-                            PlaylistCardView(playlist: playlist, size: 150)
+                        Button {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                selectedPlaylist = playlist
+                            }
+                        } label: {
+                            PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
+                        .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
                     }
                 }
             }

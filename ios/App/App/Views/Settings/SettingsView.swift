@@ -55,11 +55,6 @@ final class SettingsViewModel: ObservableObject {
 
         // Persist locally
         UserDefaults.standard.set(json, forKey: settingsKey)
-
-        // Bridge to JS localStorage so React picks it up
-        let escaped = json.replacingOccurrences(of: "'", with: "\\'")
-        let script = "localStorage.setItem('\(settingsKey)', '\(escaped)')"
-        JSBridge.shared.eval(script)
     }
 
     func toggleDjMode() {
@@ -81,10 +76,7 @@ final class SettingsViewModel: ObservableObject {
     func toggleScrobble(_ enabled: Bool) {
         scrobbleEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "scrobbleEnabled")
-
-        let script = "localStorage.setItem('scrobbleEnabled', '\(enabled ? "true" : "false")')"
-        JSBridge.shared.eval(script)
-
+        ScrobbleService.shared.setEnabled(enabled)
         scrobbleStatus = .idle
     }
 
@@ -165,9 +157,12 @@ final class SettingsViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "navidromeConfig")
         UserDefaults.standard.removeObject(forKey: "audiorr_backend_url")
 
-        // Clear JS side
-        let script = "localStorage.removeItem('navidromeConfig')"
-        JSBridge.shared.eval(script)
+        // Disconnect from hub
+        ConnectService.shared.disconnect()
+
+        // Clear playback state
+        QueueManager.shared.clear()
+        PersistenceService.shared.clearAll()
 
         // Show login screen
         (UIApplication.shared.delegate as? AppDelegate)?.showLogin()
@@ -184,6 +179,7 @@ struct SettingsView: View {
     @State private var showSaveAlert = false
     @State private var alertMessage = ""
     @State private var scrollY: CGFloat = 0
+    @State private var backendUrl = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
 
     private let collapseThreshold: CGFloat = 44
 
@@ -262,7 +258,6 @@ struct SettingsView: View {
                         set: { newValue in
                             AppTheme.shared.isDark = newValue
                             UserDefaults.standard.set(newValue, forKey: "audiorr_isDark")
-                            JSBridge.shared.eval("document.documentElement.classList.toggle('dark', \(newValue))")
                         }
                     ))
                     .labelsHidden()
@@ -388,6 +383,37 @@ struct SettingsView: View {
                     .font(.subheadline)
                     Divider().padding(.leading, 16)
                 }
+                #if DEBUG
+                settingsRow {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Backend URL", systemImage: "server.rack")
+                            .font(.subheadline.weight(.medium))
+                        HStack(spacing: 8) {
+                            TextField("http://192.168.1.10:2999", text: $backendUrl)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.subheadline)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .keyboardType(.URL)
+                            Button("OK") {
+                                let trimmed = backendUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                                UserDefaults.standard.set(trimmed, forKey: "audiorr_backend_url")
+                                backendUrl = trimmed
+                                vm.load()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        if !backendUrl.isEmpty {
+                            Text(vm.isBackendAvailable ? "Conectado" : "No disponible")
+                                .font(.caption)
+                                .foregroundStyle(vm.isBackendAvailable ? .green : .red)
+                        }
+                    }
+                }
+                Divider().padding(.leading, 16)
+                #endif
                 settingsRow {
                     Button(role: .destructive) {
                         showLogoutConfirm = true

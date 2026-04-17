@@ -190,7 +190,7 @@ private struct SongRowView: View {
 
 /// Wraps a `UIButton` with `showsMenuAsPrimaryAction = true`.
 /// The menu appears on first touch — no SwiftUI gesture disambiguation.
-private struct InstantMenuButton: UIViewRepresentable {
+struct InstantMenuButton: UIViewRepresentable {
     let tint: UIColor
     let menuBuilder: () -> UIMenu
 

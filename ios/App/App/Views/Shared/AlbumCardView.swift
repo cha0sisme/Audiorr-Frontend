@@ -97,12 +97,7 @@ struct AlbumCardView: View {
     }
 
     private var coverPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-        }
+        SkeletonView()
     }
 
     enum Subtitle {

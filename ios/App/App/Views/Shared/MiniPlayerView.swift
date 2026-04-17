@@ -7,6 +7,16 @@ struct MiniPlayerView: View {
     private var state = NowPlayingState.shared
 
     var body: some View {
+        if state.isVisible {
+            activePlayer
+        } else {
+            idlePlaceholder
+        }
+    }
+
+    // MARK: - Active Player
+
+    private var activePlayer: some View {
         VStack(spacing: 0) {
             // Progress bar
             GeometryReader { geo in
@@ -53,15 +63,15 @@ struct MiniPlayerView: View {
                 HStack(spacing: 2) {
                     controlButton("backward.fill", size: 20) {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        JSBridge.shared.send("_nativePrevious")
+                        PlayerService.shared.previous()
                     }
                     controlButton(state.isPlaying ? "pause.fill" : "play.fill", size: 23) {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        JSBridge.shared.send("_nativePlayPause")
+                        PlayerService.shared.togglePlayPause()
                     }
                     controlButton("forward.fill", size: 20) {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        JSBridge.shared.send("_nativeNext")
+                        PlayerService.shared.next()
                     }
                 }
             }
@@ -74,6 +84,29 @@ struct MiniPlayerView: View {
             NowPlayingState.shared.viewerIsOpen = true
         }
         .animation(.easeInOut(duration: 0.2), value: state.subtitle)
+    }
+
+    // MARK: - Idle Placeholder
+
+    private var idlePlaceholder: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color(.tertiarySystemFill))
+                Image(systemName: "music.note")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(width: 42, height: 42)
+
+            Text("Sin reproduccion")
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(.tertiary)
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 70)
     }
 
     // MARK: - Helpers
@@ -97,8 +130,13 @@ struct MiniPlayerView: View {
                 }
             }
         } else {
-            Rectangle()
-                .fill(Color(.secondarySystemFill))
+            ZStack {
+                Rectangle()
+                    .fill(Color(.secondarySystemFill))
+                Image(systemName: "music.note")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

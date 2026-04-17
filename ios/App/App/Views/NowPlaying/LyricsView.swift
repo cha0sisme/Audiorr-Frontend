@@ -27,7 +27,7 @@ struct LyricsView: View {
                             .onTapGesture {
                                 if lyrics.isSynced && line.time >= 0 {
                                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    JSBridge.shared.send("_nativeSeek", detail: "{ time: \(line.time) }")
+                                    PlayerService.shared.seekTo(line.time)
                                 }
                             }
                     }

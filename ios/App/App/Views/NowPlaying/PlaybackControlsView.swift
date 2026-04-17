@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Controles de reproduccion estilo Apple Music.
-/// Iconos blancos, sin fondo de color. Opcionalmente glass sobre canvas.
+/// Playback controls — Apple Music style.
+/// White icons, no color background. Optionally glass over canvas.
 struct PlaybackControlsView: View {
     private var state = NowPlayingState.shared
     var glassStyle: Bool
@@ -15,7 +15,7 @@ struct PlaybackControlsView: View {
             // Previous
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                JSBridge.shared.send("_nativePrevious")
+                PlayerService.shared.previous()
             } label: {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 34, weight: .regular))
@@ -27,7 +27,7 @@ struct PlaybackControlsView: View {
             // Play / Pause
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                JSBridge.shared.send("_nativePlayPause")
+                PlayerService.shared.togglePlayPause()
             } label: {
                 Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 46, weight: .regular))
@@ -39,7 +39,7 @@ struct PlaybackControlsView: View {
             // Next
             Button {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                JSBridge.shared.send("_nativeNext")
+                PlayerService.shared.next()
             } label: {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 34, weight: .regular))

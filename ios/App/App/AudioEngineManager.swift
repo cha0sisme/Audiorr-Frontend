@@ -1,6 +1,6 @@
 import AVFoundation
 import MediaPlayer
-import Capacitor
+// Capacitor removed — fully native
 
 /// Motor de audio nativo basado en AVAudioEngine.
 /// Grafo: playerA → eqA → mixerA → mainMixer → output
@@ -10,7 +10,7 @@ import Capacitor
 class AudioEngineManager {
 
     // MARK: - Shared instance (para acceso desde CarPlay)
-    static private(set) var shared: AudioEngineManager?
+    static var shared: AudioEngineManager?
 
     // MARK: - Engine y nodos
 
@@ -62,6 +62,7 @@ class AudioEngineManager {
 
     var crossfadeExecutor: CrossfadeExecutor?
     private(set) var isCrossfading = false
+    private var crossfadeStartedAt: CFAbsoluteTime = 0
 
     // MARK: - Native Automix (background-safe)
     // Cuando JS está congelado (pantalla bloqueada), este timer nativo
@@ -69,8 +70,11 @@ class AudioEngineManager {
 
     private var automixTimer: DispatchSourceTimer?
     /// Tiempo en la canción actual donde debe dispararse el crossfade.
-    /// nil = no hay automix programado (JS lo gestiona en foreground).
+    /// nil = no hay automix programado.
     private var automixTriggerTime: Double?
+
+    /// Whether an automix trigger is currently armed (for external query).
+    var automixHasTrigger: Bool { automixTriggerTime != nil }
     /// Config de crossfade calculada por JS — almacenada para ejecutar en background.
     private var pendingCrossfadeConfig: CrossfadeExecutor.Config?
     /// Metadata de la siguiente canción (para NowPlaying tras crossfade en background)
@@ -100,9 +104,9 @@ class AudioEngineManager {
     private var streamPlayerEndObserver: Any?
     private(set) var isStreamMode = false
 
-    // MARK: - Plugin reference (para enviar eventos a JS)
+    // MARK: - Native delegate (replaces plugin for native queue management)
 
-    weak var plugin: CAPPlugin?
+    weak var delegate: AudioEngineDelegate?
 
     // MARK: - Init
 
@@ -184,10 +188,7 @@ class AudioEngineManager {
             return true
         } catch {
             print("[AudioEngineManager] Error arrancando engine: \(error)")
-            plugin?.notifyListeners("onError", data: [
-                "message": "Engine failed to start: \(error.localizedDescription)",
-                "code": "ENGINE_START_ERROR"
-            ])
+            delegate?.audioEngineError("Engine failed to start: \(error.localizedDescription)", code: "ENGINE_START_ERROR")
             return false
         }
     }
@@ -205,11 +206,25 @@ class AudioEngineManager {
         // Si estábamos en modo streaming (AVPlayer), detenerlo antes de arrancar AVAudioEngine
         stopStreamPlayer()
 
+        // Cancel any in-progress crossfade BEFORE touching players.
+        // If the user taps "next" during a crossfade, playerB is actively fading in —
+        // we must cancel the executor and stop playerB to prevent state corruption
+        // (stale onComplete doing a swap after we've already moved on).
+        if isCrossfading {
+            crossfadeExecutor?.cancel()
+            crossfadeExecutor = nil
+            streamFadeTimer?.cancel()
+            streamFadeTimer = nil
+            playerB.stop()
+            isCrossfading = false
+            print("[AudioEngineManager] play(): cancelled in-progress crossfade")
+        }
+
         guard ensureEngineRunning() else {
             print("[AudioEngineManager] play() abortado: engine no arrancó")
             return
         }
-        cancelNativeNextFallback() // JS respondió
+        cancelNativeNextFallback()
         clearAutomixTrigger()
 
         // Invalidate any pending completion handlers from the previous song.
@@ -245,10 +260,7 @@ class AudioEngineManager {
 
             guard framesToPlay > 0 else {
                 print("[AudioEngineManager] No hay frames para reproducir")
-                plugin?.notifyListeners("onError", data: [
-                    "message": "No frames to play (startFrame=\(startFrame), totalFrames=\(totalFrames))",
-                    "code": "NO_FRAMES"
-                ])
+                delegate?.audioEngineError("No frames to play", code: "NO_FRAMES")
                 return
             }
 
@@ -260,17 +272,16 @@ class AudioEngineManager {
             playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
                 // Completado en el render thread — dispatch al main para notificar
                 DispatchQueue.main.async {
-                    guard let self = self,
-                          self.isPlaying,
-                          !self.isCrossfading,
-                          self.playerA === activePlayer, // Solo si sigue siendo el player activo
-                          self.playSequence == thisPlaySeq // No hubo otro play() posterior
-                    else { return }
+                    guard let self = self else { print("[AudioEngineManager] ⚠️ play() completion: self deallocated"); return }
+                    guard self.isPlaying else { print("[AudioEngineManager] ⚠️ play() completion: isPlaying=false"); return }
+                    guard !self.isCrossfading else { print("[AudioEngineManager] ⚠️ play() completion: isCrossfading=true (expected)"); return }
+                    guard self.playerA === activePlayer else { print("[AudioEngineManager] ⚠️ play() completion: playerA swapped"); return }
+                    guard self.playSequence == thisPlaySeq else { print("[AudioEngineManager] ⚠️ play() completion: playSequence mismatch (have \(self.playSequence), expected \(thisPlaySeq))"); return }
                     self.isPlaying = false
                     self.stopProgressTimer()
                     self.updateNowPlayingPlaybackState()
-                    self.plugin?.notifyListeners("onTrackEnd", data: [:])
-                    print("[AudioEngineManager] Track terminado")
+                    self.delegate?.audioEngineDidFinishSong()
+                    print("[AudioEngineManager] Track terminado (delegate=\(self.delegate != nil))")
                 }
             }
 
@@ -278,17 +289,12 @@ class AudioEngineManager {
             isPlaying = true
 
             // Validar que el player realmente arrancó tras un breve delay.
-            // playerA.play() puede fallar silenciosamente si el engine murió entre
-            // ensureEngineRunning() y aquí (race condition con interrupciones).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self = self, self.isPlaying, self.playerA === activePlayer, self.playSequence == thisPlaySeq else { return }
                 if self.playerA.lastRenderTime == nil || !self.engine.isRunning {
                     print("[AudioEngineManager] ⚠️ playerA no está renderizando — reiniciando engine")
                     self.isPlaying = false
-                    self.plugin?.notifyListeners("onError", data: [
-                        "message": "Player failed to start rendering",
-                        "code": "RENDER_FAILED"
-                    ])
+                    self.delegate?.audioEngineError("Player failed to start rendering", code: "RENDER_FAILED")
                 }
             }
 
@@ -328,7 +334,7 @@ class AudioEngineManager {
 
         } catch {
             print("[AudioEngineManager] Error abriendo archivo: \(error)")
-            plugin?.notifyListeners("onError", data: ["message": error.localizedDescription, "code": "FILE_ERROR"])
+            delegate?.audioEngineError(error.localizedDescription, code: "FILE_ERROR")
         }
     }
 
@@ -421,12 +427,28 @@ class AudioEngineManager {
     }
 
     func seek(to time: Double) {
+        // Cancel any in-progress crossfade before seeking.
+        // During crossfade, playerA is fading out and playerB is fading in —
+        // seeking playerA without cancelling would leave playerB running independently.
+        if isCrossfading {
+            crossfadeExecutor?.cancel()
+            crossfadeExecutor = nil
+            streamFadeTimer?.cancel()
+            streamFadeTimer = nil
+            playerB.stop()
+            isCrossfading = false
+            print("[AudioEngineManager] seek(): cancelled in-progress crossfade")
+        }
+
         if isStreamMode {
+            clearAutomixTrigger()
+            lastSeekTime = CFAbsoluteTimeGetCurrent()
             let cmTime = CMTime(seconds: max(0, time), preferredTimescale: 1000)
             streamPlayer?.seek(to: cmTime) { [weak self] _ in
                 self?.updateNowPlayingProgress()
                 self?.notifyTimeUpdate()
             }
+            delegate?.audioEngineDidSeek(to: time)
             print("[AudioEngineManager] Stream seek a \(String(format: "%.1f", time))s")
             return
         }
@@ -443,10 +465,8 @@ class AudioEngineManager {
         // Marcar timestamp de seek para bloquear automix nativo brevemente
         lastSeekTime = CFAbsoluteTimeGetCurrent()
 
-        // CRÍTICO: Limpiar automix trigger al hacer seek.
-        // JS lo recalculará y re-enviará con la posición correcta.
-        // Sin esto, el trigger viejo puede dispararse prematuramente
-        // si el seek deja currentTime cerca del triggerTime anterior.
+        // Limpiar automix trigger al hacer seek.
+        // QueueManager lo recalculará via delegate (audioEngineDidSeek).
         clearAutomixTrigger()
 
         let sampleRate = file.processingFormat.sampleRate
@@ -454,7 +474,14 @@ class AudioEngineManager {
         let totalFrames = file.length
         let framesToPlay = AVAudioFrameCount(max(0, totalFrames - startFrame))
 
-        guard framesToPlay > 0 else { return }
+        guard framesToPlay > 0 else {
+            // Seek past end of song — treat as song finished
+            isPlaying = false
+            stopProgressTimer()
+            updateNowPlayingPlaybackState()
+            delegate?.audioEngineDidFinishSong()
+            return
+        }
 
         playStartOffset = time
         pauseSampleTime = 0 // Reset: nuevo segmento, sampleTime empieza desde 0
@@ -462,12 +489,16 @@ class AudioEngineManager {
         let activePlayer = playerA
         playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
             DispatchQueue.main.async {
-                guard let self = self, self.isPlaying, !self.isCrossfading,
-                      self.playerA === activePlayer, self.playSequence == thisSeq else { return }
+                guard let self = self else { print("[AudioEngineManager] ⚠️ seek completion: self nil"); return }
+                guard self.isPlaying else { print("[AudioEngineManager] ⚠️ seek completion: isPlaying=false"); return }
+                guard !self.isCrossfading else { print("[AudioEngineManager] ⚠️ seek completion: isCrossfading (expected)"); return }
+                guard self.playerA === activePlayer else { print("[AudioEngineManager] ⚠️ seek completion: playerA swapped"); return }
+                guard self.playSequence == thisSeq else { print("[AudioEngineManager] ⚠️ seek completion: playSequence mismatch (have \(self.playSequence), expected \(thisSeq))"); return }
                 self.isPlaying = false
                 self.stopProgressTimer()
                 self.updateNowPlayingPlaybackState()
-                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                self.delegate?.audioEngineDidFinishSong()
+                print("[AudioEngineManager] Seek track terminado")
             }
         }
 
@@ -480,7 +511,10 @@ class AudioEngineManager {
         updateNowPlayingProgress()
         notifyTimeUpdate()
 
-        print("[AudioEngineManager] Seek a \(String(format: "%.1f", time))s")
+        // Notify delegate so QueueManager can re-set the automix trigger
+        delegate?.audioEngineDidSeek(to: time)
+
+        print("[AudioEngineManager] Seek a \(String(format: "%.1f", time))s, playSeq=\(thisSeq), frames=\(framesToPlay)")
     }
 
     func stop() {
@@ -560,7 +594,7 @@ class AudioEngineManager {
             self.isStreamMode = false
             self.stopProgressTimer()
             self.updateNowPlayingPlaybackState()
-            self.plugin?.notifyListeners("onTrackEnd", data: [:])
+            self.delegate?.audioEngineDidFinishSong()
             print("[AudioEngineManager] Stream track terminado")
         }
 
@@ -588,6 +622,17 @@ class AudioEngineManager {
     func handoffStreamToEngine(fileURL: URL) {
         guard isStreamMode, isPlaying else { return }
 
+        // Validate the file BEFORE stopping the stream player.
+        // If AVAudioFile can't parse the format (e.g. certain MP3 VBR headers),
+        // we stay in stream mode so the song keeps playing via AVPlayer.
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(forReading: fileURL)
+        } catch {
+            print("[AudioEngineManager] handoffStreamToEngine: archivo incompatible con AVAudioFile, manteniendo stream mode — \(error.localizedDescription)")
+            return
+        }
+
         let currentPos = currentTime()
         playSequence += 1
         let thisPlaySeq = playSequence
@@ -599,55 +644,51 @@ class AudioEngineManager {
             return
         }
 
-        do {
-            let file = try AVAudioFile(forReading: fileURL)
-            currentFile = file
+        currentFile = file
 
-            let sampleRate = file.processingFormat.sampleRate
-            let startFrame = AVAudioFramePosition(max(0, currentPos) * sampleRate)
-            let totalFrames = file.length
-            let framesToPlay = AVAudioFrameCount(max(0, totalFrames - startFrame))
+        let sampleRate = file.processingFormat.sampleRate
+        let startFrame = AVAudioFramePosition(max(0, currentPos) * sampleRate)
+        let totalFrames = file.length
+        let framesToPlay = AVAudioFrameCount(max(0, totalFrames - startFrame))
 
-            guard framesToPlay > 0 else {
-                print("[AudioEngineManager] handoffStreamToEngine: sin frames en \(String(format: "%.1f", currentPos))s")
-                return
-            }
-
-            mixerA.outputVolume = replayGainMultiplierA
-            eqA.bands[0].bypass = true
-            eqA.bands[1].bypass = true
-            engine.mainMixerNode.outputVolume = volume
-
-            playStartOffset = currentPos
-            pauseSampleTime = 0
-
-            // Si la duración fue 0 (song.duration no disponible en Navidrome),
-            // calcularla desde el archivo real ahora que lo tenemos descargado.
-            if currentSongDuration <= 0 {
-                currentSongDuration = Double(file.length) / file.processingFormat.sampleRate
-                print("[AudioEngineManager] handoffStreamToEngine: duración calculada del archivo: \(String(format: "%.1f", currentSongDuration))s")
-            }
-
-            let activePlayer = playerA
-            playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
-                DispatchQueue.main.async {
-                    guard let self = self,
-                          self.isPlaying,
-                          !self.isCrossfading,
-                          self.playerA === activePlayer,
-                          self.playSequence == thisPlaySeq else { return }
-                    self.isPlaying = false
-                    self.stopProgressTimer()
-                    self.updateNowPlayingPlaybackState()
-                    self.plugin?.notifyListeners("onTrackEnd", data: [:])
-                }
-            }
-
-            playerA.play()
-            print("[AudioEngineManager] Handoff stream→engine en \(String(format: "%.1f", currentPos))s")
-        } catch {
-            print("[AudioEngineManager] handoffStreamToEngine error: \(error)")
+        guard framesToPlay > 0 else {
+            print("[AudioEngineManager] handoffStreamToEngine: sin frames en \(String(format: "%.1f", currentPos))s")
+            return
         }
+
+        mixerA.outputVolume = replayGainMultiplierA
+        eqA.bands[0].bypass = true
+        eqA.bands[1].bypass = true
+        engine.mainMixerNode.outputVolume = volume
+
+        playStartOffset = currentPos
+        pauseSampleTime = 0
+
+        // Si la duración fue 0 (song.duration no disponible en Navidrome),
+        // calcularla desde el archivo real ahora que lo tenemos descargado.
+        if currentSongDuration <= 0 {
+            currentSongDuration = Double(file.length) / file.processingFormat.sampleRate
+            print("[AudioEngineManager] handoffStreamToEngine: duración calculada del archivo: \(String(format: "%.1f", currentSongDuration))s")
+        }
+
+        let activePlayer = playerA
+        playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self else { print("[AudioEngineManager] ⚠️ handoff completion: self nil"); return }
+                guard self.isPlaying else { print("[AudioEngineManager] ⚠️ handoff completion: isPlaying=false"); return }
+                guard !self.isCrossfading else { print("[AudioEngineManager] ⚠️ handoff completion: isCrossfading (expected)"); return }
+                guard self.playerA === activePlayer else { print("[AudioEngineManager] ⚠️ handoff completion: playerA swapped"); return }
+                guard self.playSequence == thisPlaySeq else { print("[AudioEngineManager] ⚠️ handoff completion: playSequence mismatch (have \(self.playSequence), expected \(thisPlaySeq))"); return }
+                self.isPlaying = false
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.delegate?.audioEngineDidFinishSong()
+                print("[AudioEngineManager] Handoff track terminado")
+            }
+        }
+
+        playerA.play()
+        print("[AudioEngineManager] Handoff stream→engine en \(String(format: "%.1f", currentPos))s, playSeq=\(thisPlaySeq)")
     }
 
     private func songIdFromURL(_ url: URL) -> String {
@@ -700,7 +741,7 @@ class AudioEngineManager {
             print("[AudioEngineManager] Next preparado: \(fileURL.lastPathComponent) (RG: \(String(format: "%.3f", replayGainMultiplier)))")
         } catch {
             print("[AudioEngineManager] Error preparando next: \(error)")
-            plugin?.notifyListeners("onError", data: ["message": error.localizedDescription, "code": "FILE_ERROR"])
+            delegate?.audioEngineError(error.localizedDescription, code: "FILE_ERROR")
         }
     }
 
@@ -743,7 +784,8 @@ class AudioEngineManager {
         }
 
         isCrossfading = true
-        plugin?.notifyListeners("onCrossfadeStart", data: [:])
+        crossfadeStartedAt = CFAbsoluteTimeGetCurrent()
+        delegate?.audioEngineCrossfadeStarted()
 
         let executor = CrossfadeExecutor(
             config: config,
@@ -809,12 +851,14 @@ class AudioEngineManager {
             self.isCrossfading = false
             self.crossfadeExecutor = nil
 
+            // Ahora sí actualizar NowPlaying con la duración de song B (crossfade terminó)
+            self.localNowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = self.currentSongDuration
             self.updateNowPlayingPlaybackState()
             // Enviar la posición ACTUAL del nuevo player (no startOffset, que es donde
             // B empezó al inicio del crossfade). Tras el swap, currentTime() lee del
             // nuevo playerA y refleja startOffset + tiempo transcurrido del crossfade.
             let actualPosition = self.currentTime()
-            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": actualPosition])
+            self.delegate?.audioEngineCrossfadeCompleted(startOffset: actualPosition)
 
             print("[AudioEngineManager] Crossfade completado (swap A↔B), offset: \(String(format: "%.1f", actualPosition))s")
         }
@@ -842,7 +886,7 @@ class AudioEngineManager {
             self.isPlaying = false
             self.stopProgressTimer()
             self.updateNowPlayingPlaybackState()
-            self.plugin?.notifyListeners("onTrackEnd", data: [:])
+            self.delegate?.audioEngineDidFinishSong()
         }
 
         crossfadeExecutor = executor
@@ -883,7 +927,8 @@ class AudioEngineManager {
         }
 
         isCrossfading = true
-        plugin?.notifyListeners("onCrossfadeStart", data: [:])
+        crossfadeStartedAt = CFAbsoluteTimeGetCurrent()
+        delegate?.audioEngineCrossfadeStarted()
 
         // Calcular startOffset de B (mismo algoritmo que CrossfadeExecutor.calculateTimings)
         let startOffset: Double
@@ -961,7 +1006,7 @@ class AudioEngineManager {
                 self.isStreamMode = false
                 self.stopProgressTimer()
                 self.updateNowPlayingPlaybackState()
-                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                self.delegate?.audioEngineDidFinishSong()
                 print("[AudioEngineManager] Stream fallback: track B terminado")
             }
 
@@ -978,9 +1023,8 @@ class AudioEngineManager {
             )
             self.updateNowPlayingPlaybackState()
 
-            // Notificar a JS
             let actualPosition = self.currentTime()
-            self.plugin?.notifyListeners("onCrossfadeComplete", data: ["startOffset": actualPosition])
+            self.delegate?.audioEngineCrossfadeCompleted(startOffset: actualPosition)
 
             print("[AudioEngineManager] Stream fallback crossfade completado en \(String(format: "%.1f", actualPosition))s")
         }
@@ -1048,11 +1092,39 @@ class AudioEngineManager {
         }
 
         let time = currentTime()
-        plugin?.notifyListeners("onTimeUpdate", data: [
-            "currentTime": time,
-            "duration": currentSongDuration,
-            "isPlaying": isPlaying,
-        ])
+        delegate?.audioEngineProgressUpdate(current: time, duration: currentSongDuration)
+
+        // SAFETY NET 1: if we're in the last 1.5s of the song and there's no automix
+        // trigger set and no crossfade happening, force advance to next song.
+        // This catches cases where:
+        // - prepareNextForCrossfade async task failed/timed out
+        // - setAutomixTrigger was never called
+        // - completion handler didn't fire (stream mode edge cases)
+        if currentSongDuration > 0 && time > 0 && !isCrossfading && automixTriggerTime == nil {
+            let remaining = currentSongDuration - time
+            if remaining < 1.5 && remaining > 0 && isPlaying {
+                print("[AudioEngineManager] ⚠️ SAFETY NET: song ending in \(String(format: "%.1f", remaining))s with no automix trigger — forcing advance")
+                isPlaying = false
+                stopProgressTimer()
+                stopStreamPlayer()
+                updateNowPlayingPlaybackState()
+                delegate?.audioEngineDidFinishSong()
+            }
+        }
+
+        // SAFETY NET 2: if crossfade has been "in progress" for > 30s, it's stuck.
+        // Cancel it and force advance.
+        if isCrossfading && crossfadeStartedAt > 0 {
+            let elapsed = CFAbsoluteTimeGetCurrent() - crossfadeStartedAt
+            if elapsed > 30 {
+                print("[AudioEngineManager] ⚠️ SAFETY NET: crossfade stuck for \(String(format: "%.0f", elapsed))s — cancelling and advancing")
+                cancelCrossfade()
+                isPlaying = false
+                stopProgressTimer()
+                updateNowPlayingPlaybackState()
+                delegate?.audioEngineDidFinishSong()
+            }
+        }
     }
 
     // MARK: - Native Automix Timer (background-safe)
@@ -1063,6 +1135,7 @@ class AudioEngineManager {
         automixTriggerTime = triggerTime
         pendingCrossfadeConfig = config
         startAutomixTimer()
+        print("[AudioEngineManager] ✅ Automix trigger SET at \(String(format: "%.1f", triggerTime))s, nextFile=\(nextFile != nil), nextStreamURL=\(nextStreamURL != nil)")
     }
 
     /// Almacena metadata de la siguiente canción para NowPlaying en background.
@@ -1096,20 +1169,55 @@ class AudioEngineManager {
         automixTimer = nil
     }
 
+    private var lastAutomixDebugLog: Date = .distantPast
+
     private func checkAutomixTrigger() {
-        guard isPlaying,
-              !isCrossfading,
-              let triggerTime = automixTriggerTime,
-              let config = pendingCrossfadeConfig,
-              nextFile != nil
-        else { return }
+        // Log guard failures every 5 seconds for diagnostics
+        let now = Date()
+        let shouldLog = now.timeIntervalSince(lastAutomixDebugLog) >= 5.0
+
+        guard isPlaying else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] guard fail: isPlaying=false") }
+            return
+        }
+        guard !isCrossfading else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] guard fail: isCrossfading=true") }
+            return
+        }
+        guard let triggerTime = automixTriggerTime else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] guard fail: automixTriggerTime=nil") }
+            return
+        }
+        guard let config = pendingCrossfadeConfig else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] guard fail: pendingCrossfadeConfig=nil") }
+            return
+        }
+        guard nextFile != nil || nextStreamURL != nil else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] guard fail: nextFile=nil AND nextStreamURL=nil, trigger=\(String(format: "%.1f", triggerTime))s") }
+            // SAFETY NET: if we're well past the trigger and still no next song prepared,
+            // clear the trigger and let the song end naturally (didFinishSong will advance)
+            let time = currentTime()
+            if time > triggerTime + 5 {
+                print("[Automix] ⚠️ SAFETY NET: 5s past trigger with no next prepared — clearing trigger, will advance via didFinishSong")
+                automixTriggerTime = nil
+                pendingCrossfadeConfig = nil
+                stopAutomixTimer()
+            }
+            return
+        }
 
         // Bloquear automix durante 2s después de un seek manual.
-        // Esto da tiempo a JS para recalcular y re-enviar el trigger correcto.
         let timeSinceSeek = CFAbsoluteTimeGetCurrent() - lastSeekTime
-        guard timeSinceSeek > 2.0 else { return }
+        guard timeSinceSeek > 2.0 else {
+            if shouldLog { lastAutomixDebugLog = now; print("[Automix] blocked by seek cooldown (\(String(format: "%.1f", timeSinceSeek))s < 2.0)") }
+            return
+        }
 
         let time = currentTime()
+        if shouldLog {
+            lastAutomixDebugLog = now
+            print("[Automix] checking: time=\(String(format: "%.1f", time))s / trigger=\(String(format: "%.1f", triggerTime))s (stream=\(isStreamMode))")
+        }
         if time >= triggerTime {
             print("[AudioEngineManager] Native automix trigger at \(String(format: "%.1f", time))s (trigger was \(String(format: "%.1f", triggerTime))s)")
             automixTriggerTime = nil
@@ -1119,18 +1227,24 @@ class AudioEngineManager {
             // Ejecutar crossfade de forma autónoma
             let result = executeCrossfade(config: config)
             if result == .started {
-                // Actualizar NowPlaying con metadata de la siguiente canción
+                // Actualizar NowPlaying con metadata de la siguiente canción,
+                // PERO mantener la duración de song A para que la barra de progreso
+                // no salte. La duración de song B se actualiza en onComplete del crossfade.
                 if !nextSongTitle.isEmpty {
                     updateNowPlayingMetadata(
                         title: nextSongTitle,
                         artist: nextSongArtist,
                         album: nextSongAlbum,
-                        duration: nextSongDuration,
+                        duration: currentSongDuration,  // keep song A's duration during crossfade
                         artworkUrl: nil
                     )
                 }
-                // Notificar a JS (si está vivo, actualizará state; si está congelado, lo verá al despertar)
-                plugin?.notifyListeners("onCrossfadeStart", data: [:])
+                delegate?.audioEngineCrossfadeStarted()
+            } else {
+                // SAFETY NET: crossfade failed (no next file, no stream URL, etc.)
+                // Don't leave the user stuck — the song will end naturally and
+                // audioEngineDidFinishSong will advance to the next track via hard cut.
+                print("[AudioEngineManager] ⚠️ Automix crossfade failed (\(result)), song will advance via hard cut at end")
             }
         }
     }
@@ -1173,7 +1287,7 @@ class AudioEngineManager {
                 self.isPlaying = false
                 self.stopProgressTimer()
                 self.updateNowPlayingPlaybackState()
-                self.plugin?.notifyListeners("onTrackEnd", data: [:])
+                self.delegate?.audioEngineDidFinishSong()
             }
         }
 
@@ -1187,13 +1301,8 @@ class AudioEngineManager {
         updateNowPlayingMetadata(title: nextSongTitle, artist: nextSongArtist, album: nextSongAlbum, duration: currentSongDuration, artworkUrl: nil)
         updateNowPlayingPlaybackState()
 
-        // Notificar a JS que cambió de canción (lo procesará al despertar)
-        plugin?.notifyListeners("onNativeNext", data: [
-            "title": currentSongTitle,
-            "artist": currentSongArtist,
-            "album": currentSongAlbum,
-            "duration": currentSongDuration,
-        ])
+        delegate?.audioEngineNativeNext(title: currentSongTitle, artist: currentSongArtist,
+                                        album: currentSongAlbum, duration: currentSongDuration)
 
         print("[AudioEngineManager] Native next: \(currentSongTitle)")
     }
@@ -1212,12 +1321,7 @@ class AudioEngineManager {
     }
 
     private func notifyPlaybackStateChanged(reason: String? = nil) {
-        var data: [String: Any] = [
-            "isPlaying": isPlaying,
-            "currentTime": currentTime(),
-        ]
-        if let reason = reason { data["reason"] = reason }
-        plugin?.notifyListeners("onPlaybackStateChanged", data: data)
+        delegate?.audioEnginePlaybackStateChanged(isPlaying: isPlaying, currentTime: currentTime())
     }
 
     // MARK: - NowPlaying (directo, sin JS)
@@ -1334,12 +1438,8 @@ class AudioEngineManager {
             // cancelCrossfade() lo detiene para que el skip sea instantáneo.
             self.clearAutomixTrigger()
             self.cancelCrossfade()
-            // Enviar a JS
-            self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "next"])
-            // Programar fallback nativo si JS no responde en 2s
-            if self.hasNextFilePrepared {
-                self.scheduleNativeNextFallback()
-            }
+            // Native path: QueueManager handles skip directly
+            Task { @MainActor in QueueManager.shared.skipNext() }
             return .success
         }
 
@@ -1350,10 +1450,8 @@ class AudioEngineManager {
             // Limpiar automix y cancelar crossfade (igual que next).
             self.clearAutomixTrigger()
             self.cancelCrossfade()
-            // Delegar lógica a JS: si > 3s → seek(0), si <= 3s → canción anterior.
-            // No hacer seek(0) nativo para evitar artefacto audible cuando JS decide
-            // ir a la canción anterior (se oiría un reinicio breve antes del cambio).
-            self.plugin?.notifyListeners("onRemoteCommand", data: ["action": "previous"])
+            // Native path: QueueManager handles skip previous (3s restart logic included)
+            Task { @MainActor in QueueManager.shared.skipPrevious() }
             return .success
         }
 

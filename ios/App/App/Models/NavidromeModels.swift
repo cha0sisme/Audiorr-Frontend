@@ -23,8 +23,20 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     let year: Int?
     let genre: String?
     let explicitStatus: String?
+    let replayGainTrackGain: Double?
+    let replayGainTrackPeak: Double?
+    let replayGainAlbumGain: Double?
+    let replayGainAlbumPeak: Double?
 
     var isExplicit: Bool { explicitStatus == "explicit" }
+
+    /// Compute the ReplayGain multiplier for this track (track gain preferred, album gain fallback).
+    /// When no RG tags exist, uses -8 dB default (matches React behavior for consistent loudness).
+    var replayGainMultiplier: Float {
+        let db = replayGainTrackGain ?? replayGainAlbumGain ?? -8.0
+        let peak = replayGainTrackPeak ?? replayGainAlbumPeak ?? 0.0
+        return AudioEngineManager.computeReplayGainMultiplier(gainDb: db, trackPeak: peak)
+    }
 }
 
 struct NavidromeAlbum: Identifiable, Decodable, Hashable {
@@ -89,6 +101,10 @@ private struct SubsonicWrapper<T: Decodable>: Decodable {
     enum CodingKeys: String, CodingKey {
         case subsonicResponse = "subsonic-response"
     }
+}
+
+struct SubsonicBaseResponse: Decodable {
+    let status: String
 }
 
 struct PlaylistsResponse: Decodable {

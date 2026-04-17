@@ -39,9 +39,7 @@ struct ContentView: View {
                 }
             }
             .tabViewBottomAccessory {
-                if nowPlaying.isVisible {
-                    MiniPlayerView()
-                }
+                MiniPlayerView()
             }
             .tabBarMinimizeBehavior(.onScrollDown)
 

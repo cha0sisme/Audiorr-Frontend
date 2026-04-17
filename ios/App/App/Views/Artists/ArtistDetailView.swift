@@ -102,6 +102,10 @@ final class ArtistDetailViewModel: ObservableObject {
 struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
+    @State private var suppressHero = false
+    @State private var selectedAlbum: NavidromeAlbum?
+    @State private var selectedPlaylist: NavidromePlaylist?
+    @Namespace private var subHeroNS
     var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
 
@@ -122,6 +126,7 @@ struct ArtistDetailView: View {
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
+    private var subHeroActive: Bool { selectedAlbum != nil || selectedPlaylist != nil }
 
     // Deterministic color from artist name (fallback when no avatar)
     private var nameColor: Color {
@@ -148,7 +153,10 @@ struct ArtistDetailView: View {
                 scrollY = y
             }
         }
+        .modifier(AlbumHeroOverlay(selectedAlbum: $selectedAlbum, namespace: subHeroNS))
+        .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: subHeroNS))
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .navigationDestination(for: NavidromeAlbum.self) { album in
             AlbumDetailView(album: album)
@@ -166,22 +174,32 @@ struct ArtistDetailView: View {
             await vm.load()
             await vm.loadSecondary()
         }
+        .task(id: "hero-settle") {
+            // Disable matchedGeometryEffect once the hero transition completes
+            // to prevent avatar displacement when navigating to sub-pages.
+            if heroNamespace != nil {
+                try? await Task.sleep(for: .milliseconds(600))
+                suppressHero = true
+            }
+        }
         .toolbar {
-            if let onDismiss {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onDismiss) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(isLight ? Color.accentColor : .white)
+            if !subHeroActive {
+                if let onDismiss {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: onDismiss) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(isLight ? Color.accentColor : .white)
+                        }
                     }
                 }
-            }
-            ToolbarItem(placement: .principal) {
-                Text(vm.artist.name)
-                    .font(.headline)
-                    .foregroundStyle(isLight ? Color.black : .white)
-                    .lineLimit(1)
-                    .opacity(stickyOpacity)
+                ToolbarItem(placement: .principal) {
+                    Text(vm.artist.name)
+                        .font(.headline)
+                        .foregroundStyle(isLight ? Color.black : .white)
+                        .lineLimit(1)
+                        .opacity(stickyOpacity)
+                }
             }
         }
     }
@@ -267,7 +285,7 @@ struct ArtistDetailView: View {
             Spacer(minLength: 90)
 
             avatarView
-                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "artist_\(vm.artist.id)", in: heroNamespace!) }
+                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "artist_\(vm.artist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
 
             Spacer(minLength: 16)
@@ -407,10 +425,15 @@ struct ArtistDetailView: View {
                         isLight: isLight
                     ) {
                         ForEach(visibleAlbums) { album in
-                            NavigationLink(value: album) {
-                                AlbumCardView(album: album, subtitle: .year, isLight: isLight)
+                            Button {
+                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                    selectedAlbum = album
+                                }
+                            } label: {
+                                AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: subHeroNS)
                             }
                             .buttonStyle(.plain)
+                            .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                         }
                         if albumOverflow > 0 {
                             NavigationLink(value: SeeAllDestination.albums(title: "Álbumes", items: vm.albums)) {
@@ -446,10 +469,15 @@ struct ArtistDetailView: View {
 
                         LazyVGrid(columns: gridColumns, spacing: 20) {
                             ForEach(vm.albums) { album in
-                                NavigationLink(value: album) {
-                                    AlbumCardView(album: album, subtitle: .year, isLight: isLight, axis: .grid)
+                                Button {
+                                    withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                        selectedAlbum = album
+                                    }
+                                } label: {
+                                    AlbumCardView(album: album, subtitle: .year, isLight: isLight, axis: .grid, heroNamespace: subHeroNS)
                                 }
                                 .buttonStyle(.plain)
+                                .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -471,10 +499,15 @@ struct ArtistDetailView: View {
 
             HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
                 ForEach(visible) { album in
-                    NavigationLink(value: album) {
-                        AlbumCardView(album: album, subtitle: .artist, isLight: isLight)
+                    Button {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                            selectedAlbum = album
+                        }
+                    } label: {
+                        AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: subHeroNS)
                     }
                     .buttonStyle(.plain)
+                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(title: "Aparece en", items: vm.collaborations)) {
@@ -499,10 +532,15 @@ struct ArtistDetailView: View {
                 isLight: isLight
             ) {
                 ForEach(visible) { playlist in
-                    NavigationLink(value: playlist) {
-                        PlaylistCardView(playlist: playlist, isLight: isLight)
+                    Button {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                            selectedPlaylist = playlist
+                        }
+                    } label: {
+                        PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: subHeroNS)
                     }
                     .buttonStyle(.plain)
+                    .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.playlists(title: "Playlists con \(vm.artist.name)", items: vm.playlists)) {

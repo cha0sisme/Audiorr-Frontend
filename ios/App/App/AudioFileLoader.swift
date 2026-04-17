@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 /// Descarga archivos de audio desde URLs remotas (Navidrome streaming) y los cachea
 /// como archivos temporales locales para uso con AVAudioFile.
@@ -10,7 +11,7 @@ class AudioFileLoader: @unchecked Sendable {
     // MARK: - Configuración
 
     private let maxCachedFiles = 5
-    private let maxTotalBytes: Int64 = 60 * 1024 * 1024 // 60 MB
+    private let maxTotalBytes: Int64 = 250 * 1024 * 1024 // 250 MB (CAF/PCM files are much larger than MP3)
     private let maxRetries = 3
     private let retryDelays: [TimeInterval] = [1, 2, 4] // backoff
 
@@ -56,6 +57,19 @@ class AudioFileLoader: @unchecked Sendable {
         // Cache hit
         if FileManager.default.fileExists(atPath: localURL.path) {
             touchAccess(songId)
+
+            // If this is an .mp3 that's incompatible with AVAudioFile,
+            // transcode it to .caf now (may have been cached before transcoding was added).
+            if localURL.pathExtension == "mp3" && (try? AVAudioFile(forReading: localURL)) == nil {
+                print("[AudioFileLoader] Cache hit but AVAudioFile incompatible — transcoding: \(songId)")
+                return try await withCheckedThrowingContinuation { continuation in
+                    self.queue.async(flags: .barrier) {
+                        self.pendingContinuations[songId] = [continuation]
+                        self.transcodeToCAF(songId: songId, sourceURL: localURL)
+                    }
+                }
+            }
+
             print("[AudioFileLoader] Cache hit: \(songId)")
             return localURL
         }
@@ -127,15 +141,20 @@ class AudioFileLoader: @unchecked Sendable {
         }
     }
 
-    /// Verifica si un songId está en caché local.
+    /// Verifica si un songId está en caché local (.caf or .mp3).
     func isCached(_ songId: String) -> Bool {
-        FileManager.default.fileExists(atPath: localPath(for: songId).path)
+        let caf = cacheDir.appendingPathComponent("\(songId).caf")
+        let mp3 = cacheDir.appendingPathComponent("\(songId).mp3")
+        return FileManager.default.fileExists(atPath: caf.path) || FileManager.default.fileExists(atPath: mp3.path)
     }
 
-    /// Devuelve la URL local si el archivo está cacheado, nil si no.
+    /// Devuelve la URL local si el archivo está cacheado, nil si no. Prefers .caf.
     func cachedFileURL(for songId: String) -> URL? {
-        let url = localPath(for: songId)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        let caf = cacheDir.appendingPathComponent("\(songId).caf")
+        if FileManager.default.fileExists(atPath: caf.path) { return caf }
+        let mp3 = cacheDir.appendingPathComponent("\(songId).mp3")
+        if FileManager.default.fileExists(atPath: mp3.path) { return mp3 }
+        return nil
     }
 
     // MARK: - Descarga interna
@@ -196,7 +215,16 @@ class AudioFileLoader: @unchecked Sendable {
 
                     let sizeMB = Double(data.count) / 1024.0 / 1024.0
                     print("[AudioFileLoader] Downloaded: \(songId) (\(String(format: "%.1f", sizeMB))MB)")
-                    self.resolveContinuations(songId: songId, result: .success(localURL))
+
+                    // Validate with AVAudioFile. If it fails (VBR MP3, bad headers),
+                    // transcode to CAF so AVAudioEngine can always use it for crossfade.
+                    if (try? AVAudioFile(forReading: localURL)) == nil {
+                        print("[AudioFileLoader] AVAudioFile incompatible — transcoding to CAF: \(songId)")
+                        self.transcodeToCAF(songId: songId, sourceURL: localURL)
+                        // resolveContinuations called inside transcodeToCAF
+                    } else {
+                        self.resolveContinuations(songId: songId, result: .success(localURL))
+                    }
                 } catch {
                     print("[AudioFileLoader] Write error: \(songId) — \(error)")
                     self.resolveContinuations(songId: songId, result: .failure(error))
@@ -240,18 +268,118 @@ class AudioFileLoader: @unchecked Sendable {
         guard let oldest = fileAccessTimes.min(by: { $0.value < $1.value })?.key else {
             return ""
         }
-        let url = localPath(for: oldest)
-        try? FileManager.default.removeItem(at: url)
+        // Remove both .mp3 and .caf variants
+        let mp3 = cacheDir.appendingPathComponent("\(oldest).mp3")
+        let caf = cacheDir.appendingPathComponent("\(oldest).caf")
+        try? FileManager.default.removeItem(at: mp3)
+        try? FileManager.default.removeItem(at: caf)
         fileAccessTimes.removeValue(forKey: oldest)
         fileSizes.removeValue(forKey: oldest)
         print("[AudioFileLoader] Evicted: \(oldest)")
         return oldest
     }
 
+    // MARK: - Transcode (MP3 → CAF)
+
+    /// Transcode an AVAudioFile-incompatible file to CAF (PCM 16-bit) using AVAssetReader/Writer.
+    /// AVAssetReader uses MediaToolbox (same as AVPlayer) so it handles VBR MP3s, bad headers, etc.
+    /// The result is a .caf file that AVAudioEngine can always open.
+    private func transcodeToCAF(songId: String, sourceURL: URL) {
+        let cafURL = cacheDir.appendingPathComponent("\(songId).caf")
+
+        // Run on background thread to avoid blocking the barrier queue
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            let asset = AVURLAsset(url: sourceURL)
+            guard let reader = try? AVAssetReader(asset: asset),
+                  let audioTrack = asset.tracks(withMediaType: .audio).first else {
+                print("[AudioFileLoader] Transcode failed: no audio track in \(songId)")
+                self.queue.async(flags: .barrier) {
+                    // Return the original file — stream fallback will handle playback
+                    self.resolveContinuations(songId: songId, result: .success(sourceURL))
+                }
+                return
+            }
+
+            // Read as PCM 16-bit 44.1kHz stereo
+            let pcmSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+                AVSampleRateKey: 44100,
+                AVNumberOfChannelsKey: 2,
+            ]
+            let readerOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: pcmSettings)
+            reader.add(readerOutput)
+
+            // Remove any existing .caf before writing
+            try? FileManager.default.removeItem(at: cafURL)
+
+            // Write as CAF (PCM) — must specify outputSettings (not nil/passthrough)
+            guard let writer = try? AVAssetWriter(outputURL: cafURL, fileType: .caf) else {
+                print("[AudioFileLoader] Transcode failed: can't create writer for \(songId)")
+                self.queue.async(flags: .barrier) {
+                    self.resolveContinuations(songId: songId, result: .success(sourceURL))
+                }
+                return
+            }
+
+            let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: pcmSettings)
+            writer.add(writerInput)
+
+            reader.startReading()
+            writer.startWriting()
+            writer.startSession(atSourceTime: .zero)
+
+            let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
+            writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
+                while writerInput.isReadyForMoreMediaData {
+                    guard reader.status == .reading,
+                          let buffer = readerOutput.copyNextSampleBuffer() else {
+                        writerInput.markAsFinished()
+
+                        if reader.status == .completed {
+                            writer.finishWriting { [weak self] in
+                                guard let self = self else { return }
+                                self.queue.async(flags: .barrier) {
+                                    // Replace the MP3 with the CAF
+                                    try? FileManager.default.removeItem(at: sourceURL)
+                                    let cafSize = (try? FileManager.default.attributesOfItem(atPath: cafURL.path)[.size] as? Int64) ?? 0
+                                    self.fileSizes[songId] = cafSize
+                                    let sizeMB = Double(cafSize) / 1024.0 / 1024.0
+                                    print("[AudioFileLoader] Transcoded: \(songId) → CAF (\(String(format: "%.1f", sizeMB))MB)")
+                                    self.resolveContinuations(songId: songId, result: .success(cafURL))
+                                }
+                            }
+                        } else {
+                            print("[AudioFileLoader] Transcode read failed: \(songId) — \(reader.error?.localizedDescription ?? "unknown")")
+                            writer.cancelWriting()
+                            try? FileManager.default.removeItem(at: cafURL)
+                            self?.queue.async(flags: .barrier) {
+                                self?.resolveContinuations(songId: songId, result: .success(sourceURL))
+                            }
+                        }
+                        return
+                    }
+
+                    writerInput.append(buffer)
+                }
+            }
+        }
+    }
+
     // MARK: - Utilidades
 
+    /// Returns the cached file path. Prefers .caf (transcoded) over .mp3 (original).
     private func localPath(for songId: String) -> URL {
-        cacheDir.appendingPathComponent("\(songId).mp3")
+        let cafURL = cacheDir.appendingPathComponent("\(songId).caf")
+        if FileManager.default.fileExists(atPath: cafURL.path) {
+            return cafURL
+        }
+        return cacheDir.appendingPathComponent("\(songId).mp3")
     }
 
     private func touchAccess(_ songId: String) {

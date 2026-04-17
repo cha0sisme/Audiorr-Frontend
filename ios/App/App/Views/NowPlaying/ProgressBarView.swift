@@ -57,7 +57,7 @@ struct ProgressBarView: View {
                             let seekTime = seekFraction * state.duration
                             isDragging = false
 
-                            JSBridge.shared.send("_nativeSeek", detail: "{ time: \(seekTime) }")
+                            PlayerService.shared.seekTo(seekTime)
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
                             // Update local interpolation to the seek position

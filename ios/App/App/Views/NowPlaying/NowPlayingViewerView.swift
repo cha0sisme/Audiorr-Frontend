@@ -10,11 +10,14 @@ struct NowPlayingViewerView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
 
-    // Context menu
-    @State private var showContextMenu = false
+    // Add to playlist
+    @State private var showAddToPlaylist = false
 
     // Queue panel
     @State private var showQueue = false
+
+    // Device picker
+    @State private var showDevicePicker = false
 
     // Full-res artwork loaded manually (bypasses AsyncImage cache)
     @State private var fullArtworkImage: UIImage?
@@ -95,11 +98,13 @@ struct NowPlayingViewerView: View {
                         PlaybackControlsView(glassStyle: hasCanvas)
 
                     } else {
-                        Spacer()
-                            .frame(minHeight: 8, maxHeight: 40)
+                        if hasCanvas {
+                            // Canvas mode: push controls to the bottom
+                            Spacer()
+                        } else {
+                            Spacer()
+                                .frame(minHeight: 8, maxHeight: 40)
 
-                        // Artwork (hidden when canvas is active)
-                        if !hasCanvas {
                             artworkView(geo: geo)
 
                             Spacer()
@@ -122,14 +127,18 @@ struct NowPlayingViewerView: View {
                         PlaybackControlsView(glassStyle: hasCanvas)
                     }
 
-                    Spacer()
+                    if !hasCanvas {
+                        Spacer()
+                    } else {
+                        Spacer()
+                            .frame(height: 24)
+                    }
 
                     // Bottom action row (lyrics, connect, etc.)
                     bottomActionsRow
                         .padding(.bottom, geo.safeAreaInsets.bottom + 12)
                 }
                 .padding(.horizontal, 28)
-                .overlay { contextMenuDialog }
             }
             .offset(y: dragOffset)
             .gesture(dismissDragGesture(screenHeight: geo.size.height))
@@ -163,37 +172,105 @@ struct NowPlayingViewerView: View {
             loadArtwork()
             resolveCanvas(songId: state.songId)
             resolveLyrics(songId: state.songId)
-            state.syncQueueFromJS()
-            JSBridge.shared.send("_nativeViewerOpened")
-        }
-        .onDisappear {
-            JSBridge.shared.send("_nativeViewerClosed")
+            // Queue is already synced natively by QueueManager
         }
         .animation(.easeInOut(duration: 0.5), value: hasCanvas)
         .sheet(isPresented: $showQueue) {
             QueuePanelView()
         }
+        .sheet(isPresented: $showDevicePicker) {
+            DevicePickerView()
+        }
+        .sheet(isPresented: $showAddToPlaylist) {
+            AddToPlaylistView(songId: state.songId, songTitle: state.title)
+        }
     }
 
-    // MARK: - Context Menu Dialog
+    // MARK: - Context Menu (UIKit instant menu — same style as SongListView)
 
-    private var contextMenuDialog: some View {
-        Color.clear
-            .confirmationDialog(state.title, isPresented: $showContextMenu, titleVisibility: .visible) {
-                if !state.albumId.isEmpty {
-                    Button("Ir al Álbum") {
-                        state.pendingNavigation = .album(id: state.albumId)
-                        state.viewerIsOpen = false
-                    }
-                }
-                if !state.artistId.isEmpty {
-                    Button("Ir al Artista") {
-                        state.pendingNavigation = .artist(id: state.artistId, name: state.artist)
-                        state.viewerIsOpen = false
-                    }
-                }
-                Button("Cancelar", role: .cancel) {}
+    private func contextMenuButton(tintColor: UIColor = UIColor.white.withAlphaComponent(0.6)) -> some View {
+        InstantMenuButton(tint: tintColor) {
+            let state = NowPlayingState.shared
+
+            // — Playback section
+            var playbackActions: [UIAction] = []
+
+            if !state.songId.isEmpty {
+                // Resolve album name from current queue entry if available
+                let albumName = state.queue.first(where: { $0.id == state.songId })?.album ?? ""
+                let currentSong = NavidromeSong(
+                    id: state.songId, title: state.title, artist: state.artist,
+                    artistId: state.artistId.isEmpty ? nil : state.artistId,
+                    album: albumName, albumId: state.albumId.isEmpty ? nil : state.albumId,
+                    coverArt: state.coverArt, duration: nil, track: nil,
+                    year: nil, genre: nil, explicitStatus: nil,
+                    replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                    replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+                )
+                playbackActions.append(UIAction(
+                    title: "Reproducir a continuación",
+                    image: UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
+                ) { _ in PlayerService.shared.insertNext(currentSong) })
+
+                playbackActions.append(UIAction(
+                    title: "Añadir a la cola",
+                    image: UIImage(systemName: "text.badge.plus")
+                ) { _ in PlayerService.shared.addToQueue(currentSong) })
             }
+
+            let playbackSection = UIMenu(title: "", options: .displayInline, children: playbackActions)
+
+            var sections: [UIMenuElement] = [playbackSection]
+
+            // — Add to playlist
+            if !state.songId.isEmpty {
+                let addToPlaylist = UIAction(
+                    title: "Añadir a playlist",
+                    image: UIImage(systemName: "music.note.list")
+                ) { _ in
+                    DispatchQueue.main.async {
+                        self.showAddToPlaylist = true
+                    }
+                }
+                sections.append(UIMenu(title: "", options: .displayInline, children: [addToPlaylist]))
+            }
+
+            // — Navigation section
+            var navActions: [UIAction] = []
+
+            if !state.albumId.isEmpty {
+                let albumId = state.albumId
+                navActions.append(UIAction(
+                    title: "Ir al álbum",
+                    image: UIImage(systemName: "music.note")
+                ) { _ in
+                    DispatchQueue.main.async {
+                        state.pendingNavigation = .album(id: albumId)
+                        state.viewerIsOpen = false
+                    }
+                })
+            }
+
+            if !state.artistId.isEmpty {
+                let artistId = state.artistId
+                let artistName = state.artist
+                navActions.append(UIAction(
+                    title: "Ir al artista",
+                    image: UIImage(systemName: "person.crop.circle")
+                ) { _ in
+                    DispatchQueue.main.async {
+                        state.pendingNavigation = .artist(id: artistId, name: artistName)
+                        state.viewerIsOpen = false
+                    }
+                })
+            }
+
+            if !navActions.isEmpty {
+                sections.append(UIMenu(title: "", options: .displayInline, children: navActions))
+            }
+
+            return UIMenu(children: sections)
+        }
     }
 
     // MARK: - Canvas Gradient
@@ -273,18 +350,8 @@ struct NowPlayingViewerView: View {
 
             Spacer(minLength: 8)
 
-            // Context menu (3 dots) — uses confirmationDialog to avoid gesture conflicts
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                showContextMenu = true
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            contextMenuButton()
+                .frame(width: 40, height: 40)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -325,18 +392,8 @@ struct NowPlayingViewerView: View {
 
             Spacer(minLength: 4)
 
-            // 3-dot menu
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                showContextMenu = true
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            contextMenuButton(tintColor: UIColor.white.withAlphaComponent(0.5))
+                .frame(width: 36, height: 36)
         }
     }
 
@@ -448,9 +505,12 @@ struct NowPlayingViewerView: View {
                 showQueue = true
             }
 
-            // Audiorr Connect
-            bottomActionButton(icon: "airplayaudio", isActive: state.isRemote) {
-                // TODO: Open device picker
+            // Audiorr Connect / Audio Route
+            bottomActionButton(
+                icon: state.isRemote ? "airplayaudio" : state.audioRouteIcon,
+                isActive: state.isRemote || state.audioRouteIcon != "iphone"
+            ) {
+                showDevicePicker = true
             }
         }
     }

@@ -37,10 +37,11 @@ final class NavidromeService: ObservableObject {
         credentials = CredentialsStore.shared.load()
     }
 
-    /// Save credentials natively. Caller is responsible for bridging to JS if needed.
+    /// Save credentials natively.
     func saveCredentials(_ creds: NavidromeCredentials) {
         credentials = creds
         CredentialsStore.shared.save(creds)
+        NotificationCenter.default.post(name: .audiorrDidLogin, object: nil)
     }
 
     func clearCredentials() {
@@ -51,6 +52,9 @@ final class NavidromeService: ObservableObject {
     var isConfigured: Bool { credentials != nil }
 
     // MARK: - Auth
+
+    /// Public auth query for external callers (ScrobbleService, etc.).
+    func authQueryPublic() -> String { authQuery() }
 
     private func authQuery() -> String {
         guard let c = credentials, let token = c.token else { return "" }
@@ -153,6 +157,42 @@ final class NavidromeService: ObservableObject {
             owner: nil, coverArt: detail.coverArt, changed: nil
         )
         return (playlist, detail.entry ?? [])
+    }
+
+    /// Add a song to a playlist (Subsonic updatePlaylist with songIdToAdd).
+    func addSongToPlaylist(playlistId: String, songId: String) async throws {
+        guard let base = baseURL() else { return }
+        let url = URL(string: "\(base)/rest/updatePlaylist.view?\(authQuery())&playlistId=\(playlistId)&songIdToAdd=\(songId)")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
+        guard response.status == "ok" else {
+            throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to add song to playlist"])
+        }
+    }
+
+    /// Returns only private user playlists (no editorial, spotify, smart, daily mixes).
+    func getUserPrivatePlaylists() async -> [NavidromePlaylist] {
+        guard let all = try? await getPlaylists(),
+              let username = credentials?.username.lowercased()
+        else { return [] }
+
+        return all.filter { pl in
+            let name = pl.name.lowercased()
+            let comment = (pl.comment ?? "").lowercased()
+            let owner = (pl.owner ?? "").lowercased()
+
+            // Must be owned by current user
+            guard owner == username else { return false }
+
+            // Exclude special playlist types
+            if comment.contains("smart playlist") { return false }
+            if comment.contains("[editorial]") { return false }
+            if comment.contains("spotify synced") { return false }
+            if name.hasPrefix("[spotify] ") { return false }
+            if name.hasPrefix("mix diario") { return false }
+
+            return true
+        }
     }
 
     // MARK: - All artists (getArtists.view)
@@ -539,4 +579,10 @@ final class NavidromeService: ObservableObject {
         cacheSet(cacheKey, value: imageUrl ?? NSNull())
         return imageUrl
     }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let audiorrDidLogin = Notification.Name("audiorrDidLogin")
 }

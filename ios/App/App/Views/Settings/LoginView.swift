@@ -9,6 +9,7 @@ struct LoginView: View {
     @State private var username  = ""
     @State private var password  = ""
     @State private var status: LoginStatus = .idle
+    @State private var dismissPhase = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case server, user, password }
@@ -36,10 +37,19 @@ struct LoginView: View {
                         .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
                         .padding(.bottom, 24)
 
-                    // Title
-                    Text("Audiorr")
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .padding(.bottom, 6)
+                    // Title + monochrome logo
+                    HStack(spacing: 10) {
+                        Image("AudiorrTabIcon")
+                            .renderingMode(.template)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 28, height: 28)
+                            .foregroundStyle(.primary)
+
+                        Text("Audiorr")
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                    }
+                    .padding(.bottom, 6)
 
                     Text("Conecta con tu servidor Navidrome\npara acceder a tu biblioteca de musica.")
                         .font(.subheadline)
@@ -70,7 +80,7 @@ struct LoginView: View {
                         divider
                         loginField(
                             icon: "lock",
-                            label: "Contrasena",
+                            label: "Contraseña",
                             placeholder: "••••••••",
                             text: $password,
                             field: .password,
@@ -103,7 +113,7 @@ struct LoginView: View {
                                 ProgressView()
                                     .tint(.white)
                             } else {
-                                Text("Iniciar sesion")
+                                Text("Iniciar sesión")
                                     .fontWeight(.semibold)
                             }
                         }
@@ -129,6 +139,9 @@ struct LoginView: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .background(Color(.systemGroupedBackground))
+        .opacity(dismissPhase ? 0 : 1)
+        .scaleEffect(dismissPhase ? 1.05 : 1)
+        .animation(.easeInOut(duration: 0.4), value: dismissPhase)
         .onSubmit {
             switch focusedField {
             case .server:   focusedField = .user
@@ -165,6 +178,7 @@ struct LoginView: View {
                     if isSecure {
                         SecureField(placeholder, text: text)
                             .textContentType(.password)
+                            .keyboardType(.default)
                     } else if field == .server {
                         TextField(placeholder, text: text)
                             .textContentType(.URL)
@@ -172,6 +186,7 @@ struct LoginView: View {
                     } else {
                         TextField(placeholder, text: text)
                             .textContentType(.username)
+                            .keyboardType(.default)
                     }
                 }
                 .autocorrectionDisabled()
@@ -191,7 +206,8 @@ struct LoginView: View {
         status = .loading
         let rawUrl = serverUrl.trimmingCharacters(in: .whitespaces)
                                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let user = username.trimmingCharacters(in: .whitespaces)
+        // Normalize username to lowercase for consistent auth
+        let user = username.trimmingCharacters(in: .whitespaces).lowercased()
 
         Task {
             let hex = password.utf8.map { String(format: "%02x", $0) }.joined()
@@ -222,20 +238,16 @@ struct LoginView: View {
                 let creds = NavidromeCredentials(serverUrl: rawUrl, username: user, token: token)
                 NavidromeService.shared.saveCredentials(creds)
 
-                // Bridge credentials to WKWebView localStorage
-                if let data = try? JSONEncoder().encode(creds),
-                   let json = String(data: data, encoding: .utf8) {
-                    let escaped = json
-                        .replacingOccurrences(of: "\\", with: "\\\\")
-                        .replacingOccurrences(of: "'", with: "\\'")
-                    let script = "localStorage.setItem('navidromeConfig', '\(escaped)')"
-                    JSBridge.shared.eval(script)
-                }
-
                 await MainActor.run {
                     status = .success
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        onSuccess?()
+                    // Animate out, then dismiss
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        withAnimation {
+                            dismissPhase = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                            onSuccess?()
+                        }
                     }
                 }
             } catch {

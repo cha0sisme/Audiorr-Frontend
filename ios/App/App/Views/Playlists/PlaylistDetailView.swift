@@ -157,6 +157,7 @@ struct PlaylistDetailView: View {
             }
         }
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
         .toolbar {
@@ -309,16 +310,24 @@ struct PlaylistDetailView: View {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs)
             } label: {
-                HStack(spacing: 7) {
+                if vm.isBackendAvailable {
                     Image(systemName: "play.fill")
-                    Text("Reproducir")
-                        .fontWeight(.semibold)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(labelColor)
+                        .frame(width: 40, height: 40)
+                        .background(fillColor, in: Circle())
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "play.fill")
+                        Text("Reproducir")
+                            .fontWeight(.semibold)
+                    }
+                    .font(.system(size: 15))
+                    .foregroundStyle(labelColor)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 10)
+                    .background(fillColor, in: Capsule())
                 }
-                .font(.system(size: 15))
-                .foregroundStyle(labelColor)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 10)
-                .background(fillColor, in: Capsule())
             }
 
             // Shuffle
@@ -326,30 +335,42 @@ struct PlaylistDetailView: View {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled())
             } label: {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 15, weight: .semibold))
+                if vm.isBackendAvailable {
+                    Image(systemName: "shuffle")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(labelColor)
+                        .frame(width: 40, height: 40)
+                        .background(fillColor, in: Circle())
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "shuffle")
+                        Text("Aleatorio")
+                            .fontWeight(.semibold)
+                    }
+                    .font(.system(size: 15))
                     .foregroundStyle(labelColor)
-                    .frame(width: 40, height: 40)
-                    .background(fillColor, in: Circle())
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 10)
+                    .background(fillColor, in: Capsule())
+                }
             }
 
-            // SmartMix (only when backend is available)
+            // SmartMix + Star (only when backend is available)
             if vm.isBackendAvailable {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
-            }
 
-            // Star (Apple Music style)
-            Button {
-                vm.toggleStarred()
-            } label: {
-                Image(systemName: vm.isStarred ? "star.fill" : "star")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(vm.isStarred ? .yellow : labelColor)
-                    .frame(width: 40, height: 40)
-                    .background(
-                        fillColor.opacity(vm.isStarred ? 0.85 : 1),
-                        in: Circle()
-                    )
+                Button {
+                    vm.toggleStarred()
+                } label: {
+                    Image(systemName: vm.isStarred ? "star.fill" : "star")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(vm.isStarred ? .yellow : labelColor)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            fillColor.opacity(vm.isStarred ? 0.85 : 1),
+                            in: Circle()
+                        )
+                }
             }
         }
         .disabled(vm.isLoading)
@@ -518,7 +539,7 @@ struct PlaylistCoverView: View {
                     placeholder
                 }
             default:
-                placeholder
+                SkeletonView()
             }
         }
 
@@ -536,6 +557,30 @@ struct PlaylistCoverView: View {
                 .font(.system(size: isFlexible ? 40 : max(size * 0.3, 24)))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - Skeleton shimmer
+
+struct SkeletonView: View {
+    @State private var shimmer = false
+
+    var body: some View {
+        Color(.tertiarySystemFill)
+            .overlay(
+                LinearGradient(
+                    colors: [.clear, Color.white.opacity(0.12), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .offset(x: shimmer ? 300 : -300)
+            )
+            .clipped()
+            .onAppear {
+                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                    shimmer = true
+                }
+            }
     }
 }
 
