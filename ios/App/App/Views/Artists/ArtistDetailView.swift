@@ -6,9 +6,21 @@ import SwiftUI
 final class ArtistDetailViewModel: ObservableObject {
     @Published var artist: NavidromeArtist
     @Published var albums: [NavidromeAlbum] = []
+    @Published var topSongs: [NavidromeSong] = []
+    @Published var collaborations: [NavidromeAlbum] = []
+    @Published var playlists: [NavidromePlaylist] = []
+    @Published var info: ArtistInfo?
+
     @Published var isLoading = true
+    @Published var isLoadingPlayback = false
+    @Published var infoIsLoading = true
+    @Published var playlistsAreLoading = true
+
     @Published var avatarImage: UIImage?
     @Published var palette: AlbumPalette = .default
+
+    @Published var showAllAlbums = false
+    @Published var showAllSongs = false
 
     private let api = NavidromeService.shared
 
@@ -16,19 +28,22 @@ final class ArtistDetailViewModel: ObservableObject {
         self.artist = artist
     }
 
+    /// Critical first pass: albums + avatar + top songs. Everything else loads
+    /// in `loadSecondary()` so the page paints ASAP.
     func load() async {
         isLoading = true
         defer { isLoading = false }
 
-        // Fetch albums and avatar concurrently
-        async let albumsTask  = api.getArtistDetail(artistId: artist.id)
-        async let avatarTask  = fetchAvatar()
+        async let albumsTask = api.getArtistDetail(artistId: artist.id)
+        async let avatarTask = fetchAvatar()
+        async let songsTask  = api.getArtistSongs(artistName: artist.name, count: 10)
 
         if let (ar, albums) = try? await albumsTask {
-            // Newest first, then alphabetical
             self.albums = albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
             if let ar { self.artist = ar }
         }
+
+        self.topSongs = await songsTask
 
         if let img = await avatarTask {
             self.avatarImage = img
@@ -36,6 +51,33 @@ final class ArtistDetailViewModel: ObservableObject {
                 ColorExtractor.extract(from: img)
             }.value
             self.palette = extracted
+        }
+    }
+
+    /// Secondary pass: biography, similar artists, collaborations, playlists.
+    /// Triggered once the hero + critical lists are visible.
+    func loadSecondary() async {
+        infoIsLoading = true
+        playlistsAreLoading = true
+
+        async let infoTask     = api.getArtistInfo(artistId: artist.id)
+        async let collabsTask  = api.getArtistCollaborations(artistName: artist.name)
+        async let playlistTask = api.getPlaylistsByArtist(artistName: artist.name)
+
+        self.info = await infoTask
+        self.collaborations = await collabsTask
+        self.playlists = await playlistTask
+
+        self.infoIsLoading = false
+        self.playlistsAreLoading = false
+    }
+
+    func loadAndPlay() async {
+        guard !albums.isEmpty else { return }
+        isLoadingPlayback = true
+        defer { isLoadingPlayback = false }
+        if let (_, songs, _) = try? await api.getAlbumDetail(albumId: albums[0].id) {
+            await MainActor.run { PlayerService.shared.playPlaylist(songs) }
         }
     }
 
@@ -52,7 +94,9 @@ struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
 
-    private let heroHeight: CGFloat = 300
+    private let heroHeight: CGFloat = 400
+    private let avatarSize: CGFloat = 160
+    private let horizontalLimit = 8
 
     init(artist: NavidromeArtist) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
@@ -81,25 +125,43 @@ struct ArtistDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
-                    discographySection
+                    contentSections
                     Spacer(minLength: 120)
                 }
+                .frame(maxWidth: .infinity)
             }
             .ignoresSafeArea(edges: .top)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-
-            stickyHeader
-                .opacity(stickyOpacity)
-                .animation(.linear(duration: 0.15), value: stickyOpacity)
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .navigationDestination(for: NavidromeAlbum.self) { album in
             AlbumDetailView(album: album)
         }
-        .task { await vm.load() }
+        .navigationDestination(for: NavidromePlaylist.self) { playlist in
+            PlaylistDetailView(playlist: playlist)
+        }
+        .navigationDestination(for: NavidromeArtist.self) { artist in
+            ArtistDetailView(artist: artist)
+        }
+        .navigationDestination(for: SeeAllDestination.self) { dest in
+            SeeAllGridView(destination: dest)
+        }
+        .task {
+            await vm.load()
+            await vm.loadSecondary()
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(vm.artist.name)
+                    .font(.headline)
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+                    .opacity(stickyOpacity)
+            }
+        }
     }
 
     // MARK: - Hero
@@ -126,29 +188,44 @@ struct ArtistDetailView: View {
             heroContent
                 .opacity(heroOpacity)
         }
+        .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
+        .clipped()
     }
 
     @ViewBuilder
     private var heroBackground: some View {
-        if let img = vm.avatarImage {
+        if vm.palette.isSolid {
+            // Flat-cover avatars — match album/playlist page, use the solid primary.
+            Color(vm.palette.primary)
+                .ignoresSafeArea(edges: .top)
+        } else if let img = vm.avatarImage {
             ZStack {
                 Image(uiImage: img)
                     .resizable()
                     .scaledToFill()
-                    .blur(radius: 50)
-                    .scaleEffect(1.3)
+                    .blur(radius: 55)
+                    .scaleEffect(1.25)
                     .clipped()
 
+                // Gradient overlay at 140° (top-trailing → bottom-leading)
                 LinearGradient(
                     colors: [
-                        Color(vm.palette.primary).opacity(0.80),
-                        Color(vm.palette.secondary).opacity(0.72)
+                        Color(vm.palette.primary).opacity(0.82),
+                        Color(vm.palette.secondary).opacity(0.76)
                     ],
                     startPoint: .topTrailing, endPoint: .bottomLeading
                 )
 
-                Color.black.opacity(0.25)
+                // Dark scrim for legible text (same as album/playlist)
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.38),
+                        Color.black.opacity(0.22),
+                        Color.black.opacity(0.06)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
             }
             .ignoresSafeArea(edges: .top)
         } else {
@@ -165,18 +242,17 @@ struct ArtistDetailView: View {
 
     private var heroContent: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 90)
 
-            // Circular avatar or initial placeholder
             avatarView
-                .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
+                .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
 
-            Spacer(minLength: 14)
+            Spacer(minLength: 16)
 
             VStack(spacing: 4) {
                 Text(vm.artist.name)
                     .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(isLight ? Color.black : .white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.75)
@@ -184,12 +260,41 @@ struct ArtistDetailView: View {
                 if let count = vm.artist.albumCount, count > 0 {
                     Text("\(count) álbumes")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.75))
+                        .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.bottom, 28)
+            .padding(.bottom, 18)
+
+            playButton
+                .padding(.bottom, 28)
         }
+    }
+
+    private var playButton: some View {
+        let fillColor  = Color(vm.palette.buttonFillColor)
+        let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
+
+        return Button {
+            Task { await vm.loadAndPlay() }
+        } label: {
+            Group {
+                if vm.isLoadingPlayback {
+                    ProgressView().tint(labelColor)
+                } else {
+                    HStack(spacing: 7) {
+                        Image(systemName: "play.fill")
+                        Text("Reproducir").fontWeight(.semibold)
+                    }
+                    .font(.system(size: 15))
+                }
+            }
+            .foregroundStyle(labelColor)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            .background(fillColor, in: Capsule())
+        }
+        .disabled(vm.isLoading || vm.isLoadingPlayback || vm.albums.isEmpty)
     }
 
     @ViewBuilder
@@ -198,101 +303,353 @@ struct ArtistDetailView: View {
             Image(uiImage: img)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 130, height: 130)
+                .frame(width: avatarSize, height: avatarSize)
                 .clipShape(Circle())
         } else {
             Circle()
                 .fill(nameColor.opacity(0.35))
-                .frame(width: 130, height: 130)
+                .frame(width: avatarSize, height: avatarSize)
                 .overlay(
                     Text(String(vm.artist.name.prefix(1)).uppercased())
-                        .font(.system(size: 52, weight: .bold, design: .rounded))
+                        .font(.system(size: 64, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                 )
         }
     }
 
-    // MARK: - Discography
+    // MARK: - Content sections
 
-    private let gridColumns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
+    @ViewBuilder
+    private var contentSections: some View {
+        if vm.isLoading {
+            ProgressView()
+                .tint(isLight ? .secondary : .white)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 32)
+        } else {
+            VStack(alignment: .leading, spacing: 28) {
+                popularesSection
+                discographySection
+                collaborationsSection
+                playlistsSection
+                similarArtistsSection
+                biographySection
+            }
+            .padding(.top, 8)
+        }
+    }
 
+    // MARK: Populares (top songs)
+
+    @ViewBuilder
+    private var popularesSection: some View {
+        if !vm.topSongs.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Populares")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(isLight ? Color.black : .white)
+                    Spacer()
+                    if vm.topSongs.count > 5 {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { vm.showAllSongs.toggle() }
+                        } label: {
+                            Text(vm.showAllSongs ? "Ver menos" : "Ver más")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+
+                let visible = vm.showAllSongs ? vm.topSongs : Array(vm.topSongs.prefix(5))
+                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtist: false)
+                    .id(vm.showAllSongs)
+            }
+        }
+    }
+
+    // MARK: Álbumes (horizontal + "Ver más" grid)
+
+    @ViewBuilder
     private var discographySection: some View {
-        Group {
-            if vm.isLoading {
-                ProgressView()
-                    .tint(isLight ? .secondary : .white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 32)
-            } else if vm.albums.isEmpty {
-                Text("Sin álbumes")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 32)
-            } else {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Discografía")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(isLight ? Color.primary : .white)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
+        if !vm.albums.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                if !vm.showAllAlbums {
+                    let visibleAlbums = Array(vm.albums.prefix(horizontalLimit))
+                    let albumOverflow = vm.albums.count - visibleAlbums.count
 
-                    LazyVGrid(columns: gridColumns, spacing: 20) {
-                        ForEach(vm.albums) { album in
+                    HorizontalScrollSection(
+                        title: "Álbumes",
+                        isLight: isLight
+                    ) {
+                        ForEach(visibleAlbums) { album in
                             NavigationLink(value: album) {
-                                AlbumGridCell(album: album, isLight: isLight)
+                                AlbumHorizontalCell(album: album, isLight: isLight)
                             }
                             .buttonStyle(.plain)
                         }
+                        if albumOverflow > 0 {
+                            NavigationLink(value: SeeAllDestination.albums(title: "Álbumes", items: vm.albums)) {
+                                SeeAllCard(remaining: albumOverflow, isLight: isLight)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } action: {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { vm.showAllAlbums = true }
+                        } label: {
+                            Text("Ver más")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
+                        }
                     }
-                    .padding(.horizontal, 16)
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Álbumes")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(isLight ? Color.black : .white)
+                            Spacer()
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) { vm.showAllAlbums = false }
+                            } label: {
+                                Text("Ver menos")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
+                            }
+                        }
+                        .padding(.horizontal, 16)
+
+                        LazyVGrid(columns: gridColumns, spacing: 20) {
+                            ForEach(vm.albums) { album in
+                                NavigationLink(value: album) {
+                                    AlbumGridCell(album: album, isLight: isLight)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
                 }
             }
         }
     }
 
-    // MARK: - Sticky header
+    private let gridColumns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
-    private var stickyHeader: some View {
-        HStack(spacing: 12) {
-            avatarMini
-            Text(vm.artist.name)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(isLight ? Color.primary : .white)
-                .lineLimit(1)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .padding(.top, 48)
-        .background(
-            Color(vm.palette.stickyBgColor).opacity(0.92)
-                .background(.ultraThinMaterial)
-                .ignoresSafeArea(edges: .top)
-        )
-    }
+    // MARK: Aparece en (collaborations)
 
     @ViewBuilder
-    private var avatarMini: some View {
-        if let img = vm.avatarImage {
-            Image(uiImage: img)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 30, height: 30)
-                .clipShape(Circle())
-        } else {
-            Circle()
-                .fill(nameColor.opacity(0.5))
-                .frame(width: 30, height: 30)
-                .overlay(
-                    Text(String(vm.artist.name.prefix(1)).uppercased())
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                )
+    private var collaborationsSection: some View {
+        if !vm.collaborations.isEmpty {
+            let visible = Array(vm.collaborations.prefix(horizontalLimit))
+            let overflow = vm.collaborations.count - visible.count
+
+            HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
+                ForEach(visible) { album in
+                    NavigationLink(value: album) {
+                        AlbumHorizontalCell(album: album, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(title: "Aparece en", items: vm.collaborations)) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
+    }
+
+    // MARK: Playlists con X
+
+    @ViewBuilder
+    private var playlistsSection: some View {
+        if !vm.playlistsAreLoading && !vm.playlists.isEmpty {
+            let visible = Array(vm.playlists.prefix(horizontalLimit))
+            let overflow = vm.playlists.count - visible.count
+
+            HorizontalScrollSection(
+                title: "Playlists con \(vm.artist.name)",
+                isLight: isLight
+            ) {
+                ForEach(visible) { playlist in
+                    NavigationLink(value: playlist) {
+                        PlaylistCardView(playlist: playlist, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.playlists(title: "Playlists con \(vm.artist.name)", items: vm.playlists)) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: Fans también escuchan (similar artists)
+
+    @ViewBuilder
+    private var similarArtistsSection: some View {
+        if vm.infoIsLoading {
+            HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
+                ForEach(0..<6, id: \.self) { _ in
+                    SimilarArtistPlaceholder(isLight: isLight)
+                }
+            }
+        } else if let info = vm.info, !info.similarArtists.isEmpty {
+            let allArtists = info.similarArtists.map {
+                NavidromeArtist(id: $0.id, name: $0.name, albumCount: nil)
+            }
+            let visible = Array(allArtists.prefix(horizontalLimit))
+            let overflow = allArtists.count - visible.count
+
+            HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
+                ForEach(visible) { artist in
+                    NavigationLink(value: artist) {
+                        ArtistCardView(artist: artist, size: 120, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.artists(title: "Fans también escuchan", items: allArtists)) {
+                        SeeAllArtistCard(remaining: overflow, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: Acerca de (biography)
+
+    @ViewBuilder
+    private var biographySection: some View {
+        let cardBG: Color = isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.08)
+        let cardBorder: Color = isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.10)
+
+        if vm.infoIsLoading {
+            VStack(alignment: .leading, spacing: 14) {
+                Rectangle()
+                    .fill(cardBG)
+                    .frame(width: 160, height: 22)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(0..<4, id: \.self) { i in
+                        Rectangle()
+                            .fill(cardBG)
+                            .frame(height: 14)
+                            .frame(maxWidth: i == 3 ? 220 : .infinity, alignment: .leading)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+            }
+            .padding(20)
+            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(cardBorder, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+        } else if let bio = vm.info?.biography, !bio.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Acerca de \(vm.artist.name)")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+
+                Text(cleanBiography(bio))
+                    .font(.system(size: 15))
+                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
+                    .lineSpacing(4)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(22)
+            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(cardBorder, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+        }
+    }
+
+    /// Strip Last.fm's `<a>` tags and the trailing "Read more on Last.fm" link.
+    private func cleanBiography(_ html: String) -> String {
+        var cleaned = html
+        // Remove entire "Read more on Last.fm" anchors.
+        cleaned = cleaned.replacingOccurrences(
+            of: "<a[^>]*>[^<]*Read more on Last\\.fm[^<]*</a>",
+            with: "",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(of: "Read more on Last.fm", with: "")
+        // Strip remaining HTML tags.
+        cleaned = cleaned.replacingOccurrences(
+            of: "<[^>]+>",
+            with: "",
+            options: .regularExpression
+        )
+        // Unescape common HTML entities.
+        let entities = ["&amp;": "&", "&quot;": "\"", "&#39;": "'", "&lt;": "<", "&gt;": ">"]
+        for (k, v) in entities { cleaned = cleaned.replacingOccurrences(of: k, with: v) }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-// MARK: - Album grid cell
+// MARK: - Album cells
+
+private struct AlbumHorizontalCell: View {
+    let album: NavidromeAlbum
+    let isLight: Bool
+    private let size: CGFloat = 150
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            AsyncImage(url: NavidromeService.shared.coverURL(id: album.coverArt, size: 300)) { phase in
+                switch phase {
+                case .success(let img): img.resizable().scaledToFill()
+                default: coverPlaceholder
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+
+            HStack(spacing: 5) {
+                Text(album.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+
+                if album.isExplicit {
+                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.55))
+                }
+            }
+            .frame(width: size, alignment: .leading)
+
+            if let year = album.year {
+                Text(String(year))
+                    .font(.caption)
+                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55))
+                    .frame(width: size, alignment: .leading)
+            }
+        }
+    }
+
+    private var coverPlaceholder: some View {
+        ZStack {
+            Color(.tertiarySystemFill)
+            Image(systemName: "music.note")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
 
 private struct AlbumGridCell: View {
     let album: NavidromeAlbum
@@ -316,16 +673,37 @@ private struct AlbumGridCell: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
 
-            Text(album.name)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isLight ? Color.primary : .white)
-                .lineLimit(2)
+            HStack(spacing: 5) {
+                Text(album.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+
+                if album.isExplicit {
+                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.55))
+                }
+            }
 
             if let year = album.year {
                 Text(String(year))
                     .font(.caption)
-                    .foregroundStyle(isLight ? Color.secondary : Color.white.opacity(0.55))
+                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55))
             }
+        }
+    }
+}
+
+// MARK: - Similar artist placeholder (loading skeleton)
+
+private struct SimilarArtistPlaceholder: View {
+    let isLight: Bool
+    private let size: CGFloat = 120
+    private var bg: Color { isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10) }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Circle().fill(bg).frame(width: size, height: size)
+            Rectangle().fill(bg).frame(width: 80, height: 10).clipShape(RoundedRectangle(cornerRadius: 4))
         }
     }
 }

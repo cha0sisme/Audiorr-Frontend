@@ -132,7 +132,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color(.systemBackground))
             .onChange(of: vm.query) { _, newValue in
                 vm.onQueryChange(newValue)
             }
@@ -223,7 +223,7 @@ struct SearchView: View {
                     }
                 }
             }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 16)
         }
     }
@@ -309,7 +309,7 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 content()
             }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
             .padding(.horizontal, 16)
         }
     }

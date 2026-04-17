@@ -9,6 +9,7 @@ final class AlbumDetailViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
+    @Published var recordLabels: [RecordLabel] = []
 
     private let api = NavidromeService.shared
     let initialAlbum: NavidromeAlbum
@@ -30,8 +31,9 @@ final class AlbumDetailViewModel: ObservableObject {
 
         let (songsResult, image) = await (try? songsTask, imageTask)
 
-        if let (al, songs) = songsResult {
+        if let (al, songs, labels) = songsResult {
             self.songs = songs
+            self.recordLabels = labels
             if let al { self.album = al }
         }
 
@@ -58,7 +60,7 @@ struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
 
-    private let heroHeight: CGFloat = 380
+    private let heroHeight: CGFloat = 440
 
     init(album: NavidromeAlbum) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -92,47 +94,75 @@ struct AlbumDetailView: View {
                     songListSection
                     Spacer(minLength: 120) // mini-player clearance
                 }
+                .frame(maxWidth: .infinity)
             }
             .ignoresSafeArea(edges: .top)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-
-            // Sticky header overlay
-            stickyHeader
-                .opacity(stickyOpacity)
-                .animation(.linear(duration: 0.15), value: stickyOpacity)
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(vm.displayAlbum.name)
+                    .font(.headline)
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+                    .opacity(stickyOpacity)
+            }
+        }
     }
 
     // MARK: - Hero
 
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
-            heroBackground
-                .scaleEffect(overscrollScale, anchor: .top)
-                .frame(height: heroHeight)
-                .mask(alignment: .top) {
+            if vm.palette.isSolid {
+                // Solid cover: flat primary fills the hero, then a short gradient
+                // at the very bottom blends into pageBg. No mask = no colour
+                // clash around the cover art.
+                ZStack(alignment: .bottom) {
+                    Color(vm.palette.primary)
+                        .scaleEffect(overscrollScale, anchor: .top)
+                        .ignoresSafeArea(edges: .top)
+
                     LinearGradient(
-                        stops: [
-                            .init(color: .black,               location: 0.00),
-                            .init(color: .black,               location: 0.60),
-                            .init(color: .black.opacity(0.85), location: 0.76),
-                            .init(color: .black.opacity(0.40), location: 0.90),
-                            .init(color: .clear,               location: 1.00)
+                        colors: [
+                            Color(vm.palette.primary),
+                            pageBg
                         ],
-                        startPoint: .top, endPoint: .bottom
+                        startPoint: .top,
+                        endPoint: .bottom
                     )
+                    .frame(height: 80)
                 }
-                .clipped()
+            } else {
+                heroBackground
+                    .scaleEffect(overscrollScale, anchor: .top)
+                    .frame(height: heroHeight)
+                    .mask(alignment: .top) {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black,               location: 0.00),
+                                .init(color: .black,               location: 0.60),
+                                .init(color: .black.opacity(0.85), location: 0.76),
+                                .init(color: .black.opacity(0.40), location: 0.90),
+                                .init(color: .clear,               location: 1.00)
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    }
+                    .clipped()
+            }
 
             heroContent
                 .opacity(heroOpacity)
         }
+        .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
+        .clipped()
     }
 
     @ViewBuilder
@@ -181,31 +211,50 @@ struct AlbumDetailView: View {
 
     private var heroContent: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 100)
 
-            // Cover art — centered
+            // Cover art — centered.
+            // When the cover is solid + light (white, cream, warm pastels), drop the
+            // shadow so the artwork blends seamlessly into the background.
             coverArtImage
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
+                .shadow(
+                    color: vm.palette.isSolid
+                        ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
+                        : .black.opacity(0.55),
+                    radius: vm.palette.isSolid ? 8 : 22,
+                    x: 0,
+                    y: vm.palette.isSolid ? 2 : 8
+                )
 
             Spacer(minLength: 20)
 
-            // Title + metadata — left aligned
-            VStack(alignment: .leading, spacing: 5) {
-                Text(vm.displayAlbum.name)
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(isLight ? Color.primary : .white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.75)
+            // Title + metadata — centered
+            VStack(alignment: .center, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(vm.displayAlbum.name)
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(isLight ? Color.black : .white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.75)
+
+                    if vm.displayAlbum.isExplicit {
+                        ExplicitBadge(
+                            color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75),
+                            size: 18
+                        )
+                    }
+                }
 
                 metadataLine
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
 
-            // Play button — centered
-            playButton
+            // Play + shuffle buttons — centered
+            playButtons
                 .padding(.top, 18)
                 .padding(.bottom, 28)
         }
@@ -230,7 +279,7 @@ struct AlbumDetailView: View {
     }
 
     private var metadataLine: some View {
-        let textColor: Color = isLight ? .secondary : Color.white.opacity(0.75)
+        let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
         let album = vm.displayAlbum
         var parts: [String] = [album.artist]
         if let year = album.year  { parts.append(String(year)) }
@@ -242,24 +291,37 @@ struct AlbumDetailView: View {
             .lineLimit(1)
     }
 
-    private var playButton: some View {
+    private var playButtons: some View {
         let fillColor  = Color(vm.palette.buttonFillColor)
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
 
-        return Button {
-            guard !vm.songs.isEmpty else { return }
-            PlayerService.shared.playPlaylist(vm.songs)
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "play.fill")
-                Text("Reproducir")
-                    .fontWeight(.semibold)
+        return HStack(spacing: 14) {
+            Button {
+                guard !vm.songs.isEmpty else { return }
+                PlayerService.shared.playPlaylist(vm.songs)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "play.fill")
+                    Text("Reproducir")
+                        .fontWeight(.semibold)
+                }
+                .font(.system(size: 15))
+                .foregroundStyle(labelColor)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 10)
+                .background(fillColor, in: Capsule())
             }
-            .font(.system(size: 15))
-            .foregroundStyle(labelColor)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 10)
-            .background(fillColor, in: Capsule())
+
+            Button {
+                guard !vm.songs.isEmpty else { return }
+                PlayerService.shared.playPlaylist(vm.songs.shuffled())
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
+            }
         }
         .disabled(vm.isLoading)
     }
@@ -274,123 +336,21 @@ struct AlbumDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(vm.songs.enumerated()), id: \.element.id) { idx, song in
-                        Button {
-                            PlayerService.shared.playPlaylist(vm.songs, startingAt: idx)
-                        } label: {
-                            AlbumSongRow(song: song, index: idx + 1, palette: vm.palette)
-                        }
-                        .buttonStyle(.plain)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false)
 
-                        if idx < vm.songs.count - 1 {
-                            Divider()
-                                .background(isLight
-                                    ? Color.black.opacity(0.07)
-                                    : Color.white.opacity(0.07))
-                                .padding(.leading, 60)
-                        }
-                    }
+                if !vm.recordLabels.isEmpty {
+                    let year = String(vm.displayAlbum.year ?? Calendar.current.component(.year, from: Date()))
+                    let labels = vm.recordLabels.map(\.name).joined(separator: ", ")
+                    Text("© \(year) \(labels)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
                 }
-                .padding(.horizontal, 4)
-                .padding(.top, 4)
             }
         }
     }
 
-    // MARK: - Sticky header
-
-    private var stickyHeader: some View {
-        HStack(spacing: 12) {
-            // Mini cover
-            if let img = vm.coverImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 34, height: 34)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(vm.displayAlbum.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isLight ? Color.primary : .white)
-                    .lineLimit(1)
-                Text(vm.displayAlbum.artist)
-                    .font(.system(size: 11))
-                    .foregroundStyle(isLight ? Color.secondary : Color.white.opacity(0.65))
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button {
-                guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs)
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(isLight ? Color.primary : .white)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .padding(.top, 48)  // below status bar / Dynamic Island
-        .background(
-            ZStack {
-                Color(vm.palette.stickyBgColor).opacity(0.92)
-            }
-            .background(.ultraThinMaterial)
-            .ignoresSafeArea(edges: .top)
-        )
-    }
-}
-
-// MARK: - Song row
-
-private struct AlbumSongRow: View {
-    let song: NavidromeSong
-    let index: Int
-    let palette: AlbumPalette
-
-    private var isLight: Bool { palette.isPrimaryLight }
-    private var primaryText:   Color { isLight ? .primary            : .white }
-    private var secondaryText: Color { isLight ? .secondary          : Color.white.opacity(0.55) }
-    private var tertiaryText:  Color { isLight ? Color(.tertiaryLabel) : Color.white.opacity(0.40) }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(index)")
-                .font(.system(size: 14).monospacedDigit())
-                .foregroundStyle(tertiaryText)
-                .frame(width: 28, alignment: .trailing)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(primaryText)
-                    .lineLimit(1)
-                Text(song.artist)
-                    .font(.caption)
-                    .foregroundStyle(secondaryText)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            if let dur = song.duration, dur > 0 {
-                Text(formatSeconds(dur))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(tertiaryText)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-    }
-
-    private func formatSeconds(_ s: Double) -> String {
-        let t = Int(s)
-        return String(format: "%d:%02d", t / 60, t % 60)
-    }
 }

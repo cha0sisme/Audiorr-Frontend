@@ -67,7 +67,7 @@ struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
 
-    private let heroHeight: CGFloat = 380
+    private let heroHeight: CGFloat = 440
 
     init(playlist: NavidromePlaylist) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
@@ -95,19 +95,25 @@ struct PlaylistDetailView: View {
                     songListSection
                     Spacer(minLength: 120)
                 }
+                .frame(maxWidth: .infinity)
             }
             .ignoresSafeArea(edges: .top)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-
-            stickyHeader
-                .opacity(stickyOpacity)
-                .animation(.linear(duration: 0.15), value: stickyOpacity)
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .tint(isLight ? .accentColor : .white)
         .task { await vm.load() }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(vm.displayPlaylist.name)
+                    .font(.headline)
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+                    .opacity(stickyOpacity)
+            }
+        }
     }
 
     // MARK: - Hero
@@ -136,7 +142,9 @@ struct PlaylistDetailView: View {
             heroContent
                 .opacity(heroOpacity)
         }
+        .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
+        .clipped()
     }
 
     @ViewBuilder
@@ -181,7 +189,7 @@ struct PlaylistDetailView: View {
 
     private var heroContent: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 100)
 
             // Cover art — centered
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
@@ -191,17 +199,18 @@ struct PlaylistDetailView: View {
 
             Spacer(minLength: 20)
 
-            // Title + metadata — left aligned
-            VStack(alignment: .leading, spacing: 5) {
+            // Title + metadata — centered
+            VStack(alignment: .center, spacing: 5) {
                 Text(vm.displayPlaylist.name)
                     .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(isLight ? Color.primary : .white)
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.75)
 
                 metadataLine
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
 
             // Play button — centered
@@ -213,7 +222,7 @@ struct PlaylistDetailView: View {
     }
 
     private var metadataLine: some View {
-        let textColor: Color = isLight ? .secondary : Color.white.opacity(0.75)
+        let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
         let pl = vm.displayPlaylist
         var parts: [String] = []
         if pl.songCount > 0 { parts.append("\(pl.songCount) canciones") }
@@ -258,69 +267,9 @@ struct PlaylistDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(vm.songs.enumerated()), id: \.element.id) { idx, song in
-                        Button {
-                            PlayerService.shared.playPlaylist(vm.songs, startingAt: idx)
-                        } label: {
-                            PlaylistSongRow(song: song, index: idx + 1, palette: vm.palette)
-                        }
-                        .buttonStyle(.plain)
-
-                        if idx < vm.songs.count - 1 {
-                            Divider()
-                                .background(isLight
-                                    ? Color.black.opacity(0.07)
-                                    : Color.white.opacity(0.07))
-                                .padding(.leading, 60)
-                        }
-                    }
-                }
-                .padding(.horizontal, 4)
-                .padding(.top, 4)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true)
             }
         }
-    }
-
-    // MARK: - Sticky header
-
-    private var stickyHeader: some View {
-        HStack(spacing: 12) {
-            PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(vm.displayPlaylist.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isLight ? Color.primary : .white)
-                    .lineLimit(1)
-                Text("\(vm.displayPlaylist.songCount) canciones")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isLight ? Color.secondary : Color.white.opacity(0.65))
-            }
-
-            Spacer()
-
-            Button {
-                guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs)
-            } label: {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(isLight ? Color.primary : .white)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .padding(.top, 48)
-        .background(
-            ZStack {
-                Color(vm.palette.stickyBgColor).opacity(0.92)
-            }
-            .background(.ultraThinMaterial)
-            .ignoresSafeArea(edges: .top)
-        )
     }
 
     // MARK: - Helpers
@@ -329,55 +278,6 @@ struct PlaylistDetailView: View {
         let h = seconds / 3600
         let m = (seconds % 3600) / 60
         return h > 0 ? "\(h) h \(m) min" : "\(m) min"
-    }
-}
-
-// MARK: - Song row
-
-private struct PlaylistSongRow: View {
-    let song: NavidromeSong
-    let index: Int
-    let palette: AlbumPalette
-
-    private var isLight: Bool { palette.isPrimaryLight }
-    private var primaryText:   Color { isLight ? .primary              : .white }
-    private var secondaryText: Color { isLight ? .secondary            : Color.white.opacity(0.55) }
-    private var tertiaryText:  Color { isLight ? Color(.tertiaryLabel) : Color.white.opacity(0.40) }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(index)")
-                .font(.system(size: 14).monospacedDigit())
-                .foregroundStyle(tertiaryText)
-                .frame(width: 28, alignment: .trailing)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(primaryText)
-                    .lineLimit(1)
-                Text(song.artist)
-                    .font(.caption)
-                    .foregroundStyle(secondaryText)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            if let dur = song.duration, dur > 0 {
-                Text(formatSeconds(dur))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(tertiaryText)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-    }
-
-    private func formatSeconds(_ s: Double) -> String {
-        let t = Int(s)
-        return String(format: "%d:%02d", t / 60, t % 60)
     }
 }
 

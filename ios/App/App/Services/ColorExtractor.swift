@@ -125,21 +125,28 @@ enum ColorExtractor {
 
     /// Mirrors JS detectSolidColor: samples border ring (12% of shorter side),
     /// quantises into 64-step buckets, declares solid when ≥55% agree.
+    /// Returns the **true average** colour of the winning bucket's pixels
+    /// (not the quantised centroid) so whites stay white, creams stay cream, etc.
     private static func detectSolid(px: [UInt8], w: Int, h: Int) -> (UIColor, UIColor)? {
         let depth = max(3, Int(CGFloat(min(w, h)) * 0.12))
 
         struct Bucket: Hashable { let r, g, b: UInt8 }
         var counts: [Bucket: Int] = [:]
+        // Accumulate real RGB sums per bucket so we can average later.
+        var sums: [Bucket: (r: UInt64, g: UInt64, b: UInt64)] = [:]
         var total = 0
 
         func add(_ x: Int, _ y: Int) {
             let o = (y * w + x) * 4
-            let b = Bucket(
-                r: UInt8(UInt16(px[o])   / 64 * 64),
-                g: UInt8(UInt16(px[o+1]) / 64 * 64),
-                b: UInt8(UInt16(px[o+2]) / 64 * 64)
+            let pr = px[o], pg = px[o+1], pb = px[o+2]
+            let bk = Bucket(
+                r: UInt8(UInt16(pr) / 64 * 64),
+                g: UInt8(UInt16(pg) / 64 * 64),
+                b: UInt8(UInt16(pb) / 64 * 64)
             )
-            counts[b, default: 0] += 1
+            counts[bk, default: 0] += 1
+            let prev = sums[bk, default: (0, 0, 0)]
+            sums[bk] = (prev.r + UInt64(pr), prev.g + UInt64(pg), prev.b + UInt64(pb))
             total += 1
         }
 
@@ -155,9 +162,12 @@ enum ColorExtractor {
               CGFloat(dominant.value) / CGFloat(total) >= 0.55
         else { return nil }
 
-        let bgR = CGFloat(dominant.key.r) / 255
-        let bgG = CGFloat(dominant.key.g) / 255
-        let bgB = CGFloat(dominant.key.b) / 255
+        // Use the real average of pixels that fell into the dominant bucket.
+        let n = UInt64(dominant.value)
+        let s = sums[dominant.key]!
+        let bgR = CGFloat(s.r / n) / 255
+        let bgG = CGFloat(s.g / n) / 255
+        let bgB = CGFloat(s.b / n) / 255
         let bg  = UIColor(red: bgR, green: bgG, blue: bgB, alpha: 1)
         let acc = vibrantAccent(px: px, w: w, h: h, exclude: (bgR, bgG, bgB))
         return (bg, acc)

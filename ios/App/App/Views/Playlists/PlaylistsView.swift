@@ -72,57 +72,103 @@ final class PlaylistsViewModel: ObservableObject {
 
 struct PlaylistsView: View {
     @StateObject private var vm = PlaylistsViewModel()
-    @State private var showLogin = false
+    @State private var showSettings = false
+    @State private var scrollY: CGFloat = 0
+
+    private let collapseThreshold: CGFloat = 44
+
+    private var stickyOpacity: CGFloat {
+        min(max((scrollY - collapseThreshold * 0.4) / (collapseThreshold * 0.6), 0), 1)
+    }
+    private var largeTitleOpacity: CGFloat {
+        1 - min(max(scrollY / collapseThreshold, 0), 1)
+    }
 
     var body: some View {
         NavigationStack {
-            content
-                .navigationTitle("Playlists")
-                .background(Color(.systemGroupedBackground))
-                .task { await vm.load() }
-                .refreshable { await vm.load() }
-                .navigationDestination(for: NavidromePlaylist.self) { playlist in
-                    PlaylistDetailView(playlist: playlist)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    largeHeader
+                    content
                 }
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            showLogin = true
-                        } label: {
-                            Image(systemName: "server.rack")
-                        }
+            }
+            .ignoresSafeArea(edges: .top)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+                scrollY = y
+            }
+            .background(Color(.systemBackground))
+            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
+            .task { await vm.load() }
+            .refreshable { await vm.load() }
+            .navigationDestination(for: NavidromePlaylist.self) { playlist in
+                PlaylistDetailView(playlist: playlist)
+            }
+            .navigationDestination(isPresented: $showSettings) {
+                SettingsView()
+            }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Playlists")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .opacity(stickyOpacity)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.secondary)
                     }
+                    .opacity(stickyOpacity)
                 }
-                .sheet(isPresented: $showLogin) {
-                    LoginView {
-                        Task { await vm.load() }
-                    }
-                }
+            }
         }
+    }
+
+    // MARK: - Large title header
+
+    private var largeHeader: some View {
+        HStack(alignment: .bottom) {
+            Text("Playlists")
+                .font(.system(size: 34, weight: .bold))
+            Spacer()
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 20)
+        .padding(.top, UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.top ?? 59)
+        .opacity(largeTitleOpacity)
     }
 
     @ViewBuilder
     private var content: some View {
         if vm.isLoading {
             ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 48)
         } else if !vm.isConfigured {
             notConfiguredView
+        } else if vm.playlists.isEmpty {
+            ContentUnavailableView(
+                "Sin playlists",
+                systemImage: "music.note.list",
+                description: Text("Crea una playlist en Navidrome para verla aqui.")
+            )
+            .padding(.top, 40)
+        } else if vm.hasBackend {
+            sectionsContent
         } else {
-            ScrollView {
-                if vm.playlists.isEmpty {
-                    ContentUnavailableView(
-                        "Sin playlists",
-                        systemImage: "music.note.list",
-                        description: Text("Crea una playlist en Navidrome para verla aquí.")
-                    )
-                    .padding(.top, 40)
-                } else if vm.hasBackend {
-                    sectionsContent
-                } else {
-                    gridContent
-                }
-            }
+            gridContent
         }
     }
 
@@ -143,7 +189,7 @@ struct PlaylistsView: View {
                     .multilineTextAlignment(.center)
             }
             Button("Conectar a Navidrome") {
-                showLogin = true
+                showSettings = true
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -159,11 +205,17 @@ struct PlaylistsView: View {
             ForEach(vm.sections) { section in
                 let items = vm.playlistsForSection(section)
                 if !items.isEmpty {
-                    HorizontalPlaylistSection(title: section.title, playlists: items)
+                    HorizontalScrollSection(title: section.title) {
+                        ForEach(items) { playlist in
+                            NavigationLink(value: playlist) {
+                                PlaylistCardView(playlist: playlist, size: 140)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
         }
-        .padding(.vertical, 8)
         .padding(.bottom, 100)
     }
 
@@ -178,86 +230,12 @@ struct PlaylistsView: View {
         LazyVGrid(columns: gridColumns, spacing: 20) {
             ForEach(vm.playlists) { playlist in
                 NavigationLink(value: playlist) {
-                    PlaylistGridCell(playlist: playlist)
+                    PlaylistCardView(playlist: playlist, axis: .grid)
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(16)
         .padding(.bottom, 100)
-    }
-}
-
-// MARK: - Horizontal section
-
-private struct HorizontalPlaylistSection: View {
-    let title: String
-    let playlists: [NavidromePlaylist]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.system(size: 20, weight: .bold))
-                .padding(.horizontal, 16)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(playlists) { playlist in
-                        NavigationLink(value: playlist) {
-                            PlaylistHorizontalCell(playlist: playlist)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 4)
-            }
-        }
-    }
-}
-
-// MARK: - Horizontal cell
-
-private struct PlaylistHorizontalCell: View {
-    let playlist: NavidromePlaylist
-    private let w: CGFloat = 140
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            PlaylistCoverView(playlist: playlist, size: w)
-
-            Text(playlist.name)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .frame(width: w, alignment: .leading)
-
-            Text("\(playlist.songCount) canciones")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: w, alignment: .leading)
-        }
-    }
-}
-
-// MARK: - Grid cell
-
-private struct PlaylistGridCell: View {
-    let playlist: NavidromePlaylist
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            PlaylistCoverView(playlist: playlist, size: .infinity)
-                .aspectRatio(1, contentMode: .fit)
-
-            Text(playlist.name)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-
-            Text("\(playlist.songCount) canciones")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
     }
 }

@@ -18,8 +18,15 @@
 		342286CA2F90DC2400785736 /* ColorExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286C92F90DC2400785736 /* ColorExtractor.swift */; };
 		342286CD2F90DC3200785736 /* AlbumDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286CB2F90DC3200785736 /* AlbumDetailView.swift */; };
 		342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286CE2F910FCA00785736 /* ArtistDetailView.swift */; };
+		3400AA012FA1000000000001 /* ArtistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400AA002FA1000000000001 /* ArtistsView.swift */; };
 		342286D12F920A0000785736 /* CredentialsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D02F920A0000785736 /* CredentialsStore.swift */; };
+		342286D32F91756800785736 /* SongListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D12F91756800785736 /* SongListView.swift */; };
+		3499AA022F91756800785736 /* HorizontalScrollSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA012F91756800785736 /* HorizontalScrollSection.swift */; };
+		3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA032F91756800785736 /* SeeAllGridView.swift */; };
+		3499AA062F91756800785736 /* PlaylistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA052F91756800785736 /* PlaylistCardView.swift */; };
+		3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA072FA3000000000001 /* ArtistCardView.swift */; };
 		342286D32F920B0000785736 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D22F920B0000785736 /* LoginView.swift */; };
+		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
@@ -51,8 +58,15 @@
 		342286C92F90DC2400785736 /* ColorExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorExtractor.swift; sourceTree = "<group>"; };
 		342286CB2F90DC3200785736 /* AlbumDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumDetailView.swift; sourceTree = "<group>"; };
 		342286CE2F910FCA00785736 /* ArtistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistDetailView.swift; sourceTree = "<group>"; };
+		3400AA002FA1000000000001 /* ArtistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistsView.swift; sourceTree = "<group>"; };
 		342286D02F920A0000785736 /* CredentialsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialsStore.swift; sourceTree = "<group>"; };
+		342286D12F91756800785736 /* SongListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongListView.swift; sourceTree = "<group>"; };
+		3499AA012F91756800785736 /* HorizontalScrollSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HorizontalScrollSection.swift; sourceTree = "<group>"; };
+		3499AA032F91756800785736 /* SeeAllGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeeAllGridView.swift; sourceTree = "<group>"; };
+		3499AA052F91756800785736 /* PlaylistCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistCardView.swift; sourceTree = "<group>"; };
+		3499AA072FA3000000000001 /* ArtistCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistCardView.swift; sourceTree = "<group>"; };
 		342286D22F920B0000785736 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		3400BB002FA2000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		349110652F7BA76900342F6B /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -103,6 +117,7 @@
 				342286CC2F90DC3200785736 /* Albums */,
 				342286CF2F910FCA00785736 /* Artists */,
 				342286D42F920B0000785736 /* Settings */,
+				342286D22F91756800785736 /* Shared */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -117,14 +132,6 @@
 				342286D02F920A0000785736 /* CredentialsStore.swift */,
 			);
 			path = Services;
-			sourceTree = "<group>";
-		};
-		342286D42F920B0000785736 /* Settings */ = {
-			isa = PBXGroup;
-			children = (
-				342286D22F920B0000785736 /* LoginView.swift */,
-			);
-			path = Settings;
 			sourceTree = "<group>";
 		};
 		342286BE2F90CB2800785736 /* Models */ = {
@@ -156,8 +163,30 @@
 			isa = PBXGroup;
 			children = (
 				342286CE2F910FCA00785736 /* ArtistDetailView.swift */,
+				3400AA002FA1000000000001 /* ArtistsView.swift */,
 			);
 			path = Artists;
+			sourceTree = "<group>";
+		};
+		342286D22F91756800785736 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				342286D12F91756800785736 /* SongListView.swift */,
+				3499AA012F91756800785736 /* HorizontalScrollSection.swift */,
+				3499AA032F91756800785736 /* SeeAllGridView.swift */,
+				3499AA052F91756800785736 /* PlaylistCardView.swift */,
+				3499AA072FA3000000000001 /* ArtistCardView.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		342286D42F920B0000785736 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				342286D22F920B0000785736 /* LoginView.swift */,
+				3400BB002FA2000000000001 /* SettingsView.swift */,
+			);
+			path = Settings;
 			sourceTree = "<group>";
 		};
 		504EC2FB1FED79650016851F = {
@@ -304,9 +333,16 @@
 				AA11BB22CC33DD44EE55FF14 /* NativeAudioPlugin.swift in Sources */,
 				AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */,
 				342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */,
+				3400AA012FA1000000000001 /* ArtistsView.swift in Sources */,
 				342286D12F920A0000785736 /* CredentialsStore.swift in Sources */,
 				342286D32F920B0000785736 /* LoginView.swift in Sources */,
+				3400BB012FA2000000000001 /* SettingsView.swift in Sources */,
 				342286CD2F90DC3200785736 /* AlbumDetailView.swift in Sources */,
+				342286D32F91756800785736 /* SongListView.swift in Sources */,
+				3499AA022F91756800785736 /* HorizontalScrollSection.swift in Sources */,
+				3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */,
+				3499AA062F91756800785736 /* PlaylistCardView.swift in Sources */,
+				3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */,
 				342286C32F90D45200785736 /* PlayerService.swift in Sources */,
 				AA11BB22CC33DD44EE55FF18 /* AudiorrBridgeViewController.swift in Sources */,
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,

@@ -14,6 +14,7 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     let id: String
     let title: String
     let artist: String
+    let artistId: String?
     let album: String
     let albumId: String?
     let coverArt: String?
@@ -21,6 +22,9 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     let track: Int?
     let year: Int?
     let genre: String?
+    let explicitStatus: String?
+
+    var isExplicit: Bool { explicitStatus == "explicit" }
 }
 
 struct NavidromeAlbum: Identifiable, Decodable, Hashable {
@@ -32,6 +36,9 @@ struct NavidromeAlbum: Identifiable, Decodable, Hashable {
     let duration: Int?
     let year: Int?
     let genre: String?
+    let explicitStatus: String?
+
+    var isExplicit: Bool { explicitStatus == "explicit" }
 }
 
 struct NavidromeArtist: Identifiable, Decodable, Hashable {
@@ -126,6 +133,10 @@ struct ArtistDetailResponse: Decodable {
     }
 }
 
+struct RecordLabel: Decodable, Hashable {
+    let name: String
+}
+
 struct AlbumDetailResponse: Decodable {
     let status: String
     let album: AlbumDetailPayload?
@@ -141,6 +152,35 @@ struct AlbumDetailResponse: Decodable {
         let duration: Int?
         let songCount: Int?
         let song: [NavidromeSong]?
+        let recordLabels: [RecordLabel]
+        let explicitStatus: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, artist, artistId, coverArt, year, genre, duration, songCount, song, recordLabels, explicitStatus
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id             = try c.decode(String.self, forKey: .id)
+            name           = try c.decode(String.self, forKey: .name)
+            artist         = try c.decode(String.self, forKey: .artist)
+            artistId       = try c.decodeIfPresent(String.self, forKey: .artistId)
+            coverArt       = try c.decodeIfPresent(String.self, forKey: .coverArt)
+            year           = try c.decodeIfPresent(Int.self, forKey: .year)
+            genre          = try c.decodeIfPresent(String.self, forKey: .genre)
+            duration       = try c.decodeIfPresent(Int.self, forKey: .duration)
+            songCount      = try c.decodeIfPresent(Int.self, forKey: .songCount)
+            song           = try c.decodeIfPresent([NavidromeSong].self, forKey: .song)
+            explicitStatus = try c.decodeIfPresent(String.self, forKey: .explicitStatus)
+
+            if let arr = try? c.decode([RecordLabel].self, forKey: .recordLabels) {
+                recordLabels = arr
+            } else if let single = try? c.decode(RecordLabel.self, forKey: .recordLabels) {
+                recordLabels = [single]
+            } else {
+                recordLabels = []
+            }
+        }
     }
 }
 
@@ -152,6 +192,132 @@ struct ArtistInfoResponse: Decodable {
         let largeImageUrl: String?
         let mediumImageUrl: String?
         let smallImageUrl: String?
+        let biography: String?
+        /// Subsonic returns this as an array when multiple, as a single object
+        /// when just one — so we decode via `ArrayOrSingle` to accept both shapes.
+        let similarArtist: [SimilarArtist]
+
+        private enum CodingKeys: String, CodingKey {
+            case largeImageUrl, mediumImageUrl, smallImageUrl, biography, similarArtist
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            largeImageUrl  = try c.decodeIfPresent(String.self, forKey: .largeImageUrl)
+            mediumImageUrl = try c.decodeIfPresent(String.self, forKey: .mediumImageUrl)
+            smallImageUrl  = try c.decodeIfPresent(String.self, forKey: .smallImageUrl)
+            biography      = try c.decodeIfPresent(String.self, forKey: .biography)
+
+            if let arr = try? c.decode([SimilarArtist].self, forKey: .similarArtist) {
+                similarArtist = arr
+            } else if let single = try? c.decode(SimilarArtist.self, forKey: .similarArtist) {
+                similarArtist = [single]
+            } else {
+                similarArtist = []
+            }
+        }
+    }
+}
+
+struct SimilarArtist: Identifiable, Decodable, Hashable {
+    let id: String
+    let name: String
+}
+
+/// Full artist info — biography + similar artists.
+struct ArtistInfo: Hashable {
+    let biography: String
+    let similarArtists: [SimilarArtist]
+}
+
+// MARK: - getTopSongs response
+
+struct TopSongsResponse: Decodable {
+    let status: String
+    let topSongs: TopSongsContainer?
+
+    struct TopSongsContainer: Decodable {
+        let song: [NavidromeSong]
+
+        private enum CodingKeys: String, CodingKey { case song }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let arr = try? c.decode([NavidromeSong].self, forKey: .song) {
+                song = arr
+            } else if let single = try? c.decode(NavidromeSong.self, forKey: .song) {
+                song = [single]
+            } else {
+                song = []
+            }
+        }
+    }
+}
+
+// MARK: - getArtists response (Subsonic getArtists.view)
+
+struct ArtistsResponse: Decodable {
+    let status: String
+    let artists: ArtistsIndex?
+
+    struct ArtistsIndex: Decodable {
+        let index: [ArtistIndexEntry]?
+
+        private enum CodingKeys: String, CodingKey { case index }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let arr = try? c.decode([ArtistIndexEntry].self, forKey: .index) {
+                index = arr
+            } else if let single = try? c.decode(ArtistIndexEntry.self, forKey: .index) {
+                index = [single]
+            } else {
+                index = nil
+            }
+        }
+    }
+
+    struct ArtistIndexEntry: Decodable {
+        let name: String
+        let artist: [NavidromeArtist]
+
+        private enum CodingKeys: String, CodingKey { case name, artist }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            if let arr = try? c.decode([NavidromeArtist].self, forKey: .artist) {
+                artist = arr
+            } else if let single = try? c.decode(NavidromeArtist.self, forKey: .artist) {
+                artist = [single]
+            } else {
+                artist = []
+            }
+        }
+    }
+}
+
+// MARK: - getAlbumList2 response
+
+struct AlbumListResponse: Decodable {
+    let status: String
+    let albumList2: AlbumList2?
+
+    struct AlbumList2: Decodable {
+        let album: [NavidromeAlbum]?
+
+        private enum CodingKeys: String, CodingKey { case album }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let arr = try? c.decode([NavidromeAlbum].self, forKey: .album) {
+                album = arr
+            } else if let single = try? c.decode(NavidromeAlbum.self, forKey: .album) {
+                album = [single]
+            } else {
+                album = nil
+            }
+        }
     }
 }
 

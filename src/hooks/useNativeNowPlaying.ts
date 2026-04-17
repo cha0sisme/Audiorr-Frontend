@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { usePlayerState, usePlayerProgress, usePlayerActions } from '../contexts/PlayerContext'
 import { nativeNowPlaying, isNative } from '../services/nativeNowPlaying'
-import { navidromeApi } from '../services/navidromeApi'
+import { navidromeApi, type Song } from '../services/navidromeApi'
 import { useConnect } from './useConnect'
 import { useTheme } from '../contexts/ThemeContext'
 import { useHeroPresence } from '../contexts/HeroPresenceContext'
@@ -167,6 +167,41 @@ export function useNativeNowPlaying() {
 
     window.addEventListener('_nativeReady', handleNativeReady)
     return () => window.removeEventListener('_nativeReady', handleNativeReady)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative])
+
+  // Canción reproducida desde una vista SwiftUI nativa (SearchView, etc.)
+  // Swift llama a AudioEngineManager directamente y despacha este evento
+  // para que React actualice su PlayerContext (mini-player, cola, etc.)
+  useEffect(() => {
+    if (!isNative) return
+    const handle = (e: Event) => {
+      const d = (e as CustomEvent).detail as {
+        id: string; title: string; artist: string; album: string
+        albumId: string; coverArt: string; duration: number; url: string
+      }
+      playerActions.playSong({
+        id: d.id, title: d.title, artist: d.artist,
+        album: d.album, albumId: d.albumId, coverArt: d.coverArt,
+        duration: d.duration, path: d.url,
+      })
+    }
+    window.addEventListener('_swiftPlaySong', handle)
+    return () => window.removeEventListener('_swiftPlaySong', handle)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNative])
+
+  // Playlist reproducida desde una vista SwiftUI nativa
+  useEffect(() => {
+    if (!isNative) return
+    const handle = (e: Event) => {
+      const d = (e as CustomEvent).detail as { songs: Song[]; startIndex: number }
+      if (!d.songs?.length) return
+      const startSong = d.songs[d.startIndex] ?? d.songs[0]
+      playerActions.playPlaylistFromSong(d.songs, startSong)
+    }
+    window.addEventListener('_swiftPlayPlaylist', handle)
+    return () => window.removeEventListener('_swiftPlayPlaylist', handle)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNative])
 

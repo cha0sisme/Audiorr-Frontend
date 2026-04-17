@@ -83,6 +83,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         // conectado a CarPlay al arrancar la app)
         configureIOBufferForRoute()
 
+        // Restore persisted theme preference
+        if UserDefaults.standard.object(forKey: "audiorr_isDark") != nil {
+            AppTheme.shared.isDark = UserDefaults.standard.bool(forKey: "audiorr_isDark")
+        }
+
         // Tell iOS this app is a media player. This enables the "tap album art to open app"
         // behavior on the Dynamic Island and Lock Screen Now Playing widget.
         UIApplication.shared.beginReceivingRemoteControlEvents()
@@ -377,6 +382,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
         evalJS(script)
     }
 
+    /// Apply dark/light theme from SwiftUI settings toggle.
+    func applyTheme(isDark: Bool) {
+        AppTheme.shared.isDark = isDark
+        UserDefaults.standard.set(isDark, forKey: "audiorr_isDark")
+
+        let style: UIUserInterfaceStyle = isDark ? .dark : .light
+        nativeTabVCs.values.forEach { $0.view.overrideUserInterfaceStyle = style }
+        miniPlayerShadow?.overrideUserInterfaceStyle = style
+
+        // Sync to JS side
+        let script = "document.documentElement.classList.toggle('dark', \(isDark))"
+        evalJS(script)
+    }
+
     // ── Tab bar nativa ───────────────────────────────────────────────────────
 
     private func setupTabBar() {
@@ -427,7 +446,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UITabBarDelegate, UIGestu
 
         // Tags con vista nativa SwiftUI
         switch item.tag {
+        case 1: showNativeTab(1) { AnyView(ArtistsView()) };   return
         case 2: showNativeTab(2) { AnyView(PlaylistsView()) }; return
+        case 3: showNativeTab(3) { AnyView(NavigationStack { SettingsView() }) }; return
         case 4: showNativeTab(4) { self.makeSearchView() };    return
         default: break
         }

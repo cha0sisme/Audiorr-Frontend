@@ -136,4 +136,45 @@ final class PlayerService {
             appDelegate.evalJSPublic(js)
         }
     }
+
+    // MARK: - Queue operations
+
+    /// Inserta la canción inmediatamente después de la actual en la cola de React.
+    @MainActor
+    func insertNext(_ song: NavidromeSong) {
+        guard let url = api.streamURL(songId: song.id) else { return }
+        let js = songEventJS(song: song, url: url, eventName: "_swiftInsertNext")
+        DispatchQueue.main.async {
+            (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(js)
+        }
+    }
+
+    /// Añade la canción al final de la cola de React.
+    @MainActor
+    func addToQueue(_ song: NavidromeSong) {
+        guard let url = api.streamURL(songId: song.id) else { return }
+        let js = songEventJS(song: song, url: url, eventName: "_swiftAddToQueue")
+        DispatchQueue.main.async {
+            (UIApplication.shared.delegate as? AppDelegate)?.evalJSPublic(js)
+        }
+    }
+
+    private func songEventJS(song: NavidromeSong, url: URL, eventName: String) -> String {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+             .replacingOccurrences(of: "'",  with: "\\'")
+        }
+        return """
+        window.dispatchEvent(new CustomEvent('\(eventName)', { detail: {
+            id:       '\(esc(song.id))',
+            title:    '\(esc(song.title))',
+            artist:   '\(esc(song.artist))',
+            album:    '\(esc(song.album))',
+            albumId:  '\(esc(song.albumId ?? ""))',
+            coverArt: '\(esc(song.coverArt ?? ""))',
+            duration: \(song.duration ?? 0),
+            url:      '\(url.absoluteString)'
+        }}));
+        """
+    }
 }
