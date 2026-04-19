@@ -852,6 +852,12 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
+        // Reset crossfade EQ (bands 0-1) to bypass — B continues with clean audio
+        for i in 0..<min(eqA.bands.count, 2) {
+            eqA.bands[i].bypass = true
+            eqB.bands[i].bypass = true
+        }
+
         // Reset time-stretch rates — B continues at normal speed after crossfade
         resetTimeStretch()
 
