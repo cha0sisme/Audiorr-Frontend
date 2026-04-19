@@ -55,6 +55,13 @@ struct NowPlayingViewerView: View {
 
                     canvasGradient
                         .ignoresSafeArea()
+
+                    // Extra scrim when lyrics are visible over canvas
+                    if showLyrics && hasLyrics {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+                            .transition(.opacity)
+                    }
                 } else {
                     // Blurred artwork backdrop
                     if let img = fullArtworkImage {
@@ -127,16 +134,12 @@ struct NowPlayingViewerView: View {
                         PlaybackControlsView(glassStyle: hasCanvas)
                     }
 
-                    if !hasCanvas {
-                        Spacer()
-                    } else {
-                        Spacer()
-                            .frame(height: 24)
-                    }
+                    // Always push bottom actions to the very bottom
+                    Spacer()
 
-                    // Bottom action row (lyrics, connect, etc.)
+                    // Bottom action row (lyrics, queue, connect)
                     bottomActionsRow
-                        .padding(.bottom, geo.safeAreaInsets.bottom + 12)
+                        .padding(.bottom, geo.safeAreaInsets.bottom)
                 }
                 .padding(.horizontal, 28)
             }
@@ -496,7 +499,9 @@ struct NowPlayingViewerView: View {
                     icon: showLyrics ? "quote.bubble.fill" : "quote.bubble",
                     isActive: showLyrics
                 ) {
-                    showLyrics.toggle()
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                        showLyrics.toggle()
+                    }
                 }
             }
 

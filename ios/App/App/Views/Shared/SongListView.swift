@@ -18,18 +18,20 @@ struct SongListView: View {
     var showAlbumInMenu: Bool = true
     var showArtistInMenu: Bool = true
     var showArtist: Bool = true
+    var contextUri: String? = nil
+    var contextName: String? = nil
 
     @State private var navAlbum:  NavidromeAlbum?  = nil
     @State private var navArtist: NavidromeArtist? = nil
 
     private var isLight: Bool { palette.isPrimaryLight }
 
-    /// Device screen width. iPhone-only app, portrait: this equals the
-    /// ScrollView's viewport width. Used to hard-clamp every row so content
-    /// (long titles, etc.) cannot expand the row beyond the viewport.
-    private var screenWidth: CGFloat {
+    /// Device screen width — computed once and cached.
+    private static let screenWidth: CGFloat = {
         (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 390
-    }
+    }()
+
+    private var screenWidth: CGFloat { Self.screenWidth }
 
     var body: some View {
         LazyVStack(spacing: 0) {
@@ -60,7 +62,7 @@ struct SongListView: View {
     private func rowView(for song: NavidromeSong, at idx: Int) -> some View {
         HStack(spacing: 0) {
             Button {
-                PlayerService.shared.playPlaylist(songs, startingAt: idx)
+                PlayerService.shared.playPlaylist(songs, startingAt: idx, contextUri: contextUri, contextName: contextName)
             } label: {
                 SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,6 +137,8 @@ private struct SongRowView: View {
     let palette: AlbumPalette
     var showArtist: Bool = true
 
+    @State private var isCached = false
+
     private var isLight: Bool { palette.isPrimaryLight }
     private var primaryText:   Color { isLight ? .black                  : .white }
     private var secondaryText: Color { isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60) }
@@ -170,6 +174,12 @@ private struct SongRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            if isCached {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.green.opacity(0.7))
+            }
+
             if let dur = song.duration, dur > 0 {
                 Text(formatSeconds(dur))
                     .font(.system(size: 13).monospacedDigit())
@@ -178,6 +188,9 @@ private struct SongRowView: View {
         }
         .padding(.leading, 16)
         .padding(.vertical, 10)
+        .task {
+            isCached = await OfflineStorageManager.shared.isCached(songId: song.id)
+        }
     }
 
     private func formatSeconds(_ s: Double) -> String {

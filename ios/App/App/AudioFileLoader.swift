@@ -22,7 +22,7 @@ class AudioFileLoader: @unchecked Sendable {
     private var fileSizes: [String: Int64] = [:]             // songId → bytes
     private var activeDownloads: [String: URLSessionDataTask] = [:]
     private var pendingContinuations: [String: [CheckedContinuation<URL, Error>]] = [:]
-    private let queue = DispatchQueue(label: "com.audiorr.audiofileloader", attributes: .concurrent)
+    private let queue = DispatchQueue(label: "com.audiorr.audiofileloader")
 
     // MARK: - Init
 
@@ -63,7 +63,7 @@ class AudioFileLoader: @unchecked Sendable {
             if localURL.pathExtension == "mp3" && (try? AVAudioFile(forReading: localURL)) == nil {
                 print("[AudioFileLoader] Cache hit but AVAudioFile incompatible — transcoding: \(songId)")
                 return try await withCheckedThrowingContinuation { continuation in
-                    self.queue.async(flags: .barrier) {
+                    self.queue.async(flags: []) {
                         self.pendingContinuations[songId] = [continuation]
                         self.transcodeToCAF(songId: songId, sourceURL: localURL)
                     }
@@ -76,7 +76,7 @@ class AudioFileLoader: @unchecked Sendable {
 
         // Si ya hay una descarga en curso, esperar a que termine
         return try await withCheckedThrowingContinuation { continuation in
-            queue.async(flags: .barrier) {
+            queue.async(flags: []) {
                 if self.pendingContinuations[songId] != nil {
                     // Ya hay descarga en curso — agregar continuation
                     self.pendingContinuations[songId]?.append(continuation)
@@ -98,7 +98,7 @@ class AudioFileLoader: @unchecked Sendable {
 
     /// Cancela una descarga en curso.
     func cancelDownload(songId: String) {
-        queue.async(flags: .barrier) {
+        queue.async(flags: []) {
             if let task = self.activeDownloads.removeValue(forKey: songId) {
                 task.cancel()
                 print("[AudioFileLoader] Cancelled download: \(songId)")
@@ -115,7 +115,7 @@ class AudioFileLoader: @unchecked Sendable {
 
     /// Cancela todas las descargas en curso.
     func cancelAllDownloads() {
-        queue.async(flags: .barrier) {
+        queue.async(flags: []) {
             let error = URLError(.cancelled)
             for (songId, task) in self.activeDownloads {
                 task.cancel()
@@ -132,7 +132,7 @@ class AudioFileLoader: @unchecked Sendable {
 
     /// Elimina todos los archivos cacheados.
     func clearCache() {
-        queue.async(flags: .barrier) {
+        queue.async(flags: []) {
             try? FileManager.default.removeItem(at: self.cacheDir)
             try? FileManager.default.createDirectory(at: self.cacheDir, withIntermediateDirectories: true)
             self.fileAccessTimes.removeAll()
@@ -141,15 +141,20 @@ class AudioFileLoader: @unchecked Sendable {
         }
     }
 
-    /// Verifica si un songId está en caché local (.caf or .mp3).
+    /// Verifica si un songId está en caché local (persistent or temp).
     func isCached(_ songId: String) -> Bool {
-        let caf = cacheDir.appendingPathComponent("\(songId).caf")
-        let mp3 = cacheDir.appendingPathComponent("\(songId).mp3")
-        return FileManager.default.fileExists(atPath: caf.path) || FileManager.default.fileExists(atPath: mp3.path)
+        if cachedFileURL(for: songId) != nil { return true }
+        return false
     }
 
-    /// Devuelve la URL local si el archivo está cacheado, nil si no. Prefers .caf.
+    /// Devuelve la URL local si el archivo está cacheado, nil si no.
+    /// Checks persistent offline cache first, then temp hot cache.
     func cachedFileURL(for songId: String) -> URL? {
+        // 1. Persistent offline cache (survives app restarts, LRU-managed)
+        if let persistentURL = OfflineStorageManager.shared.cachedFileURLSync(for: songId) {
+            return persistentURL
+        }
+        // 2. Temp hot cache (5-file LRU, can be purged by system)
         let caf = cacheDir.appendingPathComponent("\(songId).caf")
         if FileManager.default.fileExists(atPath: caf.path) { return caf }
         let mp3 = cacheDir.appendingPathComponent("\(songId).mp3")
@@ -163,7 +168,7 @@ class AudioFileLoader: @unchecked Sendable {
         let task = URLSession.shared.dataTask(with: remoteURL) { [weak self] data, response, error in
             guard let self = self else { return }
 
-            self.queue.async(flags: .barrier) {
+            self.queue.async(flags: []) {
                 self.activeDownloads.removeValue(forKey: songId)
 
                 // Error handling con reintentos
@@ -177,7 +182,7 @@ class AudioFileLoader: @unchecked Sendable {
                         let delay = self.retryDelays[min(attempt, self.retryDelays.count - 1)]
                         print("[AudioFileLoader] Download failed (attempt \(attempt + 1)/\(self.maxRetries)): \(songId) — retrying in \(delay)s")
                         DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                            self.queue.async(flags: .barrier) {
+                            self.queue.async(flags: []) {
                                 self.startDownload(remoteURL: remoteURL, songId: songId, attempt: attempt + 1)
                             }
                         }
@@ -224,6 +229,8 @@ class AudioFileLoader: @unchecked Sendable {
                         // resolveContinuations called inside transcodeToCAF
                     } else {
                         self.resolveContinuations(songId: songId, result: .success(localURL))
+                        // Promote to persistent offline cache
+                        self.promoteToOfflineCache(songId: songId, fileURL: localURL)
                     }
                 } catch {
                     print("[AudioFileLoader] Write error: \(songId) — \(error)")
@@ -287,16 +294,15 @@ class AudioFileLoader: @unchecked Sendable {
     private func transcodeToCAF(songId: String, sourceURL: URL) {
         let cafURL = cacheDir.appendingPathComponent("\(songId).caf")
 
-        // Run on background thread to avoid blocking the barrier queue
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Run on background thread to avoid blocking the queue
+        Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
 
             let asset = AVURLAsset(url: sourceURL)
-            guard let reader = try? AVAssetReader(asset: asset),
-                  let audioTrack = asset.tracks(withMediaType: .audio).first else {
+            guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+                  let reader = try? AVAssetReader(asset: asset) else {
                 print("[AudioFileLoader] Transcode failed: no audio track in \(songId)")
-                self.queue.async(flags: .barrier) {
-                    // Return the original file — stream fallback will handle playback
+                self.queue.async {
                     self.resolveContinuations(songId: songId, result: .success(sourceURL))
                 }
                 return
@@ -321,7 +327,7 @@ class AudioFileLoader: @unchecked Sendable {
             // Write as CAF (PCM) — must specify outputSettings (not nil/passthrough)
             guard let writer = try? AVAssetWriter(outputURL: cafURL, fileType: .caf) else {
                 print("[AudioFileLoader] Transcode failed: can't create writer for \(songId)")
-                self.queue.async(flags: .barrier) {
+                self.queue.async(flags: []) {
                     self.resolveContinuations(songId: songId, result: .success(sourceURL))
                 }
                 return
@@ -336,6 +342,7 @@ class AudioFileLoader: @unchecked Sendable {
 
             let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
             writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
+                autoreleasepool {
                 while writerInput.isReadyForMoreMediaData {
                     guard reader.status == .reading,
                           let buffer = readerOutput.copyNextSampleBuffer() else {
@@ -344,7 +351,7 @@ class AudioFileLoader: @unchecked Sendable {
                         if reader.status == .completed {
                             writer.finishWriting { [weak self] in
                                 guard let self = self else { return }
-                                self.queue.async(flags: .barrier) {
+                                self.queue.async(flags: []) {
                                     // Replace the MP3 with the CAF
                                     try? FileManager.default.removeItem(at: sourceURL)
                                     let cafSize = (try? FileManager.default.attributesOfItem(atPath: cafURL.path)[.size] as? Int64) ?? 0
@@ -352,13 +359,15 @@ class AudioFileLoader: @unchecked Sendable {
                                     let sizeMB = Double(cafSize) / 1024.0 / 1024.0
                                     print("[AudioFileLoader] Transcoded: \(songId) → CAF (\(String(format: "%.1f", sizeMB))MB)")
                                     self.resolveContinuations(songId: songId, result: .success(cafURL))
+                                    // Promote transcoded file to persistent offline cache
+                                    self.promoteToOfflineCache(songId: songId, fileURL: cafURL)
                                 }
                             }
                         } else {
                             print("[AudioFileLoader] Transcode read failed: \(songId) — \(reader.error?.localizedDescription ?? "unknown")")
                             writer.cancelWriting()
                             try? FileManager.default.removeItem(at: cafURL)
-                            self?.queue.async(flags: .barrier) {
+                            self?.queue.async(flags: []) {
                                 self?.resolveContinuations(songId: songId, result: .success(sourceURL))
                             }
                         }
@@ -367,6 +376,7 @@ class AudioFileLoader: @unchecked Sendable {
 
                     writerInput.append(buffer)
                 }
+                } // autoreleasepool
             }
         }
     }
@@ -383,8 +393,25 @@ class AudioFileLoader: @unchecked Sendable {
     }
 
     private func touchAccess(_ songId: String) {
-        queue.async(flags: .barrier) {
+        queue.async(flags: []) {
             self.fileAccessTimes[songId] = Date()
+        }
+    }
+
+    /// Promote a downloaded file to the persistent offline cache (fire-and-forget).
+    private func promoteToOfflineCache(songId: String, fileURL: URL) {
+        guard PersistenceService.shared.offlineAutoCacheEnabled else { return }
+
+        Task { @MainActor in
+            // Resolve song metadata from the current queue (MainActor for QueueManager access)
+            let song: PersistableSong? = {
+                if let current = QueueManager.shared.currentSong, current.id == songId {
+                    return current
+                }
+                return QueueManager.shared.queue.first { $0.id == songId }
+            }()
+
+            await OfflineStorageManager.shared.storeFile(from: fileURL, songId: songId, song: song)
         }
     }
 }

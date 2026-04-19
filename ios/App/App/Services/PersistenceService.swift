@@ -79,6 +79,32 @@ final class PersistenceService {
         set { defaults.set(newValue, forKey: Key.volume) }
     }
 
+    // MARK: - Offline Cache Settings
+
+    /// Maximum persistent cache size in bytes. Default: 2 GB. 0 = unlimited.
+    var offlineMaxCacheBytes: Int64 {
+        get {
+            let v = defaults.object(forKey: "audiorr_offlineMaxCacheBytes") as? Int64
+            return v ?? 2_147_483_648 // 2 GB default
+        }
+        set { defaults.set(newValue, forKey: "audiorr_offlineMaxCacheBytes") }
+    }
+
+    /// Auto-cache played songs to persistent storage. Default: true.
+    var offlineAutoCacheEnabled: Bool {
+        get {
+            if defaults.object(forKey: "audiorr_offlineAutoCache") == nil { return true }
+            return defaults.bool(forKey: "audiorr_offlineAutoCache")
+        }
+        set { defaults.set(newValue, forKey: "audiorr_offlineAutoCache") }
+    }
+
+    /// Only download over Wi-Fi. Default: false.
+    var offlineWifiOnly: Bool {
+        get { defaults.bool(forKey: "audiorr_offlineWifiOnly") }
+        set { defaults.set(newValue, forKey: "audiorr_offlineWifiOnly") }
+    }
+
     // MARK: - Clear All
 
     func clearAll() {

@@ -205,7 +205,7 @@ struct SettingsView: View {
         .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Configuracion")
+                Text("Configuración")
                     .font(.headline)
                     .lineLimit(1)
                     .opacity(stickyOpacity)
@@ -218,13 +218,13 @@ struct SettingsView: View {
         } message: {
             Text(alertMessage)
         }
-        .confirmationDialog("Cerrar sesion", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("Cerrar sesion", role: .destructive) {
+        .confirmationDialog("Cerrar sesión", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button("Cerrar sesión", role: .destructive) {
                 vm.logout()
             }
             Button("Cancelar", role: .cancel) {}
         } message: {
-            Text("Se borrara la configuracion del servidor.")
+            Text("Se borrará la configuración del servidor.")
         }
     }
 
@@ -232,7 +232,7 @@ struct SettingsView: View {
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Configuracion")
+            Text("Configuración")
                 .font(.system(size: 34, weight: .bold))
             Spacer()
         }
@@ -264,11 +264,11 @@ struct SettingsView: View {
                 }
             }
 
-            // ── Reproduccion ──
+            // ── Reproducción ──
             if vm.isBackendAvailable {
                 settingsSection(
-                    header: "Reproduccion",
-                    footer: "Modo DJ activa mezclas dinamicas. ReplayGain normaliza el volumen entre canciones."
+                    header: "Reproducción",
+                    footer: "Modo DJ activa mezclas dinámicas. ReplayGain normaliza el volumen entre canciones."
                 ) {
                     settingsRow {
                         Label("Modo DJ", systemImage: "dial.medium.fill")
@@ -361,6 +361,21 @@ struct SettingsView: View {
                 }
             }
 
+            // ── Almacenamiento offline ──
+            settingsSection(header: "Almacenamiento") {
+                NavigationLink {
+                    StorageManagementView()
+                } label: {
+                    settingsRow {
+                        Label("Gestionar almacenamiento", systemImage: "externaldrive")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
             // ── Servidor ──
             settingsSection(header: "Servidor") {
                 if let creds = NavidromeService.shared.credentials {
@@ -418,7 +433,7 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         showLogoutConfirm = true
                     } label: {
-                        Label("Cerrar sesion", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
             }

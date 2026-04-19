@@ -205,6 +205,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationWillTerminate(_ application: UIApplication) {}
 
+    // MARK: - Background URLSession (Downloads)
+
+    func application(_ application: UIApplication,
+                     handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        Task { @MainActor in
+            DownloadManager.shared.setBackgroundCompletionHandler(completionHandler)
+        }
+    }
+
     // MARK: - Scene Configuration (CarPlay)
 
     func application(_ application: UIApplication,

@@ -21,18 +21,29 @@ final class PlayerService {
     @Published private(set) var smartMixStatus: SmartMixStatus = .idle
     @Published private(set) var smartMixPlaylistId: String?
 
+    // MARK: - Playback Context (feeds Jump Back In / wrapped stats)
+
+    /// Current playback context — e.g. "playlist:abc123", "album:xyz", "smartmix:abc123"
+    private(set) var currentContextUri: String?
+    /// Human-readable name of the current context.
+    private(set) var currentContextName: String?
+
     // MARK: - Play
 
     /// Play a single song.
     @MainActor
     func play(song: NavidromeSong) {
+        currentContextUri = nil
+        currentContextName = nil
         QueueManager.shared.play(songs: [song], startIndex: 0)
     }
 
     /// Play a list of songs starting at the given index.
     @MainActor
-    func playPlaylist(_ songs: [NavidromeSong], startingAt index: Int = 0) {
+    func playPlaylist(_ songs: [NavidromeSong], startingAt index: Int = 0, contextUri: String? = nil, contextName: String? = nil) {
         guard index < songs.count else { return }
+        currentContextUri = contextUri
+        currentContextName = contextName
         QueueManager.shared.play(songs: songs, startIndex: index)
     }
 

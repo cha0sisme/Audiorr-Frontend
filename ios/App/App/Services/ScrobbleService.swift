@@ -47,7 +47,7 @@ final class ScrobbleService {
 
         // Send "now playing" to Navidrome (submission=false)
         Task {
-            await scrobbleToNavidrome(songId: song.id, submission: false)
+            _ = await scrobbleToNavidrome(songId: song.id, submission: false)
             hasSentNowPlaying = true
         }
     }
@@ -188,8 +188,8 @@ final class ScrobbleService {
             genre: nil,
             bpm: nil,
             energy: nil,
-            contextUri: nil,
-            contextName: nil
+            contextUri: PlayerService.shared.currentContextUri,
+            contextName: PlayerService.shared.currentContextName
         )
 
         do {

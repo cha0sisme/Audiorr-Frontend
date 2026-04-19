@@ -51,7 +51,7 @@ struct LoginView: View {
                     }
                     .padding(.bottom, 6)
 
-                    Text("Conecta con tu servidor Navidrome\npara acceder a tu biblioteca de musica.")
+                    Text("Conecta con tu servidor Navidrome\npara acceder a tu biblioteca de música.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

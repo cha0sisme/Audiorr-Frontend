@@ -58,6 +58,13 @@
 		3400FF0B2FA800000000000B /* AnalysisCacheService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0A2FA800000000000A /* AnalysisCacheService.swift */; };
 		3400FF0D2FA800000000000D /* SmartMixManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0C2FA800000000000C /* SmartMixManager.swift */; };
 		3400FF0F2FA800000000000F /* ConnectService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF0E2FA800000000000E /* ConnectService.swift */; };
+		3400FF312FA8000000000031 /* OfflineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF302FA8000000000030 /* OfflineModels.swift */; };
+		3400FF332FA8000000000033 /* OfflineStorageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF322FA8000000000032 /* OfflineStorageManager.swift */; };
+		3400FF352FA8000000000035 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF342FA8000000000034 /* NetworkMonitor.swift */; };
+		3400FF372FA8000000000037 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF362FA8000000000036 /* DownloadManager.swift */; };
+		3400FF392FA8000000000039 /* DownloadButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF382FA8000000000038 /* DownloadButton.swift */; };
+		3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF3A2FA800000000003A /* StorageManagementView.swift */; };
+		3400FF3D2FA800000000003D /* OfflineContentProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF3C2FA800000000003C /* OfflineContentProvider.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -116,6 +123,13 @@
 		3400FF0A2FA800000000000A /* AnalysisCacheService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisCacheService.swift; sourceTree = "<group>"; };
 		3400FF0C2FA800000000000C /* SmartMixManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartMixManager.swift; sourceTree = "<group>"; };
 		3400FF0E2FA800000000000E /* ConnectService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectService.swift; sourceTree = "<group>"; };
+		3400FF302FA8000000000030 /* OfflineModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineModels.swift; sourceTree = "<group>"; };
+		3400FF322FA8000000000032 /* OfflineStorageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineStorageManager.swift; sourceTree = "<group>"; };
+		3400FF342FA8000000000034 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
+		3400FF362FA8000000000036 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
+		3400FF382FA8000000000038 /* DownloadButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadButton.swift; sourceTree = "<group>"; };
+		3400FF3A2FA800000000003A /* StorageManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageManagementView.swift; sourceTree = "<group>"; };
+		3400FF3C2FA800000000003C /* OfflineContentProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineContentProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -191,6 +205,10 @@
 				3400FF022FA8000000000002 /* PersistenceService.swift */,
 				3400FF062FA8000000000006 /* QueueManager.swift */,
 				3400FF082FA8000000000008 /* ScrobbleService.swift */,
+				3400FF342FA8000000000034 /* NetworkMonitor.swift */,
+				3400FF362FA8000000000036 /* DownloadManager.swift */,
+				3400FF3C2FA800000000003C /* OfflineContentProvider.swift */,
+				3400FF322FA8000000000032 /* OfflineStorageManager.swift */,
 				3400FF0A2FA800000000000A /* AnalysisCacheService.swift */,
 				3400FF0C2FA800000000000C /* SmartMixManager.swift */,
 				3400FF042FA8000000000004 /* DJMixingService.swift */,
@@ -203,6 +221,7 @@
 			isa = PBXGroup;
 			children = (
 				342286BD2F90CB2800785736 /* NavidromeModels.swift */,
+				3400FF302FA8000000000030 /* OfflineModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -243,6 +262,7 @@
 				3499AA072FA3000000000001 /* ArtistCardView.swift */,
 				3499AA092FA5000000000001 /* AlbumCardView.swift */,
 				3400DD042FA6000000000004 /* MiniPlayerView.swift */,
+				3400FF382FA8000000000038 /* DownloadButton.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -252,6 +272,7 @@
 			children = (
 				342286D22F920B0000785736 /* LoginView.swift */,
 				3400BB002FA2000000000001 /* SettingsView.swift */,
+				3400FF3A2FA800000000003A /* StorageManagementView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -402,6 +423,13 @@
 				3400FF052FA8000000000005 /* DJMixingService.swift in Sources */,
 				3400FF072FA8000000000007 /* QueueManager.swift in Sources */,
 				3400FF092FA8000000000009 /* ScrobbleService.swift in Sources */,
+				3400FF352FA8000000000035 /* NetworkMonitor.swift in Sources */,
+				3400FF372FA8000000000037 /* DownloadManager.swift in Sources */,
+				3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */,
+				3400FF3D2FA800000000003D /* OfflineContentProvider.swift in Sources */,
+				3400FF392FA8000000000039 /* DownloadButton.swift in Sources */,
+				3400FF332FA8000000000033 /* OfflineStorageManager.swift in Sources */,
+				3400FF312FA8000000000031 /* OfflineModels.swift in Sources */,
 				3400FF0B2FA800000000000B /* AnalysisCacheService.swift in Sources */,
 				3400FF0D2FA800000000000D /* SmartMixManager.swift in Sources */,
 				3400FF0F2FA800000000000F /* ConnectService.swift in Sources */,

@@ -382,7 +382,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
             do {
                 let (_, songs) = try await NavidromeService.shared.getPlaylistSongs(playlistId: id)
                 await MainActor.run {
-                    QueueManager.shared.play(songs: songs, startIndex: 0)
+                    PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(id)", contextName: name)
                 }
             } catch {
                 print("[CarPlay] Error cargando playlist: \(error)")
@@ -395,9 +395,9 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         print("[CarPlay] Reproducir álbum: \(id)")
         Task {
             do {
-                let (_, songs, _) = try await NavidromeService.shared.getAlbumDetail(albumId: id)
+                let (album, songs, _) = try await NavidromeService.shared.getAlbumDetail(albumId: id)
                 await MainActor.run {
-                    QueueManager.shared.play(songs: songs, startIndex: 0)
+                    PlayerService.shared.playPlaylist(songs, contextUri: "album:\(id)", contextName: album?.name ?? "")
                 }
             } catch {
                 print("[CarPlay] Error cargando álbum: \(error)")
@@ -408,7 +408,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
 
     private func playPlaylistSongs(_ songs: [NavidromeSong], startIndex: Int) {
         Task { @MainActor in
-            QueueManager.shared.play(songs: songs, startIndex: startIndex)
+            PlayerService.shared.playPlaylist(songs, startingAt: startIndex)
         }
     }
 }

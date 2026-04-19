@@ -23,6 +23,7 @@ struct AlbumCardView: View {
     var heroNamespace: Namespace.ID?
 
     @State private var coverImage: UIImage?
+    @State private var retryCount = 0
 
     private var isGrid: Bool { axis == .grid }
     private var titleColor: Color {
@@ -35,7 +36,7 @@ struct AlbumCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             ZStack {
                 if let img = coverImage {
                     Image(uiImage: img)
@@ -51,31 +52,53 @@ struct AlbumCardView: View {
             .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
             .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(album.id)", in: heroNamespace!) }
 
-            HStack(spacing: 5) {
-                Text(album.name)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(titleColor)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(album.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(titleColor)
+                        .lineLimit(1)
 
-                if album.isExplicit {
-                    ExplicitBadge(color: subtitleColor)
+                    if album.isExplicit {
+                        ExplicitBadge(color: subtitleColor)
+                    }
+                }
+                .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
+
+                subtitleView
+                    .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
+            }
+        }
+        .task(id: album.id) { await loadCover() }
+        .onAppear {
+            // Retry if image was purged from NSCache or previous load failed
+            if coverImage == nil {
+                if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
+                    coverImage = cached
+                } else {
+                    Task { await loadCover() }
                 }
             }
-            .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
-
-            subtitleView
-                .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
         }
-        .task(id: album.id) {
-            if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
-                coverImage = cached
-                return
+    }
+
+    private func loadCover() async {
+        if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
+            coverImage = cached
+            return
+        }
+        guard let url = NavidromeService.shared.coverURL(id: album.coverArt, size: 300) else { return }
+
+        // Retry up to 2 times with backoff
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
             }
-            guard let url = NavidromeService.shared.coverURL(id: album.coverArt, size: 300) else { return }
             guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data) else { return }
+                  let img = UIImage(data: data) else { continue }
             AlbumCoverCache.shared.setImage(img, for: album.coverArt)
             coverImage = img
+            return
         }
     }
 

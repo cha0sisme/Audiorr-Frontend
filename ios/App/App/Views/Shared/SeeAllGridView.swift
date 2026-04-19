@@ -160,9 +160,6 @@ struct SeeAllGridView: View {
         }
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
-        .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
-        .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
-        .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
     }
 }
 

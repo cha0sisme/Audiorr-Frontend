@@ -12,7 +12,8 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var coverImage: UIImage?
     @Published var isBackendAvailable = false
     @Published var smartMixStatus: SmartMixStatus = .idle
-    @Published var isStarred = false
+    @Published var isPinned = false
+    @Published var isDeleting = false
 
     private let api = NavidromeService.shared
     private var cancellables = Set<AnyCancellable>()
@@ -21,7 +22,6 @@ final class PlaylistDetailViewModel: ObservableObject {
     init(playlist: NavidromePlaylist) {
         self.initialPlaylist = playlist
         self.playlist = playlist
-        self.isStarred = Self.loadStarred(id: playlist.id)
 
         // Observe SmartMix status from PlayerService
         PlayerService.shared.$smartMixStatus
@@ -54,10 +54,12 @@ final class PlaylistDetailViewModel: ObservableObject {
 
         async let songsTask = api.getPlaylistSongs(playlistId: initialPlaylist.id)
         async let imageTask = fetchCover()
+        async let pinnedTask: Void = loadPinnedStatus()
         let backendAvailable = await api.checkBackendAvailable()
         self.isBackendAvailable = backendAvailable
 
         let (songsResult, image) = await (try? songsTask, imageTask)
+        _ = await pinnedTask
 
         if let (pl, songs) = songsResult {
             self.songs = songs
@@ -73,24 +75,55 @@ final class PlaylistDetailViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Starred (UserDefaults)
+    // MARK: - Pinned Playlists (backend-synced)
 
-    private static let starredKey = "starredPlaylists"
-
-    private static func loadStarred(id: String) -> Bool {
-        let set = UserDefaults.standard.stringArray(forKey: starredKey) ?? []
-        return set.contains(id)
+    func loadPinnedStatus() async {
+        guard let username = api.credentials?.username else { return }
+        let pinned = (try? await BackendService.shared.getPinnedPlaylists(username: username)) ?? []
+        isPinned = pinned.contains { $0.id == initialPlaylist.id }
     }
 
-    func toggleStarred() {
-        var set = UserDefaults.standard.stringArray(forKey: Self.starredKey) ?? []
-        if isStarred {
-            set.removeAll { $0 == initialPlaylist.id }
-        } else {
-            set.append(initialPlaylist.id)
+    func togglePinned() {
+        guard let username = api.credentials?.username else { return }
+        let wasPin = isPinned
+        isPinned.toggle()
+
+        Task {
+            do {
+                var pinned = (try? await BackendService.shared.getPinnedPlaylists(username: username)) ?? []
+                if wasPin {
+                    pinned.removeAll { $0.id == initialPlaylist.id }
+                } else {
+                    let pl = displayPlaylist
+                    pinned.append(BackendService.PinnedPlaylist(
+                        id: pl.id, name: pl.name, position: pinned.count
+                    ))
+                }
+                _ = try await BackendService.shared.savePinnedPlaylists(username: username, playlists: pinned)
+            } catch {
+                // Revert on failure
+                isPinned = wasPin
+            }
         }
-        UserDefaults.standard.set(set, forKey: Self.starredKey)
-        isStarred.toggle()
+    }
+
+    // MARK: - Delete Playlist
+
+    func deletePlaylist() async -> Bool {
+        isDeleting = true
+        defer { isDeleting = false }
+        do {
+            try await api.deletePlaylist(playlistId: initialPlaylist.id)
+            // Also remove from pinned if it was pinned
+            if isPinned, let username = api.credentials?.username {
+                var pinned = (try? await BackendService.shared.getPinnedPlaylists(username: username)) ?? []
+                pinned.removeAll { $0.id == initialPlaylist.id }
+                _ = try? await BackendService.shared.savePinnedPlaylists(username: username, playlists: pinned)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Backend cover first, Navidrome as fallback — mirrors PlaylistCoverView logic.
@@ -116,15 +149,19 @@ final class PlaylistDetailViewModel: ObservableObject {
 struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
+    @State private var suppressHero = false
+    @State private var showDeleteConfirm = false
     var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
+    var onDeleted: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
 
-    init(playlist: NavidromePlaylist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
+    init(playlist: NavidromePlaylist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
         self.heroNamespace = heroNamespace
         self.onDismiss = onDismiss
+        self.onDeleted = onDeleted
     }
 
     // MARK: Scroll-derived values
@@ -158,8 +195,29 @@ struct PlaylistDetailView: View {
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
+        .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
-        .task { await vm.load() }
+        .task {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = .dark
+            }
+            await vm.load()
+            AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
+        }
+        .onChange(of: isLight) { _, light in
+            AppTheme.shared.overlayColorScheme = light ? .light : .dark
+        }
+        .onDisappear {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = nil
+            }
+        }
+        .task(id: "hero-settle") {
+            if heroNamespace != nil {
+                try? await Task.sleep(for: .milliseconds(600))
+                suppressHero = true
+            }
+        }
         .toolbar {
             if let onDismiss {
                 ToolbarItem(placement: .topBarLeading) {
@@ -178,6 +236,25 @@ struct PlaylistDetailView: View {
                     .opacity(stickyOpacity)
             }
         }
+        .confirmationDialog(
+            "Eliminar «\(vm.displayPlaylist.name)»",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Eliminar playlist", role: .destructive) {
+                Task {
+                    if await vm.deletePlaylist() {
+                        if let onDismiss {
+                            onDismiss()
+                        }
+                        onDeleted?()
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Esta acción no se puede deshacer.")
+        }
     }
 
     // MARK: - Hero
@@ -188,17 +265,12 @@ struct PlaylistDetailView: View {
             heroBackground
                 .scaleEffect(overscrollScale, anchor: .top)
                 .frame(height: heroHeight)
-                .mask(alignment: .top) {
+                .overlay(alignment: .bottom) {
                     LinearGradient(
-                        stops: [
-                            .init(color: .black,               location: 0.00),
-                            .init(color: .black,               location: 0.60),
-                            .init(color: .black.opacity(0.85), location: 0.76),
-                            .init(color: .black.opacity(0.40), location: 0.90),
-                            .init(color: .clear,               location: 1.00)
-                        ],
+                        colors: [.clear, pageBg],
                         startPoint: .top, endPoint: .bottom
                     )
+                    .frame(height: heroHeight * 0.35)
                 }
                 .clipped()
 
@@ -259,7 +331,7 @@ struct PlaylistDetailView: View {
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(vm.initialPlaylist.id)", in: heroNamespace!) }
+                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "cover_\(vm.initialPlaylist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
 
             Spacer(minLength: 20)
@@ -308,7 +380,7 @@ struct PlaylistDetailView: View {
             // Play
             Button {
                 guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs)
+                PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 if vm.isBackendAvailable {
                     Image(systemName: "play.fill")
@@ -333,7 +405,7 @@ struct PlaylistDetailView: View {
             // Shuffle
             Button {
                 guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs.shuffled())
+                PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 if vm.isBackendAvailable {
                     Image(systemName: "shuffle")
@@ -355,21 +427,50 @@ struct PlaylistDetailView: View {
                 }
             }
 
-            // SmartMix + Star (only when backend is available)
+            // Download — only for user playlists (not editorial/smart/spotify)
+            if !vm.songs.isEmpty && !vm.displayPlaylist.isSystemPlaylist {
+                DownloadButton(
+                    groupId: vm.displayPlaylist.id,
+                    groupType: "playlist",
+                    title: vm.displayPlaylist.name,
+                    songs: vm.songs,
+                    fillColor: fillColor,
+                    labelColor: labelColor
+                )
+            }
+
+            // SmartMix + Star + More (only when backend is available)
             if vm.isBackendAvailable {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
 
                 Button {
-                    vm.toggleStarred()
+                    vm.togglePinned()
                 } label: {
-                    Image(systemName: vm.isStarred ? "star.fill" : "star")
+                    Image(systemName: vm.isPinned ? "star.fill" : "star")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(vm.isStarred ? .yellow : labelColor)
+                        .foregroundStyle(vm.isPinned ? .yellow : labelColor)
                         .frame(width: 40, height: 40)
                         .background(
-                            fillColor.opacity(vm.isStarred ? 0.85 : 1),
+                            fillColor.opacity(vm.isPinned ? 0.85 : 1),
                             in: Circle()
                         )
+                }
+
+                // Context menu (ellipsis) — delete for user playlists
+                if !vm.displayPlaylist.isSystemPlaylist {
+                    Menu {
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Eliminar playlist", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(labelColor)
+                            .frame(width: 40, height: 40)
+                            .background(fillColor, in: Circle())
+                    }
                 }
             }
         }
@@ -443,7 +544,7 @@ struct PlaylistDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
             } else {
-                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             }
         }
     }
@@ -465,33 +566,50 @@ struct PlaylistCoverImage: View {
     let playlist: NavidromePlaylist
     let image: UIImage?
 
-    @State private var useBackend = true
-
-    private var backendURL: URL? { NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id) }
-    private var navidromeURL: URL? { NavidromeService.shared.coverURL(id: playlist.coverArt, size: 600) }
-    private var fallbackURL: URL? { useBackend ? (backendURL ?? navidromeURL) : navidromeURL }
+    @State private var loadedImage: UIImage?
+    @State private var didFail = false
 
     var body: some View {
-        if let img = image {
-            Image(uiImage: img)
-                .resizable()
-                .scaledToFill()
-        } else {
-            AsyncImage(url: fallbackURL) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                case .failure:
-                    if useBackend && navidromeURL != nil {
-                        Color.clear.onAppear { useBackend = false }
-                    } else {
-                        placeholderView
-                    }
-                default:
-                    placeholderView
-                }
+        Group {
+            if let img = image ?? loadedImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else if didFail {
+                placeholderView
+            } else {
+                placeholderView
             }
         }
+        .task(id: playlist.id) {
+            guard image == nil else { return }
+            await loadCover()
+        }
+        .onAppear {
+            if image == nil && loadedImage == nil && !didFail {
+                Task { await loadCover() }
+            }
+        }
+    }
+
+    private func loadCover() async {
+        guard loadedImage == nil else { return }
+        let urls: [URL] = [
+            NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
+            NavidromeService.shared.coverURL(id: playlist.coverArt, size: 600),
+        ].compactMap { $0 }
+
+        for url in urls {
+            for attempt in 0..<2 {
+                if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+                guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                      let img = UIImage(data: data) else { continue }
+                loadedImage = img
+                return
+            }
+        }
+        didFail = true
     }
 
     private var placeholderView: some View {
@@ -513,41 +631,65 @@ struct PlaylistCoverView: View {
     var size: CGFloat = 160
 
     @State private var useBackend = true
+    @State private var coverImage: UIImage?
+    @State private var didFail = false
 
     private var isFlexible: Bool { size.isInfinite }
     private var cornerRadius: CGFloat { isFlexible ? 12 : size * 0.12 }
-
-    private var backendURL: URL? { NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id) }
-    private var navidromeURL: URL? { NavidromeService.shared.coverURL(id: playlist.coverArt, size: isFlexible ? 300 : Int(size * 2)) }
-    private var activeURL: URL? { useBackend ? (backendURL ?? navidromeURL) : navidromeURL }
+    private var imageSize: Int { isFlexible ? 300 : Int(size * 2) }
 
     var body: some View {
         imageContent
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .task(id: playlist.id) { await loadCover() }
+            .onAppear {
+                if coverImage == nil && !didFail {
+                    Task { await loadCover() }
+                }
+            }
     }
 
     @ViewBuilder
     private var imageContent: some View {
-        let view = AsyncImage(url: activeURL) { phase in
-            switch phase {
-            case .success(let img):
-                img.resizable().scaledToFill()
-            case .failure:
-                if useBackend && navidromeURL != nil {
-                    Color.clear.onAppear { useBackend = false }
-                } else {
-                    placeholder
-                }
-            default:
+        let content: some View = Group {
+            if let img = coverImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else if didFail {
+                placeholder
+            } else {
                 SkeletonView()
             }
         }
 
         if isFlexible {
-            view
+            content
         } else {
-            view.frame(width: size, height: size)
+            content.frame(width: size, height: size)
         }
+    }
+
+    private func loadCover() async {
+        guard coverImage == nil else { return }
+
+        // Try backend URL first, then Navidrome
+        let urls: [URL] = [
+            NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
+            NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize),
+        ].compactMap { $0 }
+
+        for url in urls {
+            for attempt in 0..<2 {
+                if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+                guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                      let img = UIImage(data: data) else { continue }
+                coverImage = img
+                return
+            }
+        }
+        didFail = true
     }
 
     private var placeholder: some View {
@@ -589,6 +731,7 @@ struct SkeletonView: View {
 struct PlaylistHeroOverlay: ViewModifier {
     @Binding var selectedPlaylist: NavidromePlaylist?
     var namespace: Namespace.ID
+    var onDeleted: (() -> Void)?
 
     func body(content: Content) -> some View {
         ZStack {
@@ -602,11 +745,20 @@ struct PlaylistHeroOverlay: ViewModifier {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
                             selectedPlaylist = nil
                         }
+                    },
+                    onDeleted: {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
+                            selectedPlaylist = nil
+                        }
+                        onDeleted?()
                     }
                 )
                 .transition(.opacity)
                 .zIndex(1)
             }
+        }
+        .onChange(of: selectedPlaylist) { _, playlist in
+            AppTheme.shared.overlayColorScheme = playlist != nil ? .dark : nil
         }
     }
 }

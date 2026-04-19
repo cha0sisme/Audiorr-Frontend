@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class ArtistsViewModel: ObservableObject {
+    static let shared = ArtistsViewModel()
+
     @Published var allArtists: [NavidromeArtist] = []
     @Published var featuredArtists: [NavidromeArtist] = []
     @Published var recentArtists: [NavidromeArtist] = []
@@ -13,34 +15,49 @@ final class ArtistsViewModel: ObservableObject {
     @Published var showAllArtists = false
 
     private let api = NavidromeService.shared
+    private var lastLoadedAt: Date?
+    private let cacheTTL: TimeInterval = 120
 
     var isConfigured: Bool { api.isConfigured }
 
     /// Grouped alphabetically for the "Explorar todos" section.
-    var groupedByLetter: [(letter: String, artists: [NavidromeArtist])] {
+    @Published private(set) var groupedByLetter: [(letter: String, artists: [NavidromeArtist])] = []
+    @Published private(set) var letters: [String] = []
+
+    private func rebuildGroupedByLetter() {
         var groups: [String: [NavidromeArtist]] = [:]
         for artist in allArtists {
             let first = artist.name.first.map { String($0).uppercased() } ?? "#"
             let letter = first.range(of: "[A-Z0-9]", options: .regularExpression) != nil ? first : "#"
             groups[letter, default: []].append(artist)
         }
-        return groups.sorted { a, b in
+        groupedByLetter = groups.sorted { a, b in
             if a.key == "#" { return false }
             if b.key == "#" { return true }
             return a.key < b.key
         }.map { (letter: $0.key, artists: $0.value) }
+        letters = groupedByLetter.map(\.letter)
     }
 
-    var letters: [String] { groupedByLetter.map(\.letter) }
+    func loadIfNeeded() async {
+        if let last = lastLoadedAt, Date().timeIntervalSince(last) < cacheTTL, !allArtists.isEmpty {
+            return
+        }
+        await load()
+    }
 
     func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            lastLoadedAt = Date()
+        }
 
         api.reloadCredentials()
         guard api.isConfigured else { return }
 
         allArtists = await api.getArtists()
+        rebuildGroupedByLetter()
 
         async let featuredTask: Void = loadFeatured()
         async let recentTask: Void = loadRecent()
@@ -130,7 +147,7 @@ final class ArtistsViewModel: ObservableObject {
 // MARK: - ArtistsView
 
 struct ArtistsView: View {
-    @StateObject private var vm = ArtistsViewModel()
+    @ObservedObject private var vm = ArtistsViewModel.shared
     @State private var showSettings = false
     @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
@@ -162,7 +179,7 @@ struct ArtistsView: View {
             .modifier(ArtistHeroOverlay(selectedArtist: $selectedArtist, namespace: heroNS))
             .background(Color(.systemBackground))
             .toolbarBackground(selectedArtist != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
-            .task { await vm.load() }
+            .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
             .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
             .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
@@ -250,13 +267,13 @@ struct ArtistsView: View {
         .padding(.horizontal, 32)
     }
 
-    // MARK: - Mas escuchados (horizontal scroll, Apple Music style)
+    // MARK: - Más escuchados (horizontal scroll, Apple Music style)
 
     @ViewBuilder
     private var featuredSection: some View {
         if !vm.featuredArtists.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                sectionHeader("Mas escuchados")
+                sectionHeader("Más escuchados")
                     .padding(.bottom, 14)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -267,7 +284,7 @@ struct ArtistsView: View {
                                     selectedArtist = artist
                                 }
                             } label: {
-                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                             .opacity(selectedArtist?.id == artist.id ? 0 : 1)
@@ -297,7 +314,7 @@ struct ArtistsView: View {
                                     selectedArtist = artist
                                 }
                             } label: {
-                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                             .opacity(selectedArtist?.id == artist.id ? 0 : 1)
@@ -338,7 +355,7 @@ struct ArtistsView: View {
                                     selectedArtist = artist
                                 }
                             } label: {
-                                ArtistCardView(artist: artist, size: 140, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                             .opacity(selectedArtist?.id == artist.id ? 0 : 1)

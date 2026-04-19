@@ -19,7 +19,6 @@ final class ArtistDetailViewModel: ObservableObject {
     @Published var avatarImage: UIImage?
     @Published var palette: AlbumPalette = .default
 
-    @Published var showAllAlbums = false
     @Published var showAllSongs = false
 
     private let api = NavidromeService.shared
@@ -53,6 +52,7 @@ final class ArtistDetailViewModel: ObservableObject {
             let extracted = await Task.detached(priority: .userInitiated) {
                 ColorExtractor.extract(from: img)
             }.value
+            guard !Task.isCancelled else { return }
             self.palette = extracted
         }
     }
@@ -81,7 +81,7 @@ final class ArtistDetailViewModel: ObservableObject {
         isLoadingPlayback = true
         defer { isLoadingPlayback = false }
         if let (_, songs, _) = try? await api.getAlbumDetail(albumId: albums[0].id) {
-            await MainActor.run { PlayerService.shared.playPlaylist(songs) }
+            await MainActor.run { PlayerService.shared.playPlaylist(songs, contextUri: "artist:\(artist.id)", contextName: artist.name) }
         }
     }
 
@@ -105,13 +105,13 @@ struct ArtistDetailView: View {
     @State private var suppressHero = false
     @State private var selectedAlbum: NavidromeAlbum?
     @State private var selectedPlaylist: NavidromePlaylist?
+    @State private var selectedSimilarArtist: NavidromeArtist?
     @Namespace private var subHeroNS
     var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 400
     private let avatarSize: CGFloat = 160
-    private let horizontalLimit = 8
 
     init(artist: NavidromeArtist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
@@ -126,7 +126,7 @@ struct ArtistDetailView: View {
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
-    private var subHeroActive: Bool { selectedAlbum != nil || selectedPlaylist != nil }
+    private var subHeroActive: Bool { selectedAlbum != nil || selectedPlaylist != nil || selectedSimilarArtist != nil }
 
     // Deterministic color from artist name (fallback when no avatar)
     private var nameColor: Color {
@@ -155,24 +155,26 @@ struct ArtistDetailView: View {
         }
         .modifier(AlbumHeroOverlay(selectedAlbum: $selectedAlbum, namespace: subHeroNS))
         .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: subHeroNS))
+        .modifier(ArtistHeroOverlay(selectedArtist: $selectedSimilarArtist, namespace: subHeroNS))
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
+        .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
-        .navigationDestination(for: NavidromeAlbum.self) { album in
-            AlbumDetailView(album: album)
-        }
-        .navigationDestination(for: NavidromePlaylist.self) { playlist in
-            PlaylistDetailView(playlist: playlist)
-        }
-        .navigationDestination(for: NavidromeArtist.self) { artist in
-            ArtistDetailView(artist: artist)
-        }
-        .navigationDestination(for: SeeAllDestination.self) { dest in
-            SeeAllGridView(destination: dest)
-        }
         .task {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = .dark
+            }
             await vm.load()
+            AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
             await vm.loadSecondary()
+        }
+        .onChange(of: isLight) { _, light in
+            AppTheme.shared.overlayColorScheme = light ? .light : .dark
+        }
+        .onDisappear {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = nil
+            }
         }
         .task(id: "hero-settle") {
             // Disable matchedGeometryEffect once the hero transition completes
@@ -211,17 +213,12 @@ struct ArtistDetailView: View {
             heroBackground
                 .scaleEffect(overscrollScale, anchor: .top)
                 .frame(height: heroHeight)
-                .mask(alignment: .top) {
+                .overlay(alignment: .bottom) {
                     LinearGradient(
-                        stops: [
-                            .init(color: .black,               location: 0.00),
-                            .init(color: .black,               location: 0.55),
-                            .init(color: .black.opacity(0.80), location: 0.78),
-                            .init(color: .black.opacity(0.30), location: 0.92),
-                            .init(color: .clear,               location: 1.00)
-                        ],
+                        colors: [.clear, pageBg],
                         startPoint: .top, endPoint: .bottom
                     )
+                    .frame(height: heroHeight * 0.35)
                 }
                 .clipped()
 
@@ -404,101 +401,40 @@ struct ArtistDetailView: View {
                 .padding(.horizontal, 16)
 
                 let visible = vm.showAllSongs ? vm.topSongs : Array(vm.topSongs.prefix(5))
-                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtistInMenu: false, showArtist: false)
+                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtistInMenu: false, showArtist: false, contextUri: "artist:\(vm.artist.id)", contextName: vm.artist.name)
                     .id(vm.showAllSongs)
             }
         }
     }
 
-    // MARK: Álbumes (horizontal + "Ver más" grid)
+    // MARK: Álbumes
 
     @ViewBuilder
     private var discographySection: some View {
         if !vm.albums.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                if !vm.showAllAlbums {
-                    let visibleAlbums = Array(vm.albums.prefix(horizontalLimit))
-                    let albumOverflow = vm.albums.count - visibleAlbums.count
-
-                    HorizontalScrollSection(
-                        title: "Álbumes",
-                        isLight: isLight
-                    ) {
-                        ForEach(visibleAlbums) { album in
-                            Button {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                    selectedAlbum = album
-                                }
-                            } label: {
-                                AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: subHeroNS)
-                            }
-                            .buttonStyle(.plain)
-                            .opacity(selectedAlbum?.id == album.id ? 0 : 1)
+            HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
+                ForEach(vm.albums) { album in
+                    Button {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                            selectedAlbum = album
                         }
-                        if albumOverflow > 0 {
-                            NavigationLink(value: SeeAllDestination.albums(title: "Álbumes", items: vm.albums)) {
-                                SeeAllCard(remaining: albumOverflow, isLight: isLight)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    } action: {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { vm.showAllAlbums = true }
-                        } label: {
-                            Text("Ver más")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
-                        }
+                    } label: {
+                        AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: subHeroNS)
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Álbumes")
-                                .font(.system(size: 22, weight: .bold))
-                                .foregroundStyle(isLight ? Color.black : .white)
-                            Spacer()
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) { vm.showAllAlbums = false }
-                            } label: {
-                                Text("Ver menos")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
-                            }
-                        }
-                        .padding(.horizontal, 16)
-
-                        LazyVGrid(columns: gridColumns, spacing: 20) {
-                            ForEach(vm.albums) { album in
-                                Button {
-                                    withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                        selectedAlbum = album
-                                    }
-                                } label: {
-                                    AlbumCardView(album: album, subtitle: .year, isLight: isLight, axis: .grid, heroNamespace: subHeroNS)
-                                }
-                                .buttonStyle(.plain)
-                                .opacity(selectedAlbum?.id == album.id ? 0 : 1)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
+                    .buttonStyle(.plain)
+                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
             }
         }
     }
-
-    private let gridColumns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
 
     // MARK: Aparece en (collaborations)
 
     @ViewBuilder
     private var collaborationsSection: some View {
         if !vm.collaborations.isEmpty {
-            let visible = Array(vm.collaborations.prefix(horizontalLimit))
-            let overflow = vm.collaborations.count - visible.count
-
             HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
-                ForEach(visible) { album in
+                ForEach(vm.collaborations) { album in
                     Button {
                         withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
                             selectedAlbum = album
@@ -509,12 +445,6 @@ struct ArtistDetailView: View {
                     .buttonStyle(.plain)
                     .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.albums(title: "Aparece en", items: vm.collaborations)) {
-                        SeeAllCard(remaining: overflow, isLight: isLight)
-                    }
-                    .buttonStyle(.plain)
-                }
             }
         }
     }
@@ -524,14 +454,11 @@ struct ArtistDetailView: View {
     @ViewBuilder
     private var playlistsSection: some View {
         if !vm.playlistsAreLoading && !vm.playlists.isEmpty {
-            let visible = Array(vm.playlists.prefix(horizontalLimit))
-            let overflow = vm.playlists.count - visible.count
-
             HorizontalScrollSection(
                 title: "Playlists con \(vm.artist.name)",
                 isLight: isLight
             ) {
-                ForEach(visible) { playlist in
+                ForEach(vm.playlists) { playlist in
                     Button {
                         withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
                             selectedPlaylist = playlist
@@ -541,12 +468,6 @@ struct ArtistDetailView: View {
                     }
                     .buttonStyle(.plain)
                     .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.playlists(title: "Playlists con \(vm.artist.name)", items: vm.playlists)) {
-                        SeeAllCard(remaining: overflow, isLight: isLight)
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -563,24 +484,21 @@ struct ArtistDetailView: View {
                 }
             }
         } else if let info = vm.info, !info.similarArtists.isEmpty {
-            let allArtists = info.similarArtists.map {
+            let artists = info.similarArtists.map {
                 NavidromeArtist(id: $0.id, name: $0.name, albumCount: nil)
             }
-            let visible = Array(allArtists.prefix(horizontalLimit))
-            let overflow = allArtists.count - visible.count
 
             HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
-                ForEach(visible) { artist in
-                    NavigationLink(value: artist) {
-                        ArtistCardView(artist: artist, size: 120, isLight: isLight)
+                ForEach(artists) { artist in
+                    Button {
+                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                            selectedSimilarArtist = artist
+                        }
+                    } label: {
+                        ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: subHeroNS)
                     }
                     .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.artists(title: "Fans también escuchan", items: allArtists)) {
-                        SeeAllArtistCard(remaining: overflow, isLight: isLight)
-                    }
-                    .buttonStyle(.plain)
+                    .opacity(selectedSimilarArtist?.id == artist.id ? 0 : 1)
                 }
             }
         }
@@ -700,6 +618,9 @@ struct ArtistHeroOverlay: ViewModifier {
                 .transition(.opacity)
                 .zIndex(1)
             }
+        }
+        .onChange(of: selectedArtist) { _, artist in
+            AppTheme.shared.overlayColorScheme = artist != nil ? .dark : nil
         }
     }
 }

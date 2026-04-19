@@ -12,18 +12,33 @@ private let defaultSections: [PlaylistSection] = [
 
 @MainActor
 final class PlaylistsViewModel: ObservableObject {
+    static let shared = PlaylistsViewModel()
+
     @Published var playlists: [NavidromePlaylist] = []
     @Published var sections:  [PlaylistSection]   = []
     @Published var isLoading  = true
     @Published var isBackendAvailable = false
+    @Published var isCreating = false
 
     private let api = NavidromeService.shared
+    private var lastLoadedAt: Date?
+    private let cacheTTL: TimeInterval = 120
 
     var isConfigured: Bool { api.isConfigured }
 
+    func loadIfNeeded() async {
+        if let last = lastLoadedAt, Date().timeIntervalSince(last) < cacheTTL, !playlists.isEmpty {
+            return
+        }
+        await load()
+    }
+
     func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            lastLoadedAt = Date()
+        }
 
         api.reloadCredentials()
         guard api.isConfigured else { return }
@@ -38,6 +53,18 @@ final class PlaylistsViewModel: ObservableObject {
         } else {
             sections = []
         }
+    }
+
+    func createPlaylist(name: String) async -> NavidromePlaylist? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+        isCreating = true
+        defer { isCreating = false }
+
+        guard let id = try? await api.createPlaylist(name: trimmed) else { return nil }
+        // Reload playlists to get the new one
+        playlists = (try? await api.getPlaylists()) ?? playlists
+        return playlists.first { $0.id == id }
     }
 
     // MARK: Filtered lists per section type
@@ -73,8 +100,10 @@ final class PlaylistsViewModel: ObservableObject {
 // MARK: - PlaylistsView
 
 struct PlaylistsView: View {
-    @StateObject private var vm = PlaylistsViewModel()
+    @ObservedObject private var vm = PlaylistsViewModel.shared
     @State private var showSettings = false
+    @State private var showCreateSheet = false
+    @State private var newPlaylistName = ""
     @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
     @State private var selectedPlaylist: NavidromePlaylist?
@@ -100,12 +129,18 @@ struct PlaylistsView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-            .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: heroNS))
+            .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: heroNS, onDeleted: {
+                Task { await vm.load() }
+            }))
             .background(Color(.systemBackground))
             .toolbarBackground(selectedPlaylist != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
-            .task { await vm.load() }
+            .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
-            .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
+            .navigationDestination(for: NavidromePlaylist.self) {
+                PlaylistDetailView(playlist: $0, onDeleted: {
+                    Task { await vm.load() }
+                })
+            }
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
             }
@@ -119,6 +154,23 @@ struct PlaylistsView: View {
                     }
                 }
             }
+            .alert("Nueva playlist", isPresented: $showCreateSheet) {
+                TextField("Nombre", text: $newPlaylistName)
+                Button("Crear") {
+                    let name = newPlaylistName
+                    newPlaylistName = ""
+                    Task {
+                        if let playlist = await vm.createPlaylist(name: name) {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                selectedPlaylist = playlist
+                            }
+                        }
+                    }
+                }
+                Button("Cancelar", role: .cancel) { newPlaylistName = "" }
+            } message: {
+                Text("Introduce el nombre de la nueva playlist.")
+            }
         }
     }
 
@@ -129,6 +181,14 @@ struct PlaylistsView: View {
             Text("Playlists")
                 .font(.system(size: 34, weight: .bold))
             Spacer()
+            if vm.isConfigured {
+                Button {
+                    showCreateSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .semibold))
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
@@ -150,7 +210,7 @@ struct PlaylistsView: View {
             ContentUnavailableView(
                 "Sin playlists",
                 systemImage: "music.note.list",
-                description: Text("Crea una playlist en Navidrome para verla aqui.")
+                description: Text("Crea una playlist en Navidrome para verla aquí.")
             )
             .padding(.top, 40)
         } else if vm.isBackendAvailable {

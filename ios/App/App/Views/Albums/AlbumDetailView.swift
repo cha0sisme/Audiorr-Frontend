@@ -64,6 +64,7 @@ final class AlbumDetailViewModel: ObservableObject {
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
+    @State private var suppressHero = false
     var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
 
@@ -112,8 +113,29 @@ struct AlbumDetailView: View {
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
+        .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
-        .task { await vm.load() }
+        .task {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = .dark
+            }
+            await vm.load()
+            AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
+        }
+        .onChange(of: isLight) { _, light in
+            AppTheme.shared.overlayColorScheme = light ? .light : .dark
+        }
+        .onDisappear {
+            if heroNamespace == nil {
+                AppTheme.shared.overlayColorScheme = nil
+            }
+        }
+        .task(id: "hero-settle") {
+            if heroNamespace != nil {
+                try? await Task.sleep(for: .milliseconds(600))
+                suppressHero = true
+            }
+        }
         .toolbar {
             if let onDismiss {
                 ToolbarItem(placement: .topBarLeading) {
@@ -161,17 +183,12 @@ struct AlbumDetailView: View {
                 heroBackground
                     .scaleEffect(overscrollScale, anchor: .top)
                     .frame(height: heroHeight)
-                    .mask(alignment: .top) {
+                    .overlay(alignment: .bottom) {
                         LinearGradient(
-                            stops: [
-                                .init(color: .black,               location: 0.00),
-                                .init(color: .black,               location: 0.60),
-                                .init(color: .black.opacity(0.85), location: 0.76),
-                                .init(color: .black.opacity(0.40), location: 0.90),
-                                .init(color: .clear,               location: 1.00)
-                            ],
+                            colors: [.clear, pageBg],
                             startPoint: .top, endPoint: .bottom
                         )
+                        .frame(height: heroHeight * 0.35)
                     }
                     .clipped()
             }
@@ -238,7 +255,7 @@ struct AlbumDetailView: View {
             coverArtImage
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(vm.initialAlbum.id)", in: heroNamespace!) }
+                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "cover_\(vm.initialAlbum.id)", in: heroNamespace!) }
                 .shadow(
                     color: vm.palette.isSolid
                         ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
@@ -318,7 +335,7 @@ struct AlbumDetailView: View {
         return HStack(spacing: 14) {
             Button {
                 guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs)
+                PlayerService.shared.playPlaylist(vm.songs, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "play.fill")
@@ -334,13 +351,24 @@ struct AlbumDetailView: View {
 
             Button {
                 guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs.shuffled())
+                PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 Image(systemName: "shuffle")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(labelColor)
                     .frame(width: 40, height: 40)
                     .background(fillColor, in: Circle())
+            }
+
+            if !vm.songs.isEmpty {
+                DownloadButton(
+                    groupId: vm.displayAlbum.id,
+                    groupType: "album",
+                    title: vm.displayAlbum.name,
+                    songs: vm.songs,
+                    fillColor: fillColor,
+                    labelColor: labelColor
+                )
             }
         }
         .disabled(vm.isLoading)
@@ -356,7 +384,7 @@ struct AlbumDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
             } else {
-                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
 
                 if !vm.recordLabels.isEmpty {
                     let year = String(vm.displayAlbum.year ?? Calendar.current.component(.year, from: Date()))
@@ -398,6 +426,11 @@ struct AlbumHeroOverlay: ViewModifier {
                 .transition(.opacity)
                 .zIndex(1)
             }
+        }
+        .onChange(of: selectedAlbum) { _, album in
+            // Default to dark for the hero overlay; the detail view
+            // refines once its palette loads.
+            AppTheme.shared.overlayColorScheme = album != nil ? .dark : nil
         }
     }
 }

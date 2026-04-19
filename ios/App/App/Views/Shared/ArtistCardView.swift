@@ -13,6 +13,7 @@ struct ArtistCardView: View {
     /// Pass `true` when the host page has a light background (palette-driven).
     /// When `nil`, standard system colors are used.
     var isLight: Bool? = nil
+    var showStats: Bool = false
     var heroNamespace: Namespace.ID?
 
     @State private var avatarImage: UIImage?
@@ -26,6 +27,10 @@ struct ArtistCardView: View {
     private var titleColor: Color {
         guard let isLight else { return .primary }
         return isLight ? .black : .white
+    }
+    private var subtitleColor: Color {
+        guard let isLight else { return .secondary }
+        return isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55)
     }
 
     var body: some View {
@@ -69,9 +74,25 @@ struct ArtistCardView: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .frame(width: size)
+
+            if showStats, let count = artist.albumCount, count > 0 {
+                Text("\(count) \(count == 1 ? "álbum" : "álbumes")")
+                    .font(.system(size: 12))
+                    .foregroundStyle(subtitleColor)
+                    .lineLimit(1)
+                    .frame(width: size)
+            }
         }
-        .task(id: artist.id) {
-            await loadAvatar()
+        .task(id: artist.id) { await loadAvatar() }
+        .onAppear {
+            if avatarImage == nil && !didFinishLoading {
+                if let cached = ArtistImageCache.shared.image(for: artist.id) {
+                    avatarImage = cached
+                    didFinishLoading = true
+                } else {
+                    Task { await loadAvatar() }
+                }
+            }
         }
     }
 
@@ -98,17 +119,23 @@ struct ArtistCardView: View {
             return
         }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let img = UIImage(data: data) else {
-            withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
+        // Retry up to 2 times with backoff
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+            }
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { continue }
+            ArtistImageCache.shared.setImage(img, for: artist.id)
+            withAnimation(.easeOut(duration: 0.25)) {
+                avatarImage = img
+                didFinishLoading = true
+            }
             return
         }
 
-        ArtistImageCache.shared.setImage(img, for: artist.id)
-        withAnimation(.easeOut(duration: 0.25)) {
-            avatarImage = img
-            didFinishLoading = true
-        }
+        // All retries failed — show initial fallback
+        withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
     }
 }
 

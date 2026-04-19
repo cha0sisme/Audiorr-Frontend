@@ -41,7 +41,7 @@ struct PlaylistCardView: View {
                     .lineLimit(2)
                     .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)
 
-                Text("\(playlist.songCount) \(playlist.songCount == 1 ? "cancion" : "canciones")")
+                Text("\(playlist.songCount) \(playlist.songCount == 1 ? "canción" : "canciones")")
                     .font(.system(size: 12))
                     .foregroundStyle(subtitleColor)
                     .frame(maxWidth: isGrid ? .infinity : size, alignment: .leading)

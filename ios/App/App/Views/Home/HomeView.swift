@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class HomeViewModel: ObservableObject {
+    static let shared = HomeViewModel()
+
     @Published var topWeekly: [TopWeeklySong] = []
     @Published var recentContexts: [RecentContext] = []
     @Published var recentReleases: [NavidromeAlbum] = []
@@ -16,10 +18,24 @@ final class HomeViewModel: ObservableObject {
     @Published var isBackendAvailable = false
 
     private let api = NavidromeService.shared
+    private var lastLoadedAt: Date?
+    /// Cache TTL — skip network if loaded less than 2 minutes ago.
+    private let cacheTTL: TimeInterval = 120
+
+    /// Load only if cache is stale or empty. Pass `force: true` for pull-to-refresh.
+    func loadIfNeeded() async {
+        if let last = lastLoadedAt, Date().timeIntervalSince(last) < cacheTTL, !topWeekly.isEmpty || !latestAlbums.isEmpty {
+            return
+        }
+        await load()
+    }
 
     func load() async {
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            lastLoadedAt = Date()
+        }
 
         api.reloadCredentials()
         guard api.isConfigured else { return }
@@ -46,7 +62,26 @@ final class HomeViewModel: ObservableObject {
 
     private func loadRecentContexts() async {
         guard isBackendAvailable else { return }
-        recentContexts = Array(await api.getRecentContexts().prefix(6))
+        var contexts = Array(await api.getRecentContexts().prefix(6))
+
+        // Enrich playlist/smartmix contexts with real name + song count from Navidrome
+        let playlistIndices = contexts.enumerated().compactMap { (i, ctx) -> (Int, String)? in
+            (ctx.type == "playlist" || ctx.type == "smartmix") ? (i, ctx.id) : nil
+        }
+        await withTaskGroup(of: (Int, String?, Int?).self) { group in
+            for (index, pid) in playlistIndices {
+                group.addTask {
+                    let (playlist, _) = (try? await self.api.getPlaylistSongs(playlistId: pid)) ?? (nil, [])
+                    return (index, playlist?.name, playlist?.songCount)
+                }
+            }
+            for await (index, name, count) in group {
+                if let name { contexts[index].title = name }
+                if let count { contexts[index].songCount = count }
+            }
+        }
+
+        recentContexts = contexts
     }
 
     private func loadRecentReleases() async {
@@ -99,12 +134,15 @@ final class HomeViewModel: ObservableObject {
 // MARK: - HomeView
 
 struct HomeView: View {
-    @StateObject private var vm = HomeViewModel()
+    @ObservedObject private var vm = HomeViewModel.shared
     @ObservedObject private var theme = AppTheme.shared
+    private var network = NetworkMonitor.shared
     @State private var scrollY: CGFloat = 0
+    @State private var offlineAlbums: [(albumId: String, name: String, artist: String, coverArt: String, songCount: Int, year: Int?)] = []
     @Namespace private var heroNS
     @State private var selectedAlbum: NavidromeAlbum?
     @State private var selectedPlaylist: NavidromePlaylist?
+    @State private var navigationPath = NavigationPath()
 
     private let collapseThreshold: CGFloat = 44
 
@@ -116,13 +154,15 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     largeHeader
 
                     VStack(alignment: .leading, spacing: 24) {
-                        if vm.isLoading {
+                        if !network.isConnected {
+                            offlineContentSection
+                        } else if vm.isLoading {
                             loadingSkeleton
                         } else {
                             topWeeklySection
@@ -158,7 +198,7 @@ struct HomeView: View {
             .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
             .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
-            .task { await vm.load() }
+            .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
             .onReceive(NotificationCenter.default.publisher(for: .audiorrDidLogin)) { _ in
                 Task { await vm.load() }
@@ -167,12 +207,20 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Large header
+    // MARK: - Programmatic navigation
+
+    private func navigateToArtist(_ artist: NavidromeArtist) {
+        navigationPath.append(artist)
+    }
+
+    // MARK: - Large header (Audiorr logo)
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Inicio")
-                .font(.system(size: 34, weight: .bold))
+            Image("AudiorrTabIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 32)
             Spacer()
         }
         .padding(.horizontal, 16)
@@ -189,7 +237,7 @@ struct HomeView: View {
     private var topWeeklySection: some View {
         if vm.isBackendAvailable && !vm.topWeekly.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Lo mas escuchado")
+                Text("Lo más escuchado")
                     .font(.system(size: 22, weight: .bold))
                     .padding(.horizontal, 16)
 
@@ -225,11 +273,48 @@ struct HomeView: View {
     }
 
     private func topWeeklyRow(_ song: TopWeeklySong) -> some View {
-        Button {
+        HStack(spacing: 12) {
+            // Rank
+            Text("\(song.rank)")
+                .font(.system(size: 15, weight: .bold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .trailing)
+
+            // Cover
+            AsyncImage(url: NavidromeService.shared.coverURL(id: song.coverArt, size: 80)) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    Color(.tertiarySystemFill)
+                }
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            // Title + Artist
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(song.artist)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Trend indicator
+            trendBadge(song)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .onTapGesture {
             let allSongs = vm.topWeekly.map { entry in
                 NavidromeSong(
                     id: entry.songId, title: entry.title, artist: entry.artist,
-                    artistId: nil, album: entry.album, albumId: entry.albumId,
+                    artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
                     coverArt: entry.coverArt, duration: 0, track: nil,
                     year: nil, genre: nil, explicitStatus: nil,
                     replayGainTrackGain: nil, replayGainTrackPeak: nil,
@@ -237,47 +322,31 @@ struct HomeView: View {
                 )
             }
             if let idx = allSongs.firstIndex(where: { $0.id == song.songId }) {
-                PlayerService.shared.playPlaylist(allSongs, startingAt: idx)
+                PlayerService.shared.playPlaylist(allSongs, startingAt: idx, contextUri: "top-weekly", contextName: "Top semanal")
             }
-        } label: {
-            HStack(spacing: 12) {
-                // Rank
-                Text("\(song.rank)")
-                    .font(.system(size: 15, weight: .bold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, alignment: .trailing)
-
-                // Cover
-                AsyncImage(url: NavidromeService.shared.coverURL(id: song.coverArt, size: 80)) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        Color(.tertiarySystemFill)
-                    }
-                }
-                .frame(width: 48, height: 48)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                // Title + Artist
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(song.title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(song.artist)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                // Trend indicator
-                trendBadge(song)
-            }
-            .padding(.vertical, 8)
         }
-        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                let album = NavidromeAlbum(
+                    id: song.albumId, name: song.album, artist: song.artist,
+                    coverArt: song.coverArt, songCount: nil, duration: nil,
+                    year: nil, genre: nil, explicitStatus: nil
+                )
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                    selectedAlbum = album
+                }
+            } label: {
+                Label("Ir al álbum", systemImage: "square.stack")
+            }
+
+            if let artistId = song.artistId {
+                Button {
+                    navigateToArtist(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
+                } label: {
+                    Label("Ir al artista", systemImage: "person")
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -292,7 +361,7 @@ struct HomeView: View {
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                 }
             }
-            .foregroundStyle(.cyan)
+            .foregroundStyle(.green)
         case "down":
             HStack(spacing: 2) {
                 Image(systemName: "arrow.down")
@@ -304,7 +373,7 @@ struct HomeView: View {
             }
             .foregroundStyle(.red)
         case "new":
-            Text("NEW")
+            Text("Nuevo")
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.cyan)
                 .padding(.horizontal, 5)
@@ -324,7 +393,46 @@ struct HomeView: View {
         if vm.isBackendAvailable && !vm.recentContexts.isEmpty {
             HorizontalScrollSection(title: "Volver a escuchar") {
                 ForEach(vm.recentContexts) { ctx in
-                    RecentContextCard(context: ctx)
+                    let isAlbum = ctx.type == "album"
+                    let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
+
+                    if isAlbum {
+                        let album = NavidromeAlbum(
+                            id: ctx.id, name: ctx.title, artist: ctx.artist,
+                            coverArt: ctx.coverArtId, songCount: nil, duration: nil,
+                            year: nil, genre: nil, explicitStatus: nil
+                        )
+                        Button {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                selectedAlbum = album
+                            }
+                        } label: {
+                            AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(selectedAlbum?.id == ctx.id ? 0 : 1)
+                    } else if isPlaylist {
+                        let playlist = NavidromePlaylist(
+                            id: ctx.id, name: ctx.title, comment: nil,
+                            songCount: ctx.songCount ?? 0, duration: 0,
+                            owner: nil, coverArt: ctx.coverArtId, changed: nil
+                        )
+                        Button {
+                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
+                                selectedPlaylist = playlist
+                            }
+                        } label: {
+                            PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(selectedPlaylist?.id == ctx.id ? 0 : 1)
+                    } else if ctx.type == "artist" {
+                        let artist = NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil)
+                        NavigationLink(value: artist) {
+                            ArtistCardView(artist: artist, size: 150)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
         }
@@ -437,7 +545,7 @@ struct HomeView: View {
             let visible = Array(vm.latestAlbums.prefix(latestVisibleLimit))
             let overflow = vm.latestAlbums.count - latestVisibleLimit
 
-            HorizontalScrollSection(title: "Ultimos albumes anadidos") {
+            HorizontalScrollSection(title: "Últimos álbumes añadidos") {
                 ForEach(visible) { album in
                     Button {
                         withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
@@ -451,7 +559,7 @@ struct HomeView: View {
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(
-                        title: "Ultimos albumes anadidos", items: vm.latestAlbums
+                        title: "Últimos álbumes añadidos", items: vm.latestAlbums
                     )) {
                         SeeAllCard(remaining: overflow)
                     }
@@ -494,167 +602,101 @@ struct HomeView: View {
             }
         }
     }
-}
 
-// MARK: - Recent context card (Jump Back In)
-
-private struct RecentContextCard: View {
-    let context: RecentContext
-    @State private var artistImage: URL?
-
-    private var isArtist: Bool { context.type == "artist" }
-    private var isPlaylist: Bool { context.type == "playlist" || context.type == "smartmix" }
-
-    var body: some View {
-        NavigationLink(value: navigationValue) {
-            VStack(alignment: .leading, spacing: 6) {
-                coverImage
-                    .frame(width: 150, height: 150)
-                    .clipShape(isArtist
-                        ? AnyShape(Circle())
-                        : AnyShape(RoundedRectangle(cornerRadius: 12, style: .continuous)))
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-
-                Text(context.title)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .frame(width: 150, alignment: .leading)
-
-                if !isArtist {
-                    Text(isPlaylist
-                        ? "\(context.songCount) canciones"
-                        : context.artist)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(width: 150, alignment: .leading)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .task {
-            if isArtist {
-                artistImage = await NavidromeService.shared.artistImageURL(name: context.id)
-            }
-        }
-    }
-
-    // MARK: - Cover
+    // MARK: - Offline Content
 
     @ViewBuilder
-    private var coverImage: some View {
-        if isPlaylist {
-            // Backend cover first, then Navidrome fallback
-            PlaylistCoverForContext(context: context)
-        } else if isArtist {
-            if let artistImage {
-                AsyncImage(url: artistImage) { phase in
-                    switch phase {
-                    case .success(let img): img.resizable().scaledToFill()
-                    default: artistPlaceholder
+    private var offlineContentSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Descargado")
+                .font(.system(size: 22, weight: .bold))
+                .padding(.horizontal, 16)
+
+            if offlineAlbums.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary)
+                    Text("Sin conexión")
+                        .font(.headline)
+                    Text("Descarga álbumes y playlists para escuchar sin conexión.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(offlineAlbums, id: \.albumId) { album in
+                        Button {
+                            selectedAlbum = NavidromeAlbum(
+                                id: album.albumId, name: album.name, artist: album.artist,
+                                coverArt: album.coverArt, songCount: album.songCount,
+                                duration: nil, year: album.year, genre: nil, explicitStatus: nil
+                            )
+                        } label: {
+                            HStack(spacing: 12) {
+                                AlbumCoverThumbnail(coverArt: album.coverArt, size: 50)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(album.name)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .lineLimit(1)
+                                    Text("\(album.artist) · \(album.songCount) canciones")
+                                        .font(.system(size: 13))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.system(size: 14))
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-            } else {
-                artistPlaceholder
             }
-        } else if let coverArtId = context.coverArtId {
-            // Album
-            AsyncImage(url: NavidromeService.shared.coverURL(id: coverArtId, size: 300)) { phase in
-                switch phase {
-                case .success(let img): img.resizable().scaledToFill()
-                default: albumPlaceholder
-                }
-            }
-        } else {
-            albumPlaceholder
         }
-    }
-
-    private var artistPlaceholder: some View {
-        ZStack {
-            let hash = context.title.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 360 }
-            Color(hue: Double(hash) / 360.0, saturation: 0.45, brightness: 0.50)
-            Image(systemName: "person.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.white.opacity(0.7))
-        }
-    }
-
-    private var albumPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note")
-                .font(.system(size: 30))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Navigation
-
-    private var navigationValue: AnyHashable {
-        switch context.type {
-        case "album":
-            return NavidromeAlbum(
-                id: context.id, name: context.title, artist: context.artist,
-                coverArt: context.coverArtId, songCount: nil, duration: nil,
-                year: nil, genre: nil, explicitStatus: nil
-            )
-        case "playlist", "smartmix":
-            return NavidromePlaylist(
-                id: context.id, name: context.title, comment: nil,
-                songCount: context.songCount, duration: 0,
-                owner: nil, coverArt: context.coverArtId, changed: nil
-            )
-        case "artist":
-            return NavidromeArtist(
-                id: context.id, name: context.title, albumCount: nil
-            )
-        default:
-            return context.id
+        .task {
+            offlineAlbums = await OfflineContentProvider.shared.cachedAlbums()
         }
     }
 }
 
-// MARK: - Playlist cover with backend-first fallback (for RecentContext)
+// MARK: - Album Cover Thumbnail (small, for offline list)
 
-private struct PlaylistCoverForContext: View {
-    let context: RecentContext
-    @State private var useBackend = true
+private struct AlbumCoverThumbnail: View {
+    let coverArt: String?
+    let size: CGFloat
 
-    private var backendURL: URL? {
-        NavidromeService.shared.playlistBackendCoverURL(playlistId: context.id)
-    }
-    private var navidromeURL: URL? {
-        NavidromeService.shared.coverURL(id: context.coverArtId, size: 300)
-    }
-    private var activeURL: URL? {
-        useBackend ? (backendURL ?? navidromeURL) : navidromeURL
-    }
+    @State private var image: UIImage?
 
     var body: some View {
-        AsyncImage(url: activeURL) { phase in
-            switch phase {
-            case .success(let img):
-                img.resizable().scaledToFill()
-            case .failure:
-                if useBackend && navidromeURL != nil {
-                    Color.clear.onAppear { useBackend = false }
-                } else {
-                    placeholder
-                }
-            default:
-                placeholder
+        Group {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.tertiarySystemFill)
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .foregroundStyle(.secondary)
+                    )
             }
         }
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note.list")
-                .font(.system(size: 30))
-                .foregroundStyle(.secondary)
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .task {
+            guard let coverArt, !coverArt.isEmpty,
+                  let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return }
+            image = img
         }
     }
 }
+

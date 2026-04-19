@@ -9,16 +9,17 @@ private let maxHistory = 5
 
 @MainActor
 final class SearchViewModel: ObservableObject {
+    static let shared = SearchViewModel()
+
     @Published var query = ""
     @Published var results = SearchResults()
     @Published var isSearching = false
     @Published var history: [String] = []
-    @Published var artistAvatars: [String: URL?] = [:]   // artistId → URL?
 
     private let api = NavidromeService.shared
-    private var debounceTask: Task<Void, Never>?
+    fileprivate var debounceTask: Task<Void, Never>?
 
-    init() {
+    private init() {
         loadHistory()
     }
 
@@ -26,47 +27,43 @@ final class SearchViewModel: ObservableObject {
 
     func onQueryChange(_ q: String) {
         debounceTask?.cancel()
-        if q.trimmingCharacters(in: .whitespaces).isEmpty {
+        let trimmed = q.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
             results = SearchResults()
-            artistAvatars = [:]
+            isSearching = false
             return
         }
+        isSearching = true
         debounceTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms
+            try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms debounce
             guard !Task.isCancelled else { return }
-            await performSearch(q.trimmingCharacters(in: .whitespaces))
+            await performSearch(trimmed)
         }
     }
 
     private func performSearch(_ q: String) async {
-        isSearching = true
-        defer { isSearching = false }
-
         api.reloadCredentials()
-        guard api.isConfigured else { return }
+        guard api.isConfigured else {
+            isSearching = false
+            return
+        }
 
         do {
-            let r = try await api.searchAll(query: q, artistCount: 5, albumCount: 5, songCount: 5)
+            let r = try await api.searchAll(query: q, artistCount: 6, albumCount: 6, songCount: 8)
+            guard !Task.isCancelled else { return }
             results = r
-            await loadArtistAvatars(for: r.artists)
-        } catch {
-            results = SearchResults()
-        }
-    }
+            isSearching = false
 
-    private func loadArtistAvatars(for artists: [NavidromeArtist]) async {
-        artistAvatars = [:]
-        await withTaskGroup(of: (String, URL?).self) { group in
-            for artist in artists {
-                group.addTask { [weak self] in
-                    guard let self else { return (artist.id, nil) }
-                    let url = await self.api.artistAvatarURL(artistId: artist.id)
-                    return (artist.id, url)
+            // Pre-warm artist avatar cache in background (non-blocking)
+            for artist in r.artists {
+                Task.detached(priority: .utility) {
+                    _ = await NavidromeService.shared.artistAvatarURL(artistId: artist.id)
                 }
             }
-            for await (id, url) in group {
-                artistAvatars[id] = url
-            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            results = SearchResults()
+            isSearching = false
         }
     }
 
@@ -86,6 +83,11 @@ final class SearchViewModel: ObservableObject {
         persistHistory()
     }
 
+    func clearHistory() {
+        history.removeAll()
+        persistHistory()
+    }
+
     private func loadHistory() {
         history = (UserDefaults.standard.array(forKey: historyKey) as? [String] ?? [])
             .prefix(maxHistory).map { $0 }
@@ -99,11 +101,10 @@ final class SearchViewModel: ObservableObject {
 // MARK: - SearchView
 
 struct SearchView: View {
-    @StateObject private var vm = SearchViewModel()
+    @ObservedObject private var vm = SearchViewModel.shared
     @FocusState private var searchFocused: Bool
     @State private var scrollY: CGFloat = 0
 
-    // Song playback callback (still used — no push navigation needed)
     var onPlaySong: ((NavidromeSong) -> Void)?
 
     private let collapseThreshold: CGFloat = 44
@@ -115,27 +116,30 @@ struct SearchView: View {
         1 - min(max(scrollY / collapseThreshold, 0), 1)
     }
 
+    private var hasQuery: Bool {
+        !vm.query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     largeHeader
-
-                    // Search bar
                     searchBar
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
 
-                    // Content
-                    if vm.isSearching {
-                        spinner
-                    } else if !vm.query.trimmingCharacters(in: .whitespaces).isEmpty && vm.results.isEmpty {
-                        emptyState
-                    } else if !vm.query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        resultsView
+                    if vm.isSearching && vm.results.isEmpty {
+                        searchingSection
+                    } else if hasQuery && vm.results.isEmpty && !vm.isSearching {
+                        emptySection
+                    } else if hasQuery {
+                        resultsContent
                     } else if !vm.history.isEmpty {
-                        historyView
+                        historySection
                     }
+
+                    Spacer(minLength: 80)
                 }
             }
             .ignoresSafeArea(edges: .top)
@@ -155,6 +159,9 @@ struct SearchView: View {
             .onChange(of: vm.query) { _, newValue in
                 vm.onQueryChange(newValue)
             }
+            .onDisappear {
+                vm.debounceTask?.cancel()
+            }
             .navigationDestination(for: NavidromeAlbum.self) { album in
                 AlbumDetailView(album: album)
             }
@@ -164,7 +171,7 @@ struct SearchView: View {
         }
     }
 
-    // MARK: - Large header
+    // MARK: - Large title header
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
@@ -173,7 +180,7 @@ struct SearchView: View {
             Spacer()
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 20)
+        .padding(.bottom, 12)
         .padding(.top, UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.windows.first?.safeAreaInsets.top ?? 59)
@@ -205,273 +212,333 @@ struct SearchView: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - History
 
-    private var historyView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Búsquedas recientes")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(0.5)
-                .padding(.horizontal, 16)
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Recientes")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                Spacer()
+                if vm.history.count > 1 {
+                    Button("Borrar") {
+                        withAnimation { vm.clearHistory() }
+                    }
+                    .font(.subheadline)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
 
-            VStack(spacing: 0) {
-                ForEach(vm.history, id: \.self) { item in
-                    HStack {
-                        Button {
-                            vm.query = item
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "clock")
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 16)
-                                Text(item)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+            ForEach(vm.history, id: \.self) { item in
+                Button {
+                    vm.query = item
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "clock")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 15))
+                            .frame(width: 20)
 
-                        Button {
-                            vm.removeFromHistory(item)
-                        } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 8)
-                        }
-                        .buttonStyle(.plain)
+                        Text(item)
+                            .foregroundStyle(.primary)
+
+                        Spacer()
+
+                        Image(systemName: "arrow.up.left")
+                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 13))
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
 
-                    if item != vm.history.last {
-                        Divider().padding(.leading, 52)
-                    }
+                if item != vm.history.last {
+                    Divider().padding(.leading, 48)
                 }
             }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 16)
         }
     }
 
     // MARK: - Results
 
-    private var resultsView: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            if !vm.results.artists.isEmpty { artistsSection }
-            if !vm.results.albums.isEmpty  { albumsSection  }
-            if !vm.results.songs.isEmpty   { songsSection   }
-        }
-        .padding(.bottom, 32)
-    }
+    @ViewBuilder
+    private var resultsContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if !vm.results.artists.isEmpty {
+                resultSection(title: "Artistas") {
+                    ForEach(vm.results.artists) { artist in
+                        NavigationLink(value: artist) {
+                            ArtistSearchRow(artist: artist)
+                        }
+                        .buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            vm.saveToHistory(vm.query)
+                        })
 
-    private var artistsSection: some View {
-        resultSection(title: "Artistas") {
-            ForEach(vm.results.artists) { artist in
-                NavigationLink(value: artist) {
-                    ArtistRow(artist: artist, avatarURL: vm.artistAvatars[artist.id] ?? nil)
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(TapGesture().onEnded {
-                    vm.saveToHistory(vm.query)
-                    vm.query = ""
-                })
-
-                if artist.id != vm.results.artists.last?.id {
-                    Divider().padding(.leading, 68)
+                        if artist.id != vm.results.artists.last?.id {
+                            Divider().padding(.leading, 62)
+                        }
+                    }
                 }
             }
-        }
-    }
 
-    private var albumsSection: some View {
-        resultSection(title: "Álbumes") {
-            ForEach(vm.results.albums) { album in
-                NavigationLink(value: album) {
-                    AlbumRow(album: album)
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(TapGesture().onEnded {
-                    vm.saveToHistory(vm.query)
-                    vm.query = ""
-                })
+            if !vm.results.albums.isEmpty {
+                resultSection(title: "Álbumes") {
+                    ForEach(vm.results.albums) { album in
+                        NavigationLink(value: album) {
+                            AlbumSearchRow(album: album)
+                        }
+                        .buttonStyle(.plain)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            vm.saveToHistory(vm.query)
+                        })
 
-                if album.id != vm.results.albums.last?.id {
-                    Divider().padding(.leading, 68)
+                        if album.id != vm.results.albums.last?.id {
+                            Divider().padding(.leading, 62)
+                        }
+                    }
                 }
             }
-        }
-    }
 
-    private var songsSection: some View {
-        resultSection(title: "Canciones") {
-            ForEach(vm.results.songs) { song in
-                Button {
-                    vm.saveToHistory(vm.query)
-                    vm.query = ""
-                    onPlaySong?(song)
-                } label: {
-                    SongRow(song: song)
-                }
-                .buttonStyle(.plain)
+            if !vm.results.songs.isEmpty {
+                resultSection(title: "Canciones") {
+                    ForEach(vm.results.songs) { song in
+                        Button {
+                            vm.saveToHistory(vm.query)
+                            onPlaySong?(song)
+                        } label: {
+                            SongSearchRow(song: song)
+                        }
+                        .buttonStyle(.plain)
 
-                if song.id != vm.results.songs.last?.id {
-                    Divider().padding(.leading, 68)
+                        if song.id != vm.results.songs.last?.id {
+                            Divider().padding(.leading, 62)
+                        }
+                    }
                 }
             }
         }
     }
 
     private func resultSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
-                .tracking(0.5)
                 .padding(.horizontal, 16)
+                .padding(.bottom, 10)
 
-            VStack(spacing: 0) {
-                content()
-            }
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 16)
+            content()
+                .padding(.horizontal, 16)
         }
     }
 
     // MARK: - States
 
-    private var spinner: some View {
-        HStack { Spacer(); ProgressView(); Spacer() }
-            .padding(.top, 48)
+    private var searchingSection: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+            Spacer()
+        }
+        .padding(.vertical, 32)
     }
 
-    private var emptyState: some View {
+    private var emptySection: some View {
         VStack(spacing: 12) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 48))
+                .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
             Text("Sin resultados para «\(vm.query)»")
                 .foregroundStyle(.secondary)
+                .font(.subheadline)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 64)
+        .padding(.vertical, 40)
     }
 }
 
-// MARK: - Row components
+// MARK: - Artist search row — avatar loads from cache, then async
 
-private struct ArtistRow: View {
+private struct ArtistSearchRow: View {
     let artist: NavidromeArtist
-    let avatarURL: URL?
+
+    @State private var avatarImage: UIImage?
+    @State private var didLoad = false
+
+    private var fallbackColor: Color {
+        let hash = artist.name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 360 }
+        return Color(hue: Double(hash) / 360.0, saturation: 0.35, brightness: 0.55)
+    }
 
     var body: some View {
         HStack(spacing: 14) {
-            AsyncImage(url: avatarURL) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    Image(systemName: "person.fill")
-                        .foregroundStyle(.tertiary)
-                        .font(.system(size: 22))
+            // Circular avatar — Apple Music style
+            ZStack {
+                if let img = avatarImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                } else if didLoad {
+                    fallbackColor.opacity(0.25)
+                        .overlay(
+                            Text(String(artist.name.prefix(1)).uppercased())
+                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .foregroundStyle(fallbackColor)
+                        )
+                } else {
+                    Color(.tertiarySystemFill)
                 }
             }
-            .frame(width: 44, height: 44)
-            .background(Color(.tertiarySystemFill))
+            .frame(width: 48, height: 48)
             .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(artist.name)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Text("Artista")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
-            Spacer()
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
+        .task(id: artist.id) {
+            // 1) Check shared image cache first (instant)
+            if let cached = ArtistImageCache.shared.image(for: artist.id) {
+                avatarImage = cached
+                didLoad = true
+                return
+            }
+
+            // 2) Get avatar URL (may be cached in NavidromeService)
+            guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artist.id) else {
+                didLoad = true
+                return
+            }
+
+            // 3) Download image
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else {
+                didLoad = true
+                return
+            }
+
+            ArtistImageCache.shared.setImage(img, for: artist.id)
+            withAnimation(.easeOut(duration: 0.2)) {
+                avatarImage = img
+                didLoad = true
+            }
+        }
     }
 }
 
-private struct AlbumRow: View {
+// MARK: - Album search row — cached cover
+
+private struct AlbumSearchRow: View {
     let album: NavidromeAlbum
 
     var body: some View {
         HStack(spacing: 14) {
-            CoverThumbnail(id: album.coverArt, cornerRadius: 8)
+            CachedCoverThumbnail(id: album.coverArt, cornerRadius: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(album.name)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(album.artist)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(album.artist)
+                    if let year = album.year {
+                        Text("·")
+                        Text(String(year))
+                    }
+                }
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
     }
 }
 
-private struct SongRow: View {
+// MARK: - Song search row — cached cover
+
+private struct SongSearchRow: View {
     let song: NavidromeSong
 
     var body: some View {
         HStack(spacing: 14) {
-            CoverThumbnail(id: song.coverArt, cornerRadius: 8)
+            CachedCoverThumbnail(id: song.coverArt, cornerRadius: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text("\(song.artist) · \(song.album)")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
     }
 }
 
-// MARK: - Cover thumbnail helper
+// MARK: - Cached cover thumbnail (uses AlbumCoverCache + URLSession instead of AsyncImage)
 
-private struct CoverThumbnail: View {
+private struct CachedCoverThumbnail: View {
     let id: String?
-    var size: Int = 100
     var cornerRadius: CGFloat = 6
 
-    private var url: URL? { NavidromeService.shared.coverURL(id: id, size: size) }
+    @State private var image: UIImage?
 
     var body: some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFill()
-            default:               Color(.tertiarySystemFill)
+        ZStack {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.tertiarySystemFill)
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .foregroundStyle(.quaternary)
+                            .font(.system(size: 16))
+                    )
             }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 48, height: 48)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .task(id: id) {
+            guard let id, !id.isEmpty else { return }
+
+            // Check cache first
+            if let cached = AlbumCoverCache.shared.image(for: id) {
+                image = cached
+                return
+            }
+
+            // Download
+            guard let url = NavidromeService.shared.coverURL(id: id, size: 100),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return }
+
+            AlbumCoverCache.shared.setImage(img, for: id)
+            image = img
+        }
     }
 }
 

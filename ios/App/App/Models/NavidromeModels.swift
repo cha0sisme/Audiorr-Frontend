@@ -76,6 +76,15 @@ struct NavidromePlaylist: Identifiable, Decodable, Hashable {
     let owner: String?
     let coverArt: String?
     let changed: String?
+
+    /// True for editorial, smart, or spotify-synced playlists (not user-deletable).
+    var isSystemPlaylist: Bool {
+        let c = (comment ?? "").lowercased()
+        return c.contains("smart playlist")
+            || c.contains("[editorial]")
+            || c.contains("spotify synced")
+            || name.lowercased().hasPrefix("mix diario")
+    }
 }
 
 // MARK: - Homepage layout sections (mirrors backend PlaylistSection type)
@@ -112,6 +121,15 @@ struct PlaylistsResponse: Decodable {
     let playlists: PlaylistsContainer?
     struct PlaylistsContainer: Decodable {
         let playlist: [NavidromePlaylist]?
+    }
+}
+
+struct CreatePlaylistResponse: Decodable {
+    let status: String
+    let playlist: CreatedPlaylist?
+    struct CreatedPlaylist: Decodable {
+        let id: String
+        let name: String
     }
 }
 
@@ -343,6 +361,7 @@ struct TopWeeklySong: Identifiable, Decodable {
     let songId: String
     let title: String
     let artist: String
+    let artistId: String?
     let album: String
     let albumId: String
     let coverArt: String
@@ -356,7 +375,9 @@ struct TopWeeklySong: Identifiable, Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case songId = "song_id"
-        case title, artist, album
+        case title, artist
+        case artistId = "artist_id"
+        case album
         case albumId = "album_id"
         case coverArt = "cover_art"
         case plays, rank, previousRank, trend, change
@@ -367,11 +388,11 @@ struct RecentContext: Identifiable, Decodable {
     let contextUri: String
     let type: String        // "album" | "playlist" | "smartmix" | "artist" | "other"
     let id: String
-    let title: String
+    var title: String
     let artist: String
     let coverArtId: String?
     let lastPlayedAt: String
-    let songCount: Int
+    var songCount: Int?
 }
 
 struct DailyMix: Identifiable, Decodable {

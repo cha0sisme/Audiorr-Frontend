@@ -99,7 +99,7 @@ struct MiniPlayerView: View {
             }
             .frame(width: 42, height: 42)
 
-            Text("Sin reproduccion")
+            Text("Sin reproducción")
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(.tertiary)
 

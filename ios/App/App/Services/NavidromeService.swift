@@ -12,17 +12,25 @@ final class NavidromeService: ObservableObject {
     private var cache: [String: (Any, Date)] = [:]
     private let cacheLock = NSLock()
     private let cacheTTL: TimeInterval = 300  // 5 minutes
+    private let maxCacheSize = 200
 
     private func cacheGet(_ key: String) -> Any? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        guard let (value, expiry) = cache[key], Date() < expiry else { return nil }
+        guard let (value, expiry) = cache[key], Date() < expiry else {
+            cache.removeValue(forKey: key)
+            return nil
+        }
         return value
     }
 
     private func cacheSet(_ key: String, value: Any, ttl: TimeInterval? = nil) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        if cache.count >= maxCacheSize {
+            let now = Date()
+            cache = cache.filter { $0.value.1 > now }
+        }
         cache[key] = (value, Date().addingTimeInterval(ttl ?? cacheTTL))
     }
 
@@ -167,6 +175,28 @@ final class NavidromeService: ObservableObject {
         let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
         guard response.status == "ok" else {
             throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to add song to playlist"])
+        }
+    }
+
+    /// Create a new playlist (Subsonic createPlaylist).
+    func createPlaylist(name: String) async throws -> String? {
+        guard let base = baseURL() else { return nil }
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+        let url = URL(string: "\(base)/rest/createPlaylist.view?\(authQuery())&name=\(encodedName)")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder.decodeSubsonic(CreatePlaylistResponse.self, from: data)
+        guard response.status == "ok" else { return nil }
+        return response.playlist?.id
+    }
+
+    /// Delete a playlist (Subsonic deletePlaylist).
+    func deletePlaylist(playlistId: String) async throws {
+        guard let base = baseURL() else { return }
+        let url = URL(string: "\(base)/rest/deletePlaylist.view?\(authQuery())&id=\(playlistId)")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
+        guard response.status == "ok" else {
+            throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete playlist"])
         }
     }
 
@@ -506,8 +536,36 @@ final class NavidromeService: ObservableObject {
               let request = backendRequest(url: url)
         else { return [] }
 
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
-        return (try? JSONDecoder().decode([RecentContext].self, from: data)) ?? []
+        guard let (data, resp) = try? await URLSession.shared.data(for: request) else {
+            print("[NavidromeService] getRecentContexts: request failed")
+            return []
+        }
+
+        let httpStatus = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        print("[NavidromeService] getRecentContexts: HTTP \(httpStatus), \(data.count) bytes")
+
+        // Try direct array first
+        if let contexts = try? JSONDecoder().decode([RecentContext].self, from: data) {
+            print("[NavidromeService] getRecentContexts: decoded \(contexts.count) contexts")
+            return contexts
+        }
+
+        // Try wrapped response { recentContexts: [...] } or { data: [...] }
+        struct Wrapped: Decodable {
+            let recentContexts: [RecentContext]?
+            let data: [RecentContext]?
+        }
+        if let wrapped = try? JSONDecoder().decode(Wrapped.self, from: data) {
+            let contexts = wrapped.recentContexts ?? wrapped.data ?? []
+            print("[NavidromeService] getRecentContexts: decoded wrapped \(contexts.count) contexts")
+            return contexts
+        }
+
+        // Log raw response for debugging
+        if let raw = String(data: data, encoding: .utf8) {
+            print("[NavidromeService] getRecentContexts: decode failed, raw: \(raw.prefix(500))")
+        }
+        return []
     }
 
     /// User's daily mixes. Response is `{ mixes: [...] }`.
