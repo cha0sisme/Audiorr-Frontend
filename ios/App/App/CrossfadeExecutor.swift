@@ -31,11 +31,15 @@ class CrossfadeExecutor {
         let useTimeStretch: Bool
         let rateA: Float
         let rateB: Float
+        // Energy (for preset selection + volume compensation)
+        let energyA: Double
+        let energyB: Double
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
              anticipationTime: Double, useTimeStretch: Bool = false,
-             rateA: Float = 1.0, rateB: Float = 1.0) {
+             rateA: Float = 1.0, rateB: Float = 1.0,
+             energyA: Double = 0.5, energyB: Double = 0.5) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -46,6 +50,8 @@ class CrossfadeExecutor {
             self.useTimeStretch = useTimeStretch
             self.rateA = rateA
             self.rateB = rateB
+            self.energyA = energyA
+            self.energyB = energyB
         }
     }
 
@@ -65,30 +71,48 @@ class CrossfadeExecutor {
 
     struct FilterPreset {
         struct Highpass { let startFreq: Float; let midFreq: Float; let endFreq: Float; let q: Float }
+        struct Lowpass { let startFreq: Float; let endFreq: Float; let q: Float }
         struct Lowshelf { let frequency: Float; let startGain: Float; let midGain: Float; let endGain: Float }
         let highpassA: Highpass
         let highpassB: Highpass
+        let lowshelfA: Lowshelf?     // Bass swap: atenúa bajos de A coordinado con B
         let lowshelfB: Lowshelf
+        let lowpassA: Lowpass?       // Lowpass sweep para energy-down transitions
     }
 
     // MARK: - Presets (port exacto de AudioEffectsChain.ts líneas 20-83)
 
     static let presetNormal = FilterPreset(
-        highpassA: .init(startFreq: 200, midFreq: 4000, endFreq: 8000, q: 0.7),
+        highpassA: .init(startFreq: 400, midFreq: 4000, endFreq: 8000, q: 0.7),
         highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
-        lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0)
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -6, endGain: -14),
+        lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
+        lowpassA: nil
     )
 
     static let presetAggressive = FilterPreset(
         highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 0.7),
         highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.5),
-        lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0)
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -10, endGain: -18),
+        lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
+        lowpassA: nil
     )
 
     static let presetAnticipation = FilterPreset(
         highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 0.7),
         highpassB: .init(startFreq: 1200, midFreq: 600, endFreq: 40, q: 0.5),
-        lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0)
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -16),
+        lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0),
+        lowpassA: nil
+    )
+
+    /// Energy-down preset: uses lowpass sweep on A instead of highpass (song "fades away" darkly)
+    static let presetEnergyDown = FilterPreset(
+        highpassA: .init(startFreq: 40, midFreq: 40, endFreq: 40, q: 0.7),  // bypassed effectively
+        highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -10),
+        lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
+        lowpassA: .init(startFreq: 20000, endFreq: 800, q: 0.7)
     )
 
     // MARK: - Prototipos de EQ Global
@@ -107,7 +131,7 @@ class CrossfadeExecutor {
     let timings: Timings
     let preset: FilterPreset
     let maxVolumeA: Float
-    let maxVolumeB: Float
+    private(set) var maxVolumeB: Float
     var getMasterVolume: (() -> Float)?
 
     private let engine: AVAudioEngine
@@ -172,12 +196,25 @@ class CrossfadeExecutor {
         self.getMasterVolume = getMasterVolume
 
         // Seleccionar preset
+        // Energy-down: if B is significantly less energetic, use lowpass sweep on A
+        let isEnergyDown = config.energyB < config.energyA - 0.2 && config.useFilters
         if config.needsAnticipation {
             preset = Self.presetAnticipation
+        } else if isEnergyDown {
+            preset = Self.presetEnergyDown
         } else if config.useAggressiveFilters {
             preset = Self.presetAggressive
         } else {
             preset = Self.presetNormal
+        }
+
+        // Energy compensation: if B is much quieter, boost its volume slightly
+        // to prevent perceived loudness drop during crossfade
+        let energyDiff = config.energyA - config.energyB
+        if energyDiff > 0.2 {
+            // +2dB to +4dB compensation (1.26 to 1.58 linear)
+            let compensation = Float(1.0 + min(0.58, energyDiff * 0.8))
+            self.maxVolumeB = min(1.0, maxVolumeB * compensation)
         }
 
         // Calcular timings (port exacto de CrossfadeEngine.calculateTimings líneas 244-289)
@@ -209,7 +246,18 @@ class CrossfadeExecutor {
         let now = CACurrentMediaTime()
 
         let filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
-        let fadeOutDuration = config.fadeDuration * 1.3
+
+        // FadeOut multiplier varies by transition type:
+        // - naturalBlend/crossfade: 1.3x (ambient tail of A adds depth)
+        // - eqMix/beatMatchBlend: 1.1x (less tail — cleaner cut of beats)
+        // - cut types: 1.0x (no extra tail)
+        let fadeOutMultiplier: Double
+        switch config.transitionType {
+        case .naturalBlend, .crossfade, .fadeOutACutB: fadeOutMultiplier = 1.3
+        case .eqMix, .beatMatchBlend:                  fadeOutMultiplier = 1.1
+        case .cut, .cutAFadeInB:                       fadeOutMultiplier = 1.0
+        }
+        let fadeOutDuration = config.fadeDuration * fadeOutMultiplier
         let totalTransition = fadeOutDuration + filterLead
 
         let anticipationStartTime = now
@@ -314,11 +362,43 @@ class CrossfadeExecutor {
 
     // MARK: - Setup
 
+    /// Whether bass management (lowshelf A + lowshelf B) is active for this crossfade.
+    /// Forced ON for BEAT_MATCH_BLEND to prevent kick drum clashing.
+    private var useBassManagement: Bool = false
+    /// Whether lowpass sweep is active on A (energy-down transitions).
+    private var useLowpassA: Bool = false
+
     private func setupInitialEQ() {
+        // Determine if bass management is needed:
+        // - Always for BEAT_MATCH_BLEND (two kicks without bass swap = flamming)
+        // - Whenever filters are active and we have a lowshelfA preset
+        useBassManagement = (config.useFilters && preset.lowshelfA != nil) ||
+            config.transitionType == .beatMatchBlend || config.transitionType == .eqMix
+        useLowpassA = preset.lowpassA != nil && config.useFilters
+
         if config.useFilters {
+            // Highpass A
             eqA.bands[0].bypass = false
+            eqA.bands[0].filterType = .highPass
             eqA.bands[0].frequency = preset.highpassA.startFreq
             eqA.bands[0].bandwidth = qToBandwidth(preset.highpassA.q)
+        }
+
+        // Bass swap: lowshelf on A to cut bass coordinately with B
+        if useBassManagement, let lsA = preset.lowshelfA {
+            eqA.bands[1].bypass = false
+            eqA.bands[1].filterType = .lowShelf
+            eqA.bands[1].frequency = lsA.frequency
+            eqA.bands[1].gain = lsA.startGain
+        }
+
+        // Lowpass sweep on A for energy-down transitions
+        // Reuse band[0] as lowpass instead of highpass when lowpassA is set
+        if useLowpassA, let lpA = preset.lowpassA {
+            eqA.bands[0].bypass = false
+            eqA.bands[0].filterType = .lowPass
+            eqA.bands[0].frequency = lpA.startFreq
+            eqA.bands[0].bandwidth = qToBandwidth(lpA.q)
         }
 
         if config.useFilters || config.needsAnticipation {
@@ -327,10 +407,19 @@ class CrossfadeExecutor {
             eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
 
             eqB.bands[1].bypass = false
+            eqB.bands[1].filterType = .lowShelf
+            eqB.bands[1].frequency = preset.lowshelfB.frequency
+            eqB.bands[1].gain = preset.lowshelfB.startGain
+        } else if useBassManagement {
+            // Force bass management on B even without general filters
+            // (BEAT_MATCH_BLEND without filters still needs bass coordination)
+            eqB.bands[1].bypass = false
+            eqB.bands[1].filterType = .lowShelf
             eqB.bands[1].frequency = preset.lowshelfB.frequency
             eqB.bands[1].gain = preset.lowshelfB.startGain
         }
 
+        // Copy global EQ (bands 2-5) from A to B
         for i in 2..<6 {
             eqB.bands[i].bypass = eqA.bands[i].bypass
             eqB.bands[i].filterType = eqA.bands[i].filterType
@@ -339,7 +428,7 @@ class CrossfadeExecutor {
             eqB.bands[i].gain = eqA.bands[i].gain
         }
 
-        if !config.useFilters && !config.needsAnticipation {
+        if !config.useFilters && !config.needsAnticipation && !useBassManagement {
             for i in 0..<2 {
                 eqB.bands[i].bypass = eqA.bands[i].bypass
                 eqB.bands[i].filterType = eqA.bands[i].filterType
@@ -412,12 +501,9 @@ class CrossfadeExecutor {
             return maxVolumeA * 0.8 * powf(0.0001 / (maxVolumeA * 0.8), drop)
 
         case .naturalBlend:
-            if progress < 0.5 {
-                let p = Float(progress / 0.5)
-                return maxVolumeA * (1.0 - 0.1 * p)
-            }
-            let remaining = Float((progress - 0.5) / 0.5)
-            return max(0.0001, maxVolumeA * 0.9 * (1.0 - remaining))
+            // Equal-power crossfade: cos²(π/2 * t) — constant perceived energy
+            let angle = Float(progress) * .pi / 2.0
+            return maxVolumeA * cosf(angle) * cosf(angle)
 
         case .crossfade, .fadeOutACutB:
             return maxVolumeA * powf(0.0001 / maxVolumeA, Float(progress))
@@ -462,10 +548,9 @@ class CrossfadeExecutor {
             return maxVolumeB * Float(min(1.0, progress / 0.3))
 
         case .naturalBlend:
-            if progress < 0.4 {
-                return maxVolumeB * 0.8 * Float(progress / 0.4)
-            }
-            return maxVolumeB * Float(0.8 + 0.2 * (progress - 0.4) / 0.6)
+            // Equal-power crossfade: sin²(π/2 * t) — mirrors A's cos²
+            let angle = Float(progress) * .pi / 2.0
+            return maxVolumeB * sinf(angle) * sinf(angle)
 
         case .crossfade, .cutAFadeInB:
             return maxVolumeB * Float(progress)
@@ -507,11 +592,11 @@ class CrossfadeExecutor {
         mixerB.outputVolume = gB
 
         // ── Filter automation ──
-        if config.useFilters {
+        if config.useFilters || useLowpassA || useBassManagement {
             applyFiltersA(at: t)
         }
 
-        if config.useFilters || config.needsAnticipation {
+        if config.useFilters || config.needsAnticipation || useBassManagement {
             applyFiltersB(at: t)
         }
 
@@ -540,34 +625,55 @@ class CrossfadeExecutor {
 
     private func applyFiltersA(at t: Double) {
         guard t >= timings.filterStartTime else { return }
-        let bandA = eqA.bands[0]
 
-        if config.transitionType == .eqMix || config.transitionType == .beatMatchBlend {
-            // Pivot en el 30% de [volumeFadeStartTime, transitionEndTime] — igual que JS:
-            // quickCutTime = volumeFadeStartTime + 0.3 * (transitionEndTime - volumeFadeStartTime)
-            let pivotTime = timings.volumeFadeStartTime + (timings.transitionEndTime - timings.volumeFadeStartTime) * 0.3
-            if t < pivotTime {
-                let dur = pivotTime - timings.filterStartTime
-                guard dur > 0 else { return }
-                let p = (t - timings.filterStartTime) / dur
-                bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(min(1, p)))
-            } else {
-                let dur = timings.transitionEndTime - pivotTime
-                guard dur > 0 else { return }
-                let p = (t - pivotTime) / dur
-                bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
-            }
+        // ── Lowpass sweep (energy-down) OR highpass (normal) ──
+        if useLowpassA, let lpA = preset.lowpassA {
+            // Lowpass sweep: 20kHz → 800Hz — song "goes dark"
+            let dur = timings.transitionEndTime - timings.filterStartTime
+            guard dur > 0 else { return }
+            let p = Float(min(1, (t - timings.filterStartTime) / dur))
+            eqA.bands[0].frequency = expInterp(lpA.startFreq, lpA.endFreq, p)
         } else {
-            if t < timings.volumeFadeStartTime {
-                let dur = timings.volumeFadeStartTime - timings.filterStartTime
-                guard dur > 0 else { return }
-                let p = (t - timings.filterStartTime) / dur
-                bandA.frequency = linInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(p))
+            let bandA = eqA.bands[0]
+            if config.transitionType == .eqMix || config.transitionType == .beatMatchBlend {
+                let pivotTime = timings.volumeFadeStartTime + (timings.transitionEndTime - timings.volumeFadeStartTime) * 0.3
+                if t < pivotTime {
+                    let dur = pivotTime - timings.filterStartTime
+                    guard dur > 0 else { return }
+                    let p = (t - timings.filterStartTime) / dur
+                    bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(min(1, p)))
+                } else {
+                    let dur = timings.transitionEndTime - pivotTime
+                    guard dur > 0 else { return }
+                    let p = (t - pivotTime) / dur
+                    bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
+                }
             } else {
-                let dur = timings.transitionEndTime - timings.volumeFadeStartTime
-                guard dur > 0 else { return }
-                let p = (t - timings.volumeFadeStartTime) / dur
-                bandA.frequency = linInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
+                if t < timings.volumeFadeStartTime {
+                    let dur = timings.volumeFadeStartTime - timings.filterStartTime
+                    guard dur > 0 else { return }
+                    let p = (t - timings.filterStartTime) / dur
+                    bandA.frequency = linInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(p))
+                } else {
+                    let dur = timings.transitionEndTime - timings.volumeFadeStartTime
+                    guard dur > 0 else { return }
+                    let p = (t - timings.volumeFadeStartTime) / dur
+                    bandA.frequency = linInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
+                }
+            }
+        }
+
+        // ── Bass swap: lowshelf on A — coordinated bass cut ──
+        if useBassManagement, let lsA = preset.lowshelfA {
+            let dur = timings.transitionEndTime - timings.filterStartTime
+            guard dur > 0 else { return }
+            let p = (t - timings.filterStartTime) / dur
+            if p < 0.5 {
+                // First half: ease bass down to midGain
+                eqA.bands[1].gain = linInterp(lsA.startGain, lsA.midGain, Float(p / 0.5))
+            } else {
+                // Second half: cut bass aggressively to endGain
+                eqA.bands[1].gain = linInterp(lsA.midGain, lsA.endGain, Float((p - 0.5) / 0.5))
             }
         }
     }
@@ -601,12 +707,20 @@ class CrossfadeExecutor {
                 hpB.frequency = preset.highpassB.endFreq
                 lsB.gain = preset.lowshelfB.endGain
             }
-        } else {
+        } else if config.useFilters {
             guard t >= timings.fadeInStartTime else { return }
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
             guard dur > 0 else { return }
             let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
             hpB.frequency = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
+            lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
+        } else if useBassManagement {
+            // Bass management only (no general filters) — BEAT_MATCH_BLEND without filters
+            // Ramp lowshelf B from attenuated to 0 dB during the fade
+            guard t >= timings.fadeInStartTime else { return }
+            let dur = timings.fadeInEndTime - timings.fadeInStartTime
+            guard dur > 0 else { return }
+            let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
             lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
         }
     }

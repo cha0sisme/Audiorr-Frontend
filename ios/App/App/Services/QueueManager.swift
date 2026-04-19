@@ -638,7 +638,9 @@ final class QueueManager: AudioEngineDelegate {
                     anticipationTime: crossfadeResult.anticipationTime,
                     useTimeStretch: crossfadeResult.useTimeStretch,
                     rateA: crossfadeResult.rateA,
-                    rateB: crossfadeResult.rateB
+                    rateB: crossfadeResult.rateB,
+                    energyA: crossfadeResult.energyA,
+                    energyB: crossfadeResult.energyB
                 )
 
                 // Set automix trigger on engine.

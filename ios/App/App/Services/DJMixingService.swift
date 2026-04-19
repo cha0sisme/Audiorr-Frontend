@@ -80,6 +80,9 @@ enum DJMixingService {
         let rateA: Float
         /// Target playback rate for song B during crossfade (1.0 = no change).
         let rateB: Float
+        /// Energy levels for preset selection and volume compensation.
+        let energyA: Double
+        let energyB: Double
     }
 
     // MARK: - Main Entry Point
@@ -141,6 +144,9 @@ enum DJMixingService {
             transitionType: transition.type
         )
 
+        let eA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
+        let eB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
+
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
@@ -153,7 +159,9 @@ enum DJMixingService {
             isBeatSynced: entry.isBeatSynced,
             useTimeStretch: timeStretch.useTimeStretch,
             rateA: timeStretch.rateA,
-            rateB: timeStretch.rateB
+            rateB: timeStretch.rateB,
+            energyA: eA,
+            energyB: eB
         )
     }
 
@@ -350,10 +358,6 @@ enum DJMixingService {
             let energyA = current.energy
             let energyB = next.energy
 
-            let keyA = current.key
-            let keyB = next.key
-            let isClash = harmonicPenalty(keyA: keyA, keyB: keyB).isClash
-
             let outroAStart = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
             let outroADuration = bufferADuration - outroAStart
             let hasValidOutro = outroADuration >= 2
@@ -385,8 +389,15 @@ enum DJMixingService {
                 decision += " Extendido por caida de energia a \(String(format: "%.2f", fadeDuration))s."
             }
 
-            // Harmonic clash
-            if isClash {
+            // Gradual harmonic penalty
+            let harmonic = harmonicPenalty(keyA: current.key, keyB: next.key)
+            switch harmonic.compatibility {
+            case .compatible, .acceptable:
+                break  // no penalty
+            case .tense:
+                fadeDuration = max(2, fadeDuration * 0.85)
+                decision += " Reducido 15% por tension armonica a \(String(format: "%.2f", fadeDuration))s."
+            case .clash:
                 fadeDuration = max(2, fadeDuration * 0.75)
                 decision += " Reducido 25% por clash armonico a \(String(format: "%.2f", fadeDuration))s."
             }
@@ -433,23 +444,26 @@ enum DJMixingService {
 
         let keyA = currentAnalysis?.key
         let keyB = nextAnalysis?.key
-        let isClash = harmonicPenalty(keyA: keyA, keyB: keyB).isClash
+        let harmonic = harmonicPenalty(keyA: keyA, keyB: keyB)
 
         let energyDiff = abs(energyA - energyB)
-        let bpmDiff = abs(bpmA - bpmB)
+        // Use harmonic BPM for filter decision (half/double tempo shouldn't trigger filters)
+        let bpmDiff = abs(bpmA - harmonicBPM(bpmA, bpmB))
         let isVeryShort = fadeDuration < 3
         let isShort = fadeDuration < 4
 
         let useFilters = hasVocalsOutro || hasVocalsIntro ||
-            energyDiff > 0.3 || bpmDiff > 20 || isClash || isVeryShort
+            energyDiff > 0.3 || bpmDiff > 20 || harmonic.isClash || isVeryShort
 
-        let useAggressive = (hasVocalsOutro || hasVocalsIntro || isShort || isClash) && useFilters
+        let useAggressive = (hasVocalsOutro || hasVocalsIntro || isShort ||
+            harmonic.compatibility == .clash) && useFilters
 
         var reasons: [String] = []
         if hasVocalsOutro || hasVocalsIntro { reasons.append("voces") }
         if energyDiff > 0.3 { reasons.append("energia \(Int(energyDiff * 100))%") }
         if bpmDiff > 20 { reasons.append("BPM ±\(Int(bpmDiff))") }
-        if isClash { reasons.append("clash tonal") }
+        if harmonic.compatibility == .tense { reasons.append("tension tonal") }
+        if harmonic.compatibility == .clash { reasons.append("clash tonal") }
         if isVeryShort { reasons.append("fade<3s") }
 
         let reason = useFilters ? "Filtros ON: \(reasons.joined(separator: ", "))" : "Filtros OFF: mezcla simple"
@@ -560,12 +574,17 @@ enum DJMixingService {
             reason = "Ambos suaves → NATURAL_BLEND"
         }
 
-        // Safety: extreme BPM jump
-        let bpmA = currentAnalysis?.bpm ?? 120
-        let bpmB = nextAnalysis?.bpm ?? 120
-        if abs(bpmA - bpmB) > 15 && !isBeatSynced && fadeDuration > 3 {
+        // Safety: extreme BPM jump (with harmonic BPM detection for half/double tempo)
+        let rawBpmA = currentAnalysis?.bpm ?? 120
+        let rawBpmB = nextAnalysis?.bpm ?? 120
+        let bpmB_normalized = harmonicBPM(rawBpmA, rawBpmB)
+        let effectiveBpmDiff = abs(rawBpmA - bpmB_normalized)
+        // Threshold is higher when filters are active (they mask rhythmic clashing)
+        let bpmCutThreshold: Double = useFilters ? 25 : 15
+        if effectiveBpmDiff > bpmCutThreshold && !isBeatSynced && fadeDuration > 3 {
             type = .cut
-            reason = "Polirritmia evitada (A:\(Int(bpmA)) B:\(Int(bpmB))) → CUT forzado"
+            let normalizedNote = bpmB_normalized != rawBpmB ? " (norm:\(Int(bpmB_normalized)))" : ""
+            reason = "Polirritmia evitada (A:\(Int(rawBpmA)) B:\(Int(rawBpmB))\(normalizedNote)) → CUT forzado"
         }
 
         // Safety: vocal trainwreck
@@ -617,14 +636,16 @@ enum DJMixingService {
         }
 
         let bpmA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.bpm ?? 0) : 0
-        let bpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 0) : 0
+        let rawBpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 0) : 0
 
         // Need valid BPMs from both songs
-        guard bpmA > 50 && bpmA < 250 && bpmB > 50 && bpmB < 250 else {
+        guard bpmA > 50 && bpmA < 250 && rawBpmB > 50 && rawBpmB < 250 else {
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: BPM fuera de rango o desconocido")
         }
 
+        // Use harmonic BPM to detect half/double tempo (70 vs 140 = compatible)
+        let bpmB = harmonicBPM(bpmA, rawBpmB)
         let diff = abs(bpmA - bpmB)
 
         if diff < 3 {
@@ -652,13 +673,41 @@ enum DJMixingService {
 
     // MARK: - Harmonic Mixing (Camelot Wheel)
 
+    // MARK: - Harmonic BPM Normalization (double/half tempo detection)
+
+    /// Normalizes BPM of B to the harmonically closest ratio with A.
+    /// Detects half-time (70 vs 140) and double-time (170 vs 85) relationships.
+    static func harmonicBPM(_ bpmA: Double, _ bpmB: Double) -> Double {
+        guard bpmA > 0 && bpmB > 0 else { return bpmB }
+        let ratios: [Double] = [0.5, 1.0, 2.0]
+        let bestRatio = ratios.min(by: {
+            abs(bpmB * $0 - bpmA) < abs(bpmB * $1 - bpmA)
+        }) ?? 1.0
+        let adjusted = bpmB * bestRatio
+        // Only apply if the adjusted BPM is actually closer to A
+        return abs(adjusted - bpmA) < abs(bpmB - bpmA) ? adjusted : bpmB
+    }
+
+    // MARK: - Harmonic Mixing (Camelot Wheel)
+
+    enum HarmonicCompatibility: Int {
+        case compatible = 0   // distance 0-1: perfect/excellent
+        case acceptable = 1   // distance 2: fine with filters
+        case tense = 2        // distance 3: needs aggressive filters
+        case clash = 3        // distance 4+: shorten fade, aggressive filters
+    }
+
     struct HarmonicPenalty {
         let distance: Int
-        let isClash: Bool
+        let compatibility: HarmonicCompatibility
+        /// Legacy convenience — true for tense and clash
+        var isClash: Bool { compatibility == .tense || compatibility == .clash }
     }
 
     static func harmonicPenalty(keyA: String?, keyB: String?) -> HarmonicPenalty {
-        guard let keyA, let keyB else { return HarmonicPenalty(distance: 0, isClash: false) }
+        guard let keyA, let keyB else {
+            return HarmonicPenalty(distance: 0, compatibility: .compatible)
+        }
 
         let pattern = #"(\d+)([AB])"#
         guard let regexA = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -671,17 +720,25 @@ enum DJMixingService {
               let letterRangeB = Range(matchB.range(at: 2), in: keyB),
               let numA = Int(keyA[numRangeA]),
               let numB = Int(keyB[numRangeB])
-        else { return HarmonicPenalty(distance: 0, isClash: false) }
+        else {
+            return HarmonicPenalty(distance: 0, compatibility: .compatible)
+        }
 
         let letterA = keyA[letterRangeA].uppercased()
         let letterB = keyB[letterRangeB].uppercased()
 
         let diffNum = min(abs(numA - numB), 12 - abs(numA - numB))
         let diffLetter = letterA != letterB ? 1 : 0
-
         let totalDistance = diffNum + diffLetter
-        let isClash = totalDistance > 2 || (diffLetter == 1 && totalDistance > 1)
 
-        return HarmonicPenalty(distance: totalDistance, isClash: isClash)
+        let compatibility: HarmonicCompatibility
+        switch totalDistance {
+        case 0...1: compatibility = .compatible
+        case 2:     compatibility = diffLetter == 1 ? .tense : .acceptable
+        case 3:     compatibility = .tense
+        default:    compatibility = .clash
+        }
+
+        return HarmonicPenalty(distance: totalDistance, compatibility: compatibility)
     }
 }
