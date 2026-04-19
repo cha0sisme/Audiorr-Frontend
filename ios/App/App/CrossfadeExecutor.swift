@@ -27,6 +27,26 @@ class CrossfadeExecutor {
         let useAggressiveFilters: Bool
         let needsAnticipation: Bool
         let anticipationTime: Double
+        // Time-stretch
+        let useTimeStretch: Bool
+        let rateA: Float
+        let rateB: Float
+
+        init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
+             useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
+             anticipationTime: Double, useTimeStretch: Bool = false,
+             rateA: Float = 1.0, rateB: Float = 1.0) {
+            self.entryPoint = entryPoint
+            self.fadeDuration = fadeDuration
+            self.transitionType = transitionType
+            self.useFilters = useFilters
+            self.useAggressiveFilters = useAggressiveFilters
+            self.needsAnticipation = needsAnticipation
+            self.anticipationTime = anticipationTime
+            self.useTimeStretch = useTimeStretch
+            self.rateA = rateA
+            self.rateB = rateB
+        }
     }
 
     struct Timings {
@@ -97,6 +117,8 @@ class CrossfadeExecutor {
     private let eqB: AVAudioUnitEQ
     private let mixerA: AVAudioMixerNode
     private let mixerB: AVAudioMixerNode
+    private let timePitchA: AVAudioUnitTimePitch?
+    private let timePitchB: AVAudioUnitTimePitch?
     private let currentFile: AVAudioFile?
     private let nextFile: AVAudioFile
 
@@ -123,6 +145,8 @@ class CrossfadeExecutor {
         eqB: AVAudioUnitEQ,
         mixerA: AVAudioMixerNode,
         mixerB: AVAudioMixerNode,
+        timePitchA: AVAudioUnitTimePitch? = nil,
+        timePitchB: AVAudioUnitTimePitch? = nil,
         currentFile: AVAudioFile?,
         nextFile: AVAudioFile,
         maxVolumeA: Float,
@@ -139,6 +163,8 @@ class CrossfadeExecutor {
         self.eqB = eqB
         self.mixerA = mixerA
         self.mixerB = mixerB
+        self.timePitchA = timePitchA
+        self.timePitchB = timePitchB
         self.currentFile = currentFile
         self.nextFile = nextFile
         self.maxVolumeA = maxVolumeA
@@ -227,6 +253,7 @@ class CrossfadeExecutor {
         // Volume automation is handled by filterTick() updating mixer.outputVolume at ~60Hz
 
         setupInitialEQ()
+        setupTimeStretch()
 
         guard schedulePlayerB() else {
             // B tiene 0 frames — no hay nada que reproducir.
@@ -260,6 +287,29 @@ class CrossfadeExecutor {
         playerB.stop()
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
+        // Reset EQ to bypass so cancelled crossfades don't leave filters active
+        for i in 0..<min(eqA.bands.count, 2) {
+            eqA.bands[i].bypass = true
+            eqB.bands[i].bypass = true
+        }
+        // Reset time-stretch rates
+        resetTimeStretch()
+    }
+
+    // MARK: - Time-Stretch Setup
+
+    private func setupTimeStretch() {
+        guard config.useTimeStretch else { return }
+        // Set initial rates — B starts at target rate immediately,
+        // A ramps gradually during the crossfade (handled in filterTick).
+        timePitchA?.rate = 1.0  // A starts at normal rate, ramps toward config.rateA
+        timePitchB?.rate = config.rateB
+        print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B=\(String(format: "%.3f", config.rateB))")
+    }
+
+    private func resetTimeStretch() {
+        timePitchA?.rate = 1.0
+        timePitchB?.rate = 1.0
     }
 
     // MARK: - Setup
@@ -465,6 +515,17 @@ class CrossfadeExecutor {
             applyFiltersB(at: t)
         }
 
+        // ── Time-stretch rate automation for A ──
+        // A ramps from 1.0 → config.rateA during the fade, so the tempo change is gradual.
+        // B stays at config.rateB (set in setupTimeStretch).
+        if config.useTimeStretch, let tpA = timePitchA, t >= timings.volumeFadeStartTime {
+            let duration = timings.transitionEndTime - timings.volumeFadeStartTime
+            if duration > 0 {
+                let p = Float(min(1.0, (t - timings.volumeFadeStartTime) / duration))
+                tpA.rate = 1.0 + (config.rateA - 1.0) * p
+            }
+        }
+
         if t - lastLogTime >= 1.0 {
             lastLogTime = t
             let elapsed = t - timings.startTime
@@ -565,6 +626,9 @@ class CrossfadeExecutor {
 
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
+
+        // Reset time-stretch rates — B continues at normal speed after crossfade
+        resetTimeStretch()
 
         let vol = getMasterVolume?() ?? 1.0
         engine.mainMixerNode.outputVolume = vol

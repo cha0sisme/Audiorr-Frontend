@@ -57,6 +57,10 @@ enum DJMixingService {
         var downbeatTimes: [Double] = []
         var speechSegments: [(start: Double, end: Double)] = []
         var hasError: Bool = false
+        /// True when outroStartTime comes from real analysis data (not a default).
+        var hasOutroData: Bool = false
+        /// True when introEndTime comes from real analysis data (not a default).
+        var hasIntroData: Bool = false
     }
 
     /// Complete crossfade configuration output.
@@ -70,6 +74,12 @@ enum DJMixingService {
         let anticipationTime: Double
         let beatSyncInfo: String
         let isBeatSynced: Bool
+        /// Time-stretch: whether to adjust playback rate to match BPMs during crossfade.
+        let useTimeStretch: Bool
+        /// Target playback rate for song A during crossfade (1.0 = no change).
+        let rateA: Float
+        /// Target playback rate for song B during crossfade (1.0 = no change).
+        let rateB: Float
     }
 
     // MARK: - Main Entry Point
@@ -125,6 +135,12 @@ enum DJMixingService {
             bufferADuration: bufferADuration
         )
 
+        let timeStretch = decideTimeStretch(
+            currentAnalysis: currentAnalysis,
+            nextAnalysis: nextAnalysis,
+            transitionType: transition.type
+        )
+
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
@@ -134,7 +150,10 @@ enum DJMixingService {
             needsAnticipation: anticipation.needsAnticipation,
             anticipationTime: anticipation.anticipationTime,
             beatSyncInfo: entry.beatSyncInfo,
-            isBeatSynced: entry.isBeatSynced
+            isBeatSynced: entry.isBeatSynced,
+            useTimeStretch: timeStretch.useTimeStretch,
+            rateA: timeStretch.rateA,
+            rateB: timeStretch.rateB
         )
     }
 
@@ -357,7 +376,7 @@ enum DJMixingService {
                 decision = "Adaptada a outro (\(String(format: "%.2f", outroADuration))s) → \(String(format: "%.2f", fadeDuration))s."
             } else {
                 fadeDuration = mode == .dj ? 5 : 6
-                decision = "Duracion extendida por cancion abrupta: \(fadeDuration)s."
+                decision = "Duración extendida por canción abrupta: \(fadeDuration)s."
             }
 
             // Energy flow dropdown
@@ -489,22 +508,31 @@ enum DJMixingService {
         let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError != true
         let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
 
+        // Determine if A ends abruptly.
+        // CRITICAL: only mark as abrupt when we have REAL outro data that confirms it.
+        // Without data (hasOutroData=false), assume normal ending → NATURAL_BLEND (safe default).
         var isAAbrupt = false
         if hasCurrent, let current = currentAnalysis {
-            if current.outroStartTime <= 0 || current.outroStartTime >= bufferADuration - 2 {
-                isAAbrupt = true
+            if current.hasOutroData {
+                // Real data: abrupt if outro starts very late or is missing
+                isAAbrupt = current.outroStartTime <= 0 || current.outroStartTime >= bufferADuration - 2
             }
+            // No outro data → assume normal (not abrupt)
         } else {
-            isAAbrupt = fadeDuration < 4
+            // No analysis at all → conservative: only abrupt if fade is very short
+            isAAbrupt = fadeDuration < 3
         }
 
+        // Determine if B starts abruptly.
+        // Same logic: only trust real intro data.
         var isBAbrupt = false
         if hasNext, let next = nextAnalysis {
-            if next.introEndTime < 2 {
-                isBAbrupt = true
+            if next.hasIntroData {
+                isBAbrupt = next.introEndTime < 2
             }
+            // No intro data → assume normal (not abrupt)
         } else {
-            isBAbrupt = fadeDuration < 4
+            isBAbrupt = fadeDuration < 3
         }
 
         var type: TransitionType = .crossfade
@@ -561,6 +589,65 @@ enum DJMixingService {
         }
 
         return TransitionTypeResult(type: type, reason: reason)
+    }
+
+    // MARK: - Time-Stretch Decision
+
+    struct TimeStretchResult {
+        let useTimeStretch: Bool
+        let rateA: Float
+        let rateB: Float
+        let reason: String
+    }
+
+    /// Decides whether to apply time-stretching during crossfade to match BPMs.
+    /// Only stretches when BPM difference is in the safe range (3-12 BPM).
+    /// Outside that range the quality loss isn't worth it.
+    static func decideTimeStretch(
+        currentAnalysis: SongAnalysis?,
+        nextAnalysis: SongAnalysis?,
+        transitionType: TransitionType
+    ) -> TimeStretchResult {
+        // Only stretch on blend-type transitions — CUT transitions are too short
+        switch transitionType {
+        case .cut, .cutAFadeInB, .fadeOutACutB:
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: transicion tipo cut")
+        default: break
+        }
+
+        let bpmA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.bpm ?? 0) : 0
+        let bpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 0) : 0
+
+        // Need valid BPMs from both songs
+        guard bpmA > 50 && bpmA < 250 && bpmB > 50 && bpmB < 250 else {
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: BPM fuera de rango o desconocido")
+        }
+
+        let diff = abs(bpmA - bpmB)
+
+        if diff < 3 {
+            // Close enough — no need to stretch
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: BPMs casi iguales (±\(String(format: "%.1f", diff)))")
+        } else if diff <= 8 {
+            // Small difference — stretch B to match A (less noticeable)
+            let rateB = Float(bpmA / bpmB)
+            return TimeStretchResult(useTimeStretch: true, rateA: 1.0, rateB: rateB,
+                                     reason: "Stretch B→A: \(Int(bpmB))→\(Int(bpmA)) BPM (rate=\(String(format: "%.3f", rateB)))")
+        } else if diff <= 12 {
+            // Medium difference — both stretch to midpoint
+            let mid = (bpmA + bpmB) / 2.0
+            let rateA = Float(mid / bpmA)
+            let rateB = Float(mid / bpmB)
+            return TimeStretchResult(useTimeStretch: true, rateA: rateA, rateB: rateB,
+                                     reason: "Stretch ambos→\(Int(mid)) BPM: A=\(String(format: "%.3f", rateA)) B=\(String(format: "%.3f", rateB))")
+        } else {
+            // >12 BPM — too much stretching, quality will suffer
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: diferencia demasiado grande (±\(Int(diff)) BPM)")
+        }
     }
 
     // MARK: - Harmonic Mixing (Camelot Wheel)

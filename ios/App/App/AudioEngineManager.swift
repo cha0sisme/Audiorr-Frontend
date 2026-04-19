@@ -20,6 +20,8 @@ class AudioEngineManager {
     private var playerB: AVAudioPlayerNode
     private var eqA: AVAudioUnitEQ
     private var eqB: AVAudioUnitEQ
+    private var timePitchA: AVAudioUnitTimePitch
+    private var timePitchB: AVAudioUnitTimePitch
     private var mixerA: AVAudioMixerNode
     private var mixerB: AVAudioMixerNode
 
@@ -89,6 +91,7 @@ class AudioEngineManager {
     private var nextStreamURL: URL?
     /// Timer del crossfade en modo stream fallback (sustituye a CrossfadeExecutor cuando nextFile == nil)
     private var streamFadeTimer: DispatchSourceTimer?
+    private var streamFadeWatchdog: DispatchSourceTimer?
 
     // MARK: - Progress timer
 
@@ -116,6 +119,10 @@ class AudioEngineManager {
         playerB = AVAudioPlayerNode()
         mixerA = AVAudioMixerNode()
         mixerB = AVAudioMixerNode()
+
+        // TimePitch nodes for tempo adjustment during crossfade (rate only, no pitch change)
+        timePitchA = AVAudioUnitTimePitch()
+        timePitchB = AVAudioUnitTimePitch()
 
         // EQ con 6 bandas: 0-1 reserved for crossfade, 2-5 reserved for global EQ.
         eqA = AVAudioUnitEQ(numberOfBands: 6)
@@ -146,6 +153,8 @@ class AudioEngineManager {
         // Attach nodos
         engine.attach(playerA)
         engine.attach(playerB)
+        engine.attach(timePitchA)
+        engine.attach(timePitchB)
         engine.attach(eqA)
         engine.attach(eqB)
         engine.attach(mixerA)
@@ -153,17 +162,19 @@ class AudioEngineManager {
 
         let mainMixer = engine.mainMixerNode
 
-        // Conectar grafo A: playerA → eqA → mixerA → mainMixer
+        // Conectar grafo A: playerA → timePitchA → eqA → mixerA → mainMixer
         // Usamos el formato del mainMixer para todas las conexiones intermedias.
         // AVAudioMixerNode convierte formatos automáticamente si hay mismatch.
         let format = mainMixer.outputFormat(forBus: 0)
 
-        engine.connect(playerA, to: eqA, format: nil)
+        engine.connect(playerA, to: timePitchA, format: nil)
+        engine.connect(timePitchA, to: eqA, format: nil)
         engine.connect(eqA, to: mixerA, format: nil)
         engine.connect(mixerA, to: mainMixer, format: format)
 
-        // Conectar grafo B: playerB → eqB → mixerB → mainMixer
-        engine.connect(playerB, to: eqB, format: nil)
+        // Conectar grafo B: playerB → timePitchB → eqB → mixerB → mainMixer
+        engine.connect(playerB, to: timePitchB, format: nil)
+        engine.connect(timePitchB, to: eqB, format: nil)
         engine.connect(eqB, to: mixerB, format: nil)
         engine.connect(mixerB, to: mainMixer, format: format)
 
@@ -620,7 +631,7 @@ class AudioEngineManager {
     /// reanudando en la posición actual. Preserva automixTrigger y nextFile intactos
     /// para que el crossfade funcione normalmente tras el handoff.
     func handoffStreamToEngine(fileURL: URL) {
-        guard isStreamMode, isPlaying else { return }
+        guard isStreamMode, isPlaying, !isCrossfading else { return }
 
         // Validate the file BEFORE stopping the stream player.
         // If AVAudioFile can't parse the format (e.g. certain MP3 VBR headers),
@@ -796,6 +807,8 @@ class AudioEngineManager {
             eqB: eqB,
             mixerA: mixerA,
             mixerB: mixerB,
+            timePitchA: timePitchA,
+            timePitchB: timePitchB,
             currentFile: currentFile,
             nextFile: nextFile,
             maxVolumeA: replayGainMultiplierA,
@@ -816,7 +829,12 @@ class AudioEngineManager {
             // siempre operen sobre el player activo (playerA).
             swap(&self.playerA, &self.playerB)
             swap(&self.eqA, &self.eqB)
+            swap(&self.timePitchA, &self.timePitchB)
             swap(&self.mixerA, &self.mixerB)
+
+            // Ensure time-stretch rates are back to 1.0 after swap
+            self.timePitchA.rate = 1.0
+            self.timePitchB.rate = 1.0
 
             self.currentFile = nextFile
             self.nextFile = nil
@@ -875,7 +893,10 @@ class AudioEngineManager {
             self.playerA.stop()
             swap(&self.playerA, &self.playerB)
             swap(&self.eqA, &self.eqB)
+            swap(&self.timePitchA, &self.timePitchB)
             swap(&self.mixerA, &self.mixerB)
+            self.timePitchA.rate = 1.0
+            self.timePitchB.rate = 1.0
             self.currentFile = self.nextFile
             self.nextFile = nil
             self.replayGainMultiplierA = self.replayGainMultiplierB
@@ -899,7 +920,13 @@ class AudioEngineManager {
         crossfadeExecutor = nil
         streamFadeTimer?.cancel()
         streamFadeTimer = nil
+        streamFadeWatchdog?.cancel()
+        streamFadeWatchdog = nil
         isCrossfading = false
+        // Reset time-stretch rates
+        timePitchA.rate = 1.0
+        timePitchB.rate = 1.0
+        stopStreamPlayer()  // Clean up stream observer to prevent stale callbacks
     }
 
     // MARK: - Stream fallback crossfade (cuando nextFile == nil)
@@ -947,11 +974,97 @@ class AudioEngineManager {
         }
         bPlayer.play()
 
+        // Register end-of-track observer for B immediately (before fade starts).
+        // If B is a very short track that ends before the fade completes,
+        // this ensures we still detect it and clean up state.
+        // Stored in self.streamPlayerEndObserver so the watchdog can reference it via self.
+        if let oldObserver = self.streamPlayerEndObserver {
+            NotificationCenter.default.removeObserver(oldObserver)
+        }
+        self.streamPlayerEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            if self.isCrossfading {
+                // B ended during fade — force-complete the crossfade now
+                print("[AudioEngineManager] ⚠️ Stream B ended during fade — forcing completion")
+                self.streamFadeTimer?.cancel()
+                self.streamFadeTimer = nil
+                self.streamFadeWatchdog?.cancel()
+                self.streamFadeWatchdog = nil
+                self.playerA.stop()
+                self.mixerA.outputVolume = 0
+                self.isCrossfading = false
+                self.crossfadeExecutor = nil
+                self.nextStreamURL = nil
+                // B already finished — no stream player to keep
+                if let obs = self.streamPlayerEndObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    self.streamPlayerEndObserver = nil
+                }
+                self.streamPlayer = nil
+                self.isStreamMode = false
+                self.isPlaying = false
+                self.playStartOffset = startOffset
+                self.replayGainMultiplierA = self.replayGainMultiplierB
+                if self.nextSongDuration > 0 { self.currentSongDuration = self.nextSongDuration }
+                if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
+                if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
+                if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.delegate?.audioEngineDidFinishSong()
+            } else if self.isStreamMode {
+                // Normal end-of-track after crossfade completed
+                self.isPlaying = false
+                self.isStreamMode = false
+                self.stopProgressTimer()
+                self.updateNowPlayingPlaybackState()
+                self.delegate?.audioEngineDidFinishSong()
+                print("[AudioEngineManager] Stream fallback: track B terminado")
+            }
+        }
+
         let fadeDuration = config.fadeDuration * 1.3  // igual que CrossfadeExecutor.fadeOutDuration
         let startTime = CACurrentMediaTime()
         let endTime = startTime + fadeDuration
         let capturedMaxA = replayGainMultiplierA
         let capturedMaxB = replayGainMultiplierB
+
+        // Watchdog: force-complete if fade takes too long (iOS suspension, etc.)
+        let watchdog = DispatchSource.makeTimerSource(queue: .main)
+        let watchdogTimeout = fadeDuration + 5.0
+        watchdog.schedule(deadline: .now() + watchdogTimeout, leeway: .milliseconds(500))
+        watchdog.setEventHandler { [weak self] in
+            guard let self = self, self.isCrossfading else { return }
+            print("[AudioEngineManager] ⚠️ Stream fallback watchdog — forcing completion after \(String(format: "%.1f", watchdogTimeout))s")
+            self.streamFadeTimer?.cancel()
+            self.streamFadeTimer = nil
+            self.streamFadeWatchdog?.cancel()
+            self.streamFadeWatchdog = nil
+            // Force to the completed state
+            self.mixerA.outputVolume = 0
+            bPlayer.volume = min(1.0, self.volume * capturedMaxB)
+            self.playerA.stop()
+            // Observer is already in self.streamPlayerEndObserver — just assign the player
+            self.streamPlayer = bPlayer
+            self.isStreamMode = true
+            self.isPlaying = true
+            self.isCrossfading = false
+            self.crossfadeExecutor = nil
+            self.nextStreamURL = nil
+            self.playStartOffset = startOffset
+            self.replayGainMultiplierA = capturedMaxB
+            if self.nextSongDuration > 0 { self.currentSongDuration = self.nextSongDuration }
+            if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
+            if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
+            if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
+            self.startProgressTimer()
+            self.updateNowPlayingPlaybackState()
+            self.delegate?.audioEngineCrossfadeCompleted(startOffset: self.currentTime())
+        }
+        streamFadeWatchdog = watchdog
+        watchdog.resume()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
@@ -975,13 +1088,15 @@ class AudioEngineManager {
             // ─── Crossfade completado ───
             self.streamFadeTimer?.cancel()
             self.streamFadeTimer = nil
+            self.streamFadeWatchdog?.cancel()
+            self.streamFadeWatchdog = nil
 
             self.mixerA.outputVolume = 0
             bPlayer.volume = min(1.0, self.volume * capturedMaxB)
             self.playerA.stop()
 
             // B pasa a ser el stream player activo
-            self.stopStreamPlayer()   // limpia observers anteriores
+            // Observer is already in self.streamPlayerEndObserver (registered before fade started)
             self.streamPlayer = bPlayer
             self.isStreamMode = true
             self.isPlaying = true
@@ -996,19 +1111,6 @@ class AudioEngineManager {
             if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
             if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
             if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
-
-            // Observer de fin de pista para B
-            self.streamPlayerEndObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-            ) { [weak self] _ in
-                guard let self = self, self.isStreamMode else { return }
-                self.isPlaying = false
-                self.isStreamMode = false
-                self.stopProgressTimer()
-                self.updateNowPlayingPlaybackState()
-                self.delegate?.audioEngineDidFinishSong()
-                print("[AudioEngineManager] Stream fallback: track B terminado")
-            }
 
             // Re-iniciar progress timer para B
             self.startProgressTimer()
@@ -1619,4 +1721,6 @@ class AudioEngineManager {
     var eqBRef: AVAudioUnitEQ { eqB }
     var mixerARef: AVAudioMixerNode { mixerA }
     var mixerBRef: AVAudioMixerNode { mixerB }
+    var timePitchARef: AVAudioUnitTimePitch { timePitchA }
+    var timePitchBRef: AVAudioUnitTimePitch { timePitchB }
 }

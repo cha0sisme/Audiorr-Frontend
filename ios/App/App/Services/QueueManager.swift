@@ -5,7 +5,7 @@ import AVFoundation
 /// Source of truth for the playback queue, shuffle, repeat, and track advancement.
 /// Conforms to AudioEngineDelegate to react to engine events (track end, progress, etc.).
 @MainActor @Observable
-final class QueueManager: @preconcurrency AudioEngineDelegate {
+final class QueueManager: AudioEngineDelegate {
 
     static let shared = QueueManager()
 
@@ -72,6 +72,8 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
 
     // Guards stale async results from prepareNextForCrossfade
     private var crossfadePreparationId: Int = 0
+    private var crossfadePreparationTask: Task<Void, Never>?
+    private let maxHistorySize = 500
 
     private init() {
         restoreState()
@@ -127,16 +129,16 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
 
         if currentIndex < queue.count - 1 {
             // Save to history
-            if let song = currentSong { history.append(song) }
+            if let song = currentSong { appendToHistory(song) }
             currentIndex += 1
 
             // If we were mid-crossfade, N+1 was already playing — skip past it too
             if wasCrossfading && currentIndex < queue.count - 1 {
-                if let song = currentSong { history.append(song) }
+                if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
             }
         } else if repeatMode == .all {
-            if let song = currentSong { history.append(song) }
+            if let song = currentSong { appendToHistory(song) }
             currentIndex = 0
         } else {
             // End of queue, no repeat
@@ -190,15 +192,15 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
         let wasCrossfading = AudioEngineManager.shared?.isCrossfading == true
 
         if currentIndex < queue.count - 1 {
-            if let song = currentSong { history.append(song) }
+            if let song = currentSong { appendToHistory(song) }
             currentIndex += 1
 
             if wasCrossfading && currentIndex < queue.count - 1 {
-                if let song = currentSong { history.append(song) }
+                if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
             }
         } else if repeatMode == .all {
-            if let song = currentSong { history.append(song) }
+            if let song = currentSong { appendToHistory(song) }
             currentIndex = 0
         } else {
             isPlaying = false
@@ -422,7 +424,7 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
             // After crossfade, the engine already swapped players.
             // Advance our index to match.
             if currentIndex < queue.count - 1 {
-                if let song = currentSong { history.append(song) }
+                if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
                 persistState()
                 syncNowPlayingState()
@@ -433,6 +435,7 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
                 // Notify scrobble service
                 if let newSong = currentSong {
                     ScrobbleService.shared.songDidStart(newSong)
+                    Task { await OfflineStorageManager.shared.markPlayed(songId: newSong.id) }
                 }
 
                 // CRITICAL: Prepare the NEXT crossfade in the chain.
@@ -452,13 +455,25 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
 
     nonisolated func audioEngineError(_ message: String, code: String) {
         print("[QueueManager] Engine error: \(code) — \(message)")
+
+        // Safe skip: only when truly offline AND song is not cached.
+        // Never skip proactively on weak signal — let AVPlayer buffer/retry.
+        // Only skip after a real playback failure has been reported by the engine.
+        Task { @MainActor in
+            guard !NetworkMonitor.shared.isConnected else { return }
+            guard let song = self.currentSong else { return }
+            guard !AudioFileLoader.shared.isCached(song.id) else { return }
+
+            print("[QueueManager] Offline + uncached + engine error → skipping: \(song.title)")
+            self.skipNext()
+        }
     }
 
     nonisolated func audioEngineNativeNext(title: String, artist: String, album: String, duration: Double) {
         Task { @MainActor in
             // Engine played next directly (lock screen skip while JS frozen)
             if currentIndex < queue.count - 1 {
-                if let song = currentSong { history.append(song) }
+                if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
                 persistState()
                 syncNowPlayingState()
@@ -466,10 +481,20 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
         }
     }
 
+    // MARK: - History (bounded)
+
+    private func appendToHistory(_ song: PersistableSong) {
+        history.append(song)
+        if history.count > maxHistorySize {
+            history.removeFirst(history.count - maxHistorySize)
+        }
+    }
+
     // MARK: - Automix / Crossfade Preparation
 
     /// Prepare next song for crossfade. Called after advancing queue or after seek.
     private func prepareNextForCrossfade() {
+        crossfadePreparationTask?.cancel()
         guard let current = currentSong,
               currentIndex + 1 < queue.count else { return }
         let nextSong = queue[currentIndex + 1]
@@ -498,7 +523,7 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
         Task { await AnalysisCacheService.shared.prefetch(songs: Array(upcoming)) }
 
         // Try to preload the file + calculate crossfade intelligence
-        Task {
+        crossfadePreparationTask = Task {
             // Parallel: load file + get analysis for both songs
             async let fileLoad = AudioFileLoader.shared.load(remoteURL: streamURL, songId: nextSong.id)
             async let currentAnalysis = AnalysisCacheService.shared.getAnalysis(
@@ -556,6 +581,9 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
                     currentSongAnalysis.outroStartTime = curAn.outroStartTime ?? max(currentDuration - 30, 0)
                     currentSongAnalysis.introEndTime = curAn.introEndTime ?? min(30, currentDuration)
                     currentSongAnalysis.vocalStartTime = curAn.vocalStartTime ?? 0
+                    // Mark whether real analysis data was present for outro/intro
+                    currentSongAnalysis.hasOutroData = curAn.outroStartTime != nil
+                    currentSongAnalysis.hasIntroData = curAn.introEndTime != nil
                     if let beats = curAn.beats { currentSongAnalysis.downbeatTimes = beats }
                     if let segs = curAn.speechSegments {
                         currentSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
@@ -570,6 +598,9 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
                     nextSongAnalysis.outroStartTime = nxtAn.outroStartTime ?? max(nextDuration - 30, 0)
                     nextSongAnalysis.introEndTime = nxtAn.introEndTime ?? min(30, nextDuration)
                     nextSongAnalysis.vocalStartTime = nxtAn.vocalStartTime ?? 0
+                    // Mark whether real analysis data was present for outro/intro
+                    nextSongAnalysis.hasOutroData = nxtAn.outroStartTime != nil
+                    nextSongAnalysis.hasIntroData = nxtAn.introEndTime != nil
                     if let beats = nxtAn.beats { nextSongAnalysis.downbeatTimes = beats }
                     if let segs = nxtAn.speechSegments {
                         nextSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
@@ -604,7 +635,10 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
                     useFilters: crossfadeResult.useFilters,
                     useAggressiveFilters: crossfadeResult.useAggressiveFilters,
                     needsAnticipation: crossfadeResult.needsAnticipation,
-                    anticipationTime: crossfadeResult.anticipationTime
+                    anticipationTime: crossfadeResult.anticipationTime,
+                    useTimeStretch: crossfadeResult.useTimeStretch,
+                    rateA: crossfadeResult.rateA,
+                    rateB: crossfadeResult.rateB
                 )
 
                 // Set automix trigger on engine.
@@ -724,8 +758,24 @@ final class QueueManager: @preconcurrency AudioEngineDelegate {
         // Notify scrobble service
         ScrobbleService.shared.songDidStart(song)
 
+        // Mark song as played in offline cache (for LRU ordering)
+        Task { await OfflineStorageManager.shared.markPlayed(songId: song.id) }
+
         // Prepare next song for crossfade
         prepareNextForCrossfade()
+
+        // Pre-cache next 3 songs in queue for offline (priority 1)
+        preCacheUpcoming()
+    }
+
+    /// Pre-cache the next 3 songs in the queue via DownloadManager.
+    private func preCacheUpcoming() {
+        guard PersistenceService.shared.offlineAutoCacheEnabled else { return }
+        let start = currentIndex + 1
+        let end = min(start + 3, queue.count)
+        guard start < end else { return }
+        let upcoming = Array(queue[start..<end])
+        DownloadManager.shared.preCacheSongs(upcoming)
     }
 
     // MARK: - Sync with NowPlayingState
