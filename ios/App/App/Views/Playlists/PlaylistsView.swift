@@ -370,26 +370,31 @@ struct PlaylistsView: View {
 
 /// Virtual "Downloads" playlist — shows all cached songs as a playlist-like view.
 /// Not backed by Navidrome — reads from OfflineContentProvider (SwiftData).
+/// Layout mirrors PlaylistDetailView for consistency.
 struct DownloadsPlaylistView: View {
     @State private var songs: [NavidromeSong] = []
     @State private var isLoading = true
-    @State private var palette: AlbumPalette = AlbumPalette(
-        primary:   UIColor(red: 0.15, green: 0.2, blue: 0.45, alpha: 1),
-        secondary: UIColor(red: 0.1, green: 0.15, blue: 0.35, alpha: 1),
-        accent:    UIColor(red: 0.4, green: 0.5, blue: 0.9, alpha: 1),
-        isSolid:   false
-    )
     @State private var scrollY: CGFloat = 0
 
-    private let heroHeight: CGFloat = 340
+    private let palette = AlbumPalette(
+        primary:   UIColor(red: 0.12, green: 0.15, blue: 0.35, alpha: 1),
+        secondary: UIColor(red: 0.08, green: 0.1, blue: 0.28, alpha: 1),
+        accent:    UIColor(red: 0.45, green: 0.55, blue: 1.0, alpha: 1),
+        isSolid:   false
+    )
+
+    private let heroHeight: CGFloat = 440
 
     private var scrollProgress: CGFloat { min(max(scrollY / heroHeight, 0), 1) }
     private var heroOpacity: CGFloat    { 1 - min(scrollProgress * 1.2, 0.92) }
     private var stickyOpacity: CGFloat  { min(max((scrollProgress - 0.55) / 0.25, 0), 1) }
+    private var overscrollScale: CGFloat { 1 + max(0, -scrollY) / 900 }
+
+    private var pageBg: Color { Color(palette.pageBackgroundColor) }
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(palette.pageBackgroundColor).ignoresSafeArea()
+            pageBg.ignoresSafeArea()
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -413,6 +418,7 @@ struct DownloadsPlaylistView: View {
                 Text("Descargas")
                     .font(.headline)
                     .foregroundStyle(.white)
+                    .lineLimit(1)
                     .opacity(stickyOpacity)
             }
         }
@@ -426,73 +432,123 @@ struct DownloadsPlaylistView: View {
         isLoading = false
     }
 
+    // MARK: - Hero
+
     private var heroSection: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 80)
-
+        ZStack(alignment: .bottom) {
+            // Background
             ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                LinearGradient(
+                    colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.38),
+                        Color.black.opacity(0.22),
+                        Color.black.opacity(0.06)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .ignoresSafeArea(edges: .top)
+            .scaleEffect(overscrollScale, anchor: .top)
+            .frame(height: heroHeight)
+            .overlay(alignment: .bottom) {
+                LinearGradient(
+                    colors: [.clear, pageBg],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: heroHeight * 0.35)
+            }
+            .clipped()
+
+            // Content
+            VStack(spacing: 0) {
+                Spacer(minLength: 100)
+
+                // Cover icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [.blue.opacity(0.5), .purple.opacity(0.5)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 180, height: 180)
-                    .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
-
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 64, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-
-            VStack(spacing: 6) {
-                Text("Descargas")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
-
-                Text("\(songs.count) canciones")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-
-            if !songs.isEmpty {
-                HStack(spacing: 12) {
-                    Button {
-                        PlayerService.shared.playPlaylist(songs, startingAt: 0,
-                            contextUri: "downloads:all", contextName: "Descargas")
-                    } label: {
-                        Label("Reproducir", systemImage: "play.fill")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .foregroundStyle(.white)
-                    }
-
-                    Button {
-                        let shuffled = songs.shuffled()
-                        PlayerService.shared.playPlaylist(shuffled, startingAt: 0,
-                            contextUri: "downloads:all", contextName: "Descargas")
-                    } label: {
-                        Label("Aleatorio", systemImage: "shuffle")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .foregroundStyle(.white)
-                    }
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 64, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
                 }
-                .padding(.horizontal, 32)
+                .frame(width: 190, height: 190)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
+
+                Spacer(minLength: 20)
+
+                // Title + metadata
+                VStack(alignment: .center, spacing: 5) {
+                    Text("Descargas")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    Text("\(songs.count) canciones")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 20)
+
+                // Action buttons
+                if !songs.isEmpty {
+                    actionButtons
+                        .padding(.top, 18)
+                }
+
+                Spacer(minLength: 28)
+            }
+            .frame(maxWidth: .infinity)
+            .opacity(heroOpacity)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: heroHeight)
+        .clipped()
+    }
+
+    private var actionButtons: some View {
+        let fillColor = Color(palette.buttonFillColor)
+        let labelColor: Color = palette.buttonUsesBlackText ? .black : .white
+
+        return HStack(spacing: 12) {
+            Button {
+                PlayerService.shared.playPlaylist(songs, startingAt: 0,
+                    contextUri: "downloads:all", contextName: "Descargas")
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
             }
 
-            Spacer(minLength: 16)
+            Button {
+                PlayerService.shared.playPlaylist(songs.shuffled(), startingAt: 0,
+                    contextUri: "downloads:all", contextName: "Descargas")
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
+            }
         }
-        .frame(height: heroHeight)
-        .frame(maxWidth: .infinity)
-        .opacity(heroOpacity)
     }
+
+    // MARK: - Song List
 
     @ViewBuilder
     private var songListSection: some View {

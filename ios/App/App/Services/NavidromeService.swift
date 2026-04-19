@@ -120,7 +120,14 @@ final class NavidromeService: ObservableObject {
         request.httpMethod = "HEAD"
         request.timeoutInterval = 5
 
-        let available = (try? await URLSession.shared.data(for: request)) != nil
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200..<400).contains(http.statusCode)
+        else {
+            cacheSet(cacheKey, value: false, ttl: 30)
+            return false
+        }
+        let available = true
         cacheSet(cacheKey, value: available, ttl: 30)
         return available
     }

@@ -235,7 +235,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var topWeeklySection: some View {
-        if vm.isBackendAvailable && !vm.topWeekly.isEmpty {
+        if vm.isBackendAvailable && network.isConnected && !vm.topWeekly.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Lo más escuchado")
                     .font(.system(size: 22, weight: .bold))
@@ -402,7 +402,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var jumpBackInSection: some View {
-        if vm.isBackendAvailable && !vm.recentContexts.isEmpty {
+        if vm.isBackendAvailable && network.isConnected && !vm.recentContexts.isEmpty {
             HorizontalScrollSection(title: "Volver a escuchar") {
                 ForEach(vm.recentContexts) { ctx in
                     let isAlbum = ctx.type == "album"
@@ -488,7 +488,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var dailyMixSection: some View {
-        if vm.isBackendAvailable {
+        if vm.isBackendAvailable && network.isConnected {
             if vm.isGeneratingMixes {
                 // Generating state
                 VStack(alignment: .leading, spacing: 12) {

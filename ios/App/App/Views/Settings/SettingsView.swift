@@ -179,7 +179,6 @@ struct SettingsView: View {
     @State private var showSaveAlert = false
     @State private var alertMessage = ""
     @State private var scrollY: CGFloat = 0
-    @State private var backendUrl = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
 
     private let collapseThreshold: CGFloat = 44
 
@@ -253,13 +252,7 @@ struct SettingsView: View {
                 settingsRow {
                     Label("Modo oscuro", systemImage: "moon.fill")
                     Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { theme.isDark },
-                        set: { newValue in
-                            AppTheme.shared.isDark = newValue
-                            UserDefaults.standard.set(newValue, forKey: "audiorr_isDark")
-                        }
-                    ))
+                    Toggle("", isOn: $theme.isDark)
                     .labelsHidden()
                 }
             }
@@ -400,37 +393,6 @@ struct SettingsView: View {
                     .font(.subheadline)
                     Divider().padding(.leading, 16)
                 }
-                #if DEBUG
-                settingsRow {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Backend URL", systemImage: "server.rack")
-                            .font(.subheadline.weight(.medium))
-                        HStack(spacing: 8) {
-                            TextField("http://192.168.1.10:2999", text: $backendUrl)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.subheadline)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                                .keyboardType(.URL)
-                            Button("OK") {
-                                let trimmed = backendUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                                UserDefaults.standard.set(trimmed, forKey: "audiorr_backend_url")
-                                backendUrl = trimmed
-                                vm.load()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                        if !backendUrl.isEmpty {
-                            Text(vm.isBackendAvailable ? "Conectado" : "No disponible")
-                                .font(.caption)
-                                .foregroundStyle(vm.isBackendAvailable ? .green : .red)
-                        }
-                    }
-                }
-                Divider().padding(.leading, 16)
-                #endif
                 settingsRow {
                     Button(role: .destructive) {
                         showLogoutConfirm = true

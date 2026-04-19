@@ -5,8 +5,11 @@ import UIKit
 /// Las vistas SwiftUI lo leen vía @ObservedObject.
 final class AppTheme: ObservableObject {
     static let shared = AppTheme()
-    @Published var isDark: Bool = false {
-        didSet { applyToWindows() }
+    @Published var isDark: Bool = UserDefaults.standard.bool(forKey: "audiorr_isDark") {
+        didSet {
+            UserDefaults.standard.set(isDark, forKey: "audiorr_isDark")
+            applyToWindows()
+        }
     }
 
     /// Detail overlays (album, playlist, artist hero) set this to override

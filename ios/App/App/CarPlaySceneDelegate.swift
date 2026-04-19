@@ -80,8 +80,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPS
         }
 
         Task {
-            await loadPlaylists()
-            await loadHomeContent()
+            if NetworkMonitor.shared.isConnected {
+                await loadPlaylists()
+                await loadHomeContent()
+            } else {
+                await loadOfflineContent()
+            }
         }
     }
 
@@ -329,6 +333,123 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPS
             }
             homeTemplate?.updateSections(sections)
         }
+    }
+
+    // MARK: - Offline Content
+
+    private func loadOfflineContent() async {
+        let cached = await OfflineContentProvider.shared.allCachedSongs()
+        let songs = cached.map { $0.toNavidromeSong() }
+
+        guard !songs.isEmpty else {
+            await MainActor.run {
+                let empty = CPListItem(text: "Sin canciones descargadas", detailText: "Descarga música desde el iPhone", image: nil)
+                homeTemplate?.updateSections([CPListSection(items: [empty])])
+                playlistsTemplate?.updateSections([CPListSection(items: [empty])])
+            }
+            return
+        }
+
+        // Home tab: "Descargas" as a playable list
+        let playAllItem = CPListItem(
+            text: "Reproducir todo (\(songs.count) canciones)",
+            detailText: "Contenido descargado",
+            image: UIImage(systemName: "play.fill"),
+            accessoryImage: nil,
+            accessoryType: .none
+        )
+        playAllItem.handler = { [weak self] _, completion in
+            self?.playPlaylistSongs(songs, startIndex: 0)
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            completion()
+        }
+
+        let shuffleItem = CPListItem(
+            text: "Aleatorio",
+            detailText: "\(songs.count) canciones descargadas",
+            image: UIImage(systemName: "shuffle"),
+            accessoryImage: nil,
+            accessoryType: .none
+        )
+        shuffleItem.handler = { [weak self] _, completion in
+            self?.playPlaylistSongs(songs.shuffled(), startIndex: 0)
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            completion()
+        }
+
+        // Group by album
+        let albums = await OfflineContentProvider.shared.cachedAlbums()
+        var albumItems: [CPListItem] = []
+        for album in albums {
+            let item = CPListItem(
+                text: album.name,
+                detailText: "\(album.artist) · \(album.songCount) canciones",
+                image: UIImage(systemName: "square.stack"),
+                accessoryImage: nil,
+                accessoryType: .disclosureIndicator
+            )
+            let albumSongs = songs.filter { $0.albumId == album.albumId }
+            item.handler = { [weak self] _, completion in
+                self?.showOfflineAlbum(name: album.name, songs: albumSongs)
+                completion()
+            }
+            albumItems.append(item)
+        }
+
+        await MainActor.run {
+            var homeSections: [CPListSection] = []
+            homeSections.append(CPListSection(items: [playAllItem, shuffleItem], header: "Descargas", sectionIndexTitle: nil))
+            if !albumItems.isEmpty {
+                homeSections.append(CPListSection(items: albumItems, header: "Álbumes descargados", sectionIndexTitle: nil))
+            }
+            homeTemplate?.updateSections(homeSections)
+
+            // Playlists tab: same offline info
+            let offlineInfo = CPListItem(text: "Sin conexión", detailText: "Solo contenido descargado disponible", image: UIImage(systemName: "wifi.slash"))
+            playlistsTemplate?.updateSections([CPListSection(items: [offlineInfo])])
+        }
+    }
+
+    private func showOfflineAlbum(name: String, songs: [NavidromeSong]) {
+        let songsTemplate = CPListTemplate(
+            title: name,
+            sections: [CPListSection(items: [])]
+        )
+
+        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
+            self?.playPlaylistSongs(songs, startIndex: 0)
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        }
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+            self?.playPlaylistSongs(songs.shuffled(), startIndex: 0)
+            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        }
+        songsTemplate.leadingNavigationBarButtons = [playAllButton]
+        songsTemplate.trailingNavigationBarButtons = [shuffleButton]
+
+        let songItems: [CPListItem] = songs.enumerated().map { index, song in
+            let dur = Int(song.duration ?? 0)
+            let detail = song.artist.isEmpty
+                ? String(format: "%d:%02d", dur / 60, dur % 60)
+                : String(format: "%@ · %d:%02d", song.artist, dur / 60, dur % 60)
+
+            let item = CPListItem(
+                text: song.title,
+                detailText: detail,
+                image: UIImage(systemName: "music.note"),
+                accessoryImage: nil,
+                accessoryType: .none
+            )
+            item.handler = { [weak self] _, completion in
+                self?.playPlaylistSongs(songs, startIndex: index)
+                self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                completion()
+            }
+            return item
+        }
+
+        songsTemplate.updateSections([CPListSection(items: songItems)])
+        interfaceController?.pushTemplate(songsTemplate, animated: true, completion: nil)
     }
 
     // MARK: - Cover Art
