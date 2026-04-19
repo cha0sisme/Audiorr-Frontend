@@ -265,11 +265,13 @@ struct SettingsView: View {
             }
 
             // ── Reproducción ──
-            if vm.isBackendAvailable {
-                settingsSection(
-                    header: "Reproducción",
-                    footer: "Modo DJ activa mezclas dinámicas. ReplayGain normaliza el volumen entre canciones."
-                ) {
+            settingsSection(
+                header: "Reproducción",
+                footer: vm.isBackendAvailable
+                    ? "Modo DJ activa mezclas dinámicas. ReplayGain normaliza el volumen entre canciones."
+                    : "ReplayGain normaliza el volumen entre canciones."
+            ) {
+                if vm.isBackendAvailable {
                     settingsRow {
                         Label("Modo DJ", systemImage: "dial.medium.fill")
                         Spacer()
@@ -280,15 +282,15 @@ struct SettingsView: View {
                         .labelsHidden()
                     }
                     Divider().padding(.leading, 16)
-                    settingsRow {
-                        Label("ReplayGain", systemImage: "speaker.wave.2.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { vm.useReplayGain },
-                            set: { _ in vm.toggleReplayGain() }
-                        ))
-                        .labelsHidden()
-                    }
+                }
+                settingsRow {
+                    Label("ReplayGain", systemImage: "speaker.wave.2.fill")
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { vm.useReplayGain },
+                        set: { _ in vm.toggleReplayGain() }
+                    ))
+                    .labelsHidden()
                 }
             }
 

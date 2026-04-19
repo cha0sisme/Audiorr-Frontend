@@ -494,33 +494,24 @@ struct PlaylistDetailView: View {
                 break // disabled
             }
         } label: {
-            HStack(spacing: 6) {
+            ZStack {
                 switch status {
-                case .idle:
-                    Image(systemName: "sparkles")
+                case .idle, .ready:
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(labelColor)
                 case .analyzing:
                     ProgressView()
                         .controlSize(.small)
                         .tint(labelColor)
-                case .ready:
-                    Image(systemName: "sparkles")
                 case .error:
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(labelColor.opacity(0.5))
                 }
-                Text(smartMixLabel(for: status))
-                    .fontWeight(.semibold)
             }
-            .font(.system(size: 14))
-            .foregroundStyle(labelColor)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(
-                status == .ready
-                    ? fillColor.opacity(0.9)
-                    : fillColor.opacity(0.7),
-                in: Capsule()
-            )
+            .frame(width: 40, height: 40)
+            .background(fillColor, in: Circle())
         }
         .disabled(status == .analyzing || vm.songs.isEmpty)
     }

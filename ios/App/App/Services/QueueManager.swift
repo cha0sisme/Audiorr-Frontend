@@ -640,7 +640,11 @@ final class QueueManager: AudioEngineDelegate {
                     rateA: crossfadeResult.rateA,
                     rateB: crossfadeResult.rateB,
                     energyA: crossfadeResult.energyA,
-                    energyB: crossfadeResult.energyB
+                    energyB: crossfadeResult.energyB,
+                    beatIntervalA: crossfadeResult.beatIntervalA,
+                    beatIntervalB: crossfadeResult.beatIntervalB,
+                    downbeatTimesA: crossfadeResult.downbeatTimesA,
+                    downbeatTimesB: crossfadeResult.downbeatTimesB
                 )
 
                 // Set automix trigger on engine.
@@ -785,6 +789,11 @@ final class QueueManager: AudioEngineDelegate {
     private func syncNowPlayingState() {
         let state = NowPlayingState.shared
 
+        // Don't overwrite remote state when local player is idle
+        if state.isRemote && !isPlaying && currentSong == nil {
+            return
+        }
+
         // Local playback overrides remote state
         if state.isRemote {
             state.isRemote = false
@@ -806,6 +815,7 @@ final class QueueManager: AudioEngineDelegate {
         state.isPlaying = isPlaying
         state.progress = currentTime
         state.duration = duration > 0 ? duration : 1
+        state.contextUri = PlayerService.shared.currentContextUri ?? ""
 
         // Sync queue for the viewer
         state.queue = queue.map { $0.toQueueSong() }
@@ -817,6 +827,42 @@ final class QueueManager: AudioEngineDelegate {
         persistence.saveQueue(queue)
         persistence.currentIndex = currentIndex
         persistence.lastSongId = currentSong?.id
+        saveToBackend()
+    }
+
+    /// Debounced save to backend — persists current song + queue for cross-device restore.
+    private var saveToBackendWork: DispatchWorkItem?
+
+    private func saveToBackend() {
+        saveToBackendWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let song = self.currentSong,
+                  let username = NavidromeService.shared.credentials?.username
+            else { return }
+
+            let queueItems = self.queue.map { s in
+                BackendService.LastPlaybackQueueItem(
+                    id: s.id, title: s.title, artist: s.artist,
+                    album: s.album, albumId: s.albumId, coverArt: s.coverArt,
+                    duration: s.duration
+                )
+            }
+
+            let state = BackendService.LastPlaybackState(
+                songId: song.id, title: song.title, artist: song.artist,
+                album: song.album, coverArt: song.coverArt, albumId: song.albumId,
+                path: "", duration: song.duration,
+                position: NowPlayingState.shared.progress,
+                savedAt: ISO8601DateFormatter().string(from: Date()),
+                queue: queueItems,
+                currentIndex: self.currentIndex
+            )
+
+            BackendService.shared.saveLastPlayback(username: username, state: state)
+        }
+        saveToBackendWork = work
+        // Debounce 2 seconds to avoid flooding the backend on rapid queue changes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
     }
 
     private func restoreState() {
@@ -849,7 +895,7 @@ final class QueueManager: AudioEngineDelegate {
 
     // MARK: - Restore Last Playback from Backend
 
-    /// Fetch last playback state from backend and populate mini player (no auto-play).
+    /// Fetch last playback state from backend and populate mini player + queue (no auto-play).
     func restoreLastPlayback() {
         guard queue.isEmpty,
               let username = NavidromeService.shared.credentials?.username
@@ -858,31 +904,87 @@ final class QueueManager: AudioEngineDelegate {
         Task {
             guard let last = await BackendService.shared.getLastPlayback(username: username) else { return }
 
-            let song = PersistableSong(
-                id: last.songId, title: last.title, artist: last.artist,
-                album: last.album, albumId: last.albumId ?? "",
-                artistId: "", coverArt: last.coverArt ?? "",
-                duration: last.duration
-            )
-
             await MainActor.run {
-                queue = [song]
-                originalQueue = [song]
-                currentIndex = 0
-                persistState()
+                // Restore full queue if available, otherwise just the single song
+                if let queueItems = last.queue, !queueItems.isEmpty {
+                    let restoredQueue = queueItems.map { item in
+                        PersistableSong(
+                            id: item.id, title: item.title, artist: item.artist,
+                            album: item.album, albumId: item.albumId ?? "",
+                            artistId: "", coverArt: item.coverArt ?? "",
+                            duration: item.duration
+                        )
+                    }
+                    queue = restoredQueue
+                    originalQueue = restoredQueue
+                    currentIndex = last.currentIndex ?? restoredQueue.firstIndex(where: { $0.id == last.songId }) ?? 0
+                } else {
+                    let song = PersistableSong(
+                        id: last.songId, title: last.title, artist: last.artist,
+                        album: last.album, albumId: last.albumId ?? "",
+                        artistId: "", coverArt: last.coverArt ?? "",
+                        duration: last.duration
+                    )
+                    queue = [song]
+                    originalQueue = [song]
+                    currentIndex = 0
+                }
 
-                let state = NowPlayingState.shared
-                state.title = song.title
-                state.artist = song.artist
-                state.songId = song.id
-                state.albumId = song.albumId
-                state.coverArt = song.coverArt
-                state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
-                state.isVisible = true
-                state.duration = song.duration
-                state.progress = last.position
-                state.queue = [song.toQueueSong()]
+                // Validate index
+                if currentIndex >= queue.count { currentIndex = max(0, queue.count - 1) }
+
+                // Persist locally (but don't re-save to backend — we just loaded from there)
+                persistence.saveQueue(queue)
+                persistence.currentIndex = currentIndex
+                persistence.lastSongId = currentSong?.id
+
+                // Update UI state
+                if let song = currentSong {
+                    let state = NowPlayingState.shared
+                    state.title = song.title
+                    state.artist = song.artist
+                    state.songId = song.id
+                    state.albumId = song.albumId
+                    state.coverArt = song.coverArt
+                    state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
+                    state.isVisible = true
+                    state.duration = song.duration
+                    state.progress = last.position
+                    state.queue = queue.map { $0.toQueueSong() }
+                }
             }
+        }
+    }
+
+    // MARK: - Remote Queue Loading (from ConnectService sync)
+
+    /// Load a queue received from another device via Socket.IO.
+    /// Sets the queue and current index without starting playback.
+    func loadRemoteQueue(songs: [PersistableSong], currentIndex: Int, position: Double) {
+        guard !songs.isEmpty else { return }
+
+        queue = songs
+        originalQueue = songs
+        self.currentIndex = min(currentIndex, songs.count - 1)
+
+        // Persist locally
+        persistence.saveQueue(queue)
+        persistence.currentIndex = self.currentIndex
+        persistence.lastSongId = currentSong?.id
+
+        // Update UI
+        if let song = currentSong {
+            let state = NowPlayingState.shared
+            state.title = song.title
+            state.artist = song.artist
+            state.songId = song.id
+            state.albumId = song.albumId
+            state.coverArt = song.coverArt
+            state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
+            state.isVisible = true
+            state.duration = song.duration
+            state.progress = position
+            state.queue = queue.map { $0.toQueueSong() }
         }
     }
 }

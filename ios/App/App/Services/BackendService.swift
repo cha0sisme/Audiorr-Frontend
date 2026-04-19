@@ -171,6 +171,16 @@ final class BackendService {
 
     // MARK: - Playback Position Persistence
 
+    struct LastPlaybackQueueItem: Codable {
+        let id: String
+        let title: String
+        let artist: String
+        let album: String
+        var albumId: String?
+        var coverArt: String?
+        var duration: Double
+    }
+
     struct LastPlaybackState: Codable {
         let songId: String
         let title: String
@@ -182,6 +192,8 @@ final class BackendService {
         let duration: Double
         var position: Double
         var savedAt: String
+        var queue: [LastPlaybackQueueItem]?
+        var currentIndex: Int?
     }
 
     func getLastPlayback(username: String) async -> LastPlaybackState? {

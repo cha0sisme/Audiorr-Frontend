@@ -273,12 +273,24 @@ struct HomeView: View {
     }
 
     private func topWeeklyRow(_ song: TopWeeklySong) -> some View {
-        HStack(spacing: 12) {
-            // Rank
-            Text("\(song.rank)")
-                .font(.system(size: 15, weight: .bold).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 20, alignment: .trailing)
+        let nowPlaying = NowPlayingState.shared
+        let isCurrentSong = nowPlaying.isVisible && nowPlaying.songId == song.songId
+
+        return HStack(spacing: 12) {
+            // Rank or equalizer
+            if isCurrentSong {
+                NowPlayingIndicator(
+                    isPlaying: nowPlaying.isPlaying,
+                    color: .accentColor,
+                    barWidth: 2.5, height: 12
+                )
+                .frame(width: 20)
+            } else {
+                Text("\(song.rank)")
+                    .font(.system(size: 15, weight: .bold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, alignment: .trailing)
+            }
 
             // Cover
             AsyncImage(url: NavidromeService.shared.coverURL(id: song.coverArt, size: 80)) { phase in

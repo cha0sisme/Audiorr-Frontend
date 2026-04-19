@@ -50,11 +50,17 @@ struct MiniPlayerView: View {
                         .lineLimit(1)
 
                     if let subtitle = state.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(subtitle.hasPrefix("AutoMix") ? .cyan : .green)
-                            .lineLimit(1)
-                            .transition(.opacity)
+                        if subtitle.hasPrefix("AutoMix") {
+                            WaveText(subtitle, font: .system(size: 10, weight: .semibold), color: .cyan)
+                                .lineLimit(1)
+                                .transition(.opacity)
+                        } else {
+                            Text(subtitle)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.green)
+                                .lineLimit(1)
+                                .transition(.opacity)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -42,6 +42,15 @@ final class SearchViewModel: ObservableObject {
     }
 
     private func performSearch(_ q: String) async {
+        // Offline fallback: search cached songs
+        if !NetworkMonitor.shared.isConnected {
+            let cached = await OfflineContentProvider.shared.search(query: q)
+            guard !Task.isCancelled else { return }
+            results = SearchResults(songs: cached.map { $0.toNavidromeSong() })
+            isSearching = false
+            return
+        }
+
         api.reloadCredentials()
         guard api.isConfigured else {
             isSearching = false
@@ -129,6 +138,10 @@ struct SearchView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
 
+                    if !NetworkMonitor.shared.isConnected && !hasQuery {
+                        offlineBanner
+                    }
+
                     if vm.isSearching && vm.results.isEmpty {
                         searchingSection
                     } else if hasQuery && vm.results.isEmpty && !vm.isSearching {
@@ -215,6 +228,25 @@ struct SearchView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: - Offline banner
+
+    private var offlineBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.orange)
+            Text("Sin conexión — buscando solo en descargas")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
     }
 
     // MARK: - History
@@ -356,12 +388,25 @@ struct SearchView: View {
 
     private var emptySection: some View {
         VStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-            Text("Sin resultados para «\(vm.query)»")
-                .foregroundStyle(.secondary)
-                .font(.subheadline)
+            if !NetworkMonitor.shared.isConnected {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("Sin conexión")
+                    .foregroundStyle(.secondary)
+                    .font(.subheadline.bold())
+                Text("Solo se busca en canciones descargadas. Sin resultados para «\(vm.query)».")
+                    .foregroundStyle(.tertiary)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.tertiary)
+                Text("Sin resultados para «\(vm.query)»")
+                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

@@ -33,6 +33,10 @@ final class PlayerService {
     /// Play a single song.
     @MainActor
     func play(song: NavidromeSong) {
+        if NowPlayingState.shared.isRemote {
+            ConnectService.shared.sendRemotePlaylist([song], startIndex: 0)
+            return
+        }
         currentContextUri = nil
         currentContextName = nil
         QueueManager.shared.play(songs: [song], startIndex: 0)
@@ -42,6 +46,10 @@ final class PlayerService {
     @MainActor
     func playPlaylist(_ songs: [NavidromeSong], startingAt index: Int = 0, contextUri: String? = nil, contextName: String? = nil) {
         guard index < songs.count else { return }
+        if NowPlayingState.shared.isRemote {
+            ConnectService.shared.sendRemotePlaylist(songs, startIndex: index)
+            return
+        }
         currentContextUri = contextUri
         currentContextName = contextName
         QueueManager.shared.play(songs: songs, startIndex: index)
@@ -52,12 +60,20 @@ final class PlayerService {
     /// Insert a song immediately after the current one.
     @MainActor
     func insertNext(_ song: NavidromeSong) {
+        if NowPlayingState.shared.isRemote {
+            ConnectService.shared.sendRemoteCommand(action: "insertNext", value: song.toDictionary())
+            return
+        }
         QueueManager.shared.insertNext(song)
     }
 
     /// Add a song to the end of the queue.
     @MainActor
     func addToQueue(_ song: NavidromeSong) {
+        if NowPlayingState.shared.isRemote {
+            ConnectService.shared.sendRemoteCommand(action: "addToQueue", value: song.toDictionary())
+            return
+        }
         QueueManager.shared.addToQueue(song)
     }
 

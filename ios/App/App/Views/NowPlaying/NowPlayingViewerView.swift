@@ -104,38 +104,53 @@ struct NowPlayingViewerView: View {
                         // Playback controls
                         PlaybackControlsView(glassStyle: hasCanvas)
 
-                    } else {
-                        if hasCanvas {
-                            // Canvas mode: push controls to the bottom
-                            Spacer()
-                        } else {
-                            Spacer()
-                                .frame(minHeight: 8, maxHeight: 40)
+                        // Push bottom actions down
+                        Spacer()
 
-                            artworkView(geo: geo)
+                    } else if hasCanvas {
+                        // Canvas mode: all controls grouped at bottom (Spotify-style)
+                        Spacer()
 
-                            Spacer()
-                                .frame(height: 16)
-                        }
-
-                        // Info de canción + menu
                         songInfoView
 
                         Spacer()
                             .frame(height: 20)
 
-                        // Progress bar
                         ProgressBarView()
 
                         Spacer()
                             .frame(height: 16)
 
-                        // Playback controls
-                        PlaybackControlsView(glassStyle: hasCanvas)
-                    }
+                        PlaybackControlsView(glassStyle: true)
 
-                    // Always push bottom actions to the very bottom
-                    Spacer()
+                        Spacer()
+                            .frame(height: 16)
+
+                    } else {
+                        // Normal mode: artwork centered, controls below
+                        Spacer()
+                            .frame(minHeight: 8, maxHeight: 40)
+
+                        artworkView(geo: geo)
+
+                        Spacer()
+                            .frame(height: 16)
+
+                        songInfoView
+
+                        Spacer()
+                            .frame(height: 20)
+
+                        ProgressBarView()
+
+                        Spacer()
+                            .frame(height: 16)
+
+                        PlaybackControlsView(glassStyle: false)
+
+                        // Push bottom actions to the very bottom
+                        Spacer()
+                    }
 
                     // Bottom action row (lyrics, queue, connect)
                     bottomActionsRow

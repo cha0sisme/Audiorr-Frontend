@@ -30,6 +30,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         if UserDefaults.standard.object(forKey: "audiorr_isDark") != nil {
             AppTheme.shared.isDark = UserDefaults.standard.bool(forKey: "audiorr_isDark")
         }
+        // Apply to windows once scene is connected (didSet fires before windows exist)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            AppTheme.shared.applyToWindows()
+        }
 
         UIApplication.shared.beginReceivingRemoteControlEvents()
 

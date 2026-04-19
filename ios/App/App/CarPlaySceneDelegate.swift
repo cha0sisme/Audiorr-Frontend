@@ -3,13 +3,15 @@ import CarPlay
 import MediaPlayer
 
 /// Scene delegate para CarPlay Audio.
-/// Tab bar con Inicio + Playlists + Now Playing.
+/// Tab bar con Inicio + Playlists + Buscar + Now Playing.
 @objc(CarPlaySceneDelegate)
-class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
+class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPSearchTemplateDelegate {
 
     var interfaceController: CPInterfaceController?
     private var homeTemplate: CPListTemplate?
     private var playlistsTemplate: CPListTemplate?
+    private var searchTemplate: CPSearchTemplate?
+    private var searchDebounce: DispatchWorkItem?
 
     // MARK: - CPTemplateApplicationSceneDelegate
 
@@ -43,6 +45,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         plistList.tabImage = UIImage(systemName: "music.note.list")
         plistList.trailingNavigationBarButtons = [nowPlayingBarButton]
         self.playlistsTemplate = plistList
+
+        let searchBarButton = CPBarButton(image: UIImage(systemName: "magnifyingglass")!) { [weak self] _ in
+            guard let self else { return }
+            let search = CPSearchTemplate()
+            search.delegate = self
+            self.searchTemplate = search
+            self.interfaceController?.pushTemplate(search, animated: true, completion: nil)
+        }
+
+        homeList.leadingNavigationBarButtons = [searchBarButton]
+        plistList.leadingNavigationBarButtons = [searchBarButton]
 
         let tabBar = CPTabBarTemplate(templates: [homeList, plistList])
         interfaceController.setRootTemplate(tabBar, animated: true, completion: nil)
@@ -152,8 +165,30 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                     completion()
                 }
 
-                loadCover(artId: coverArt) { image in
-                    if let image { DispatchQueue.main.async { item.setImage(image) } }
+                // Try backend custom cover first, fall back to Navidrome coverArt
+                if let backendUrl = NavidromeService.shared.backendURL() {
+                    let coverUrlStr = "\(backendUrl)/api/playlists/\(id)/cover.png"
+                    if let coverUrl = URL(string: coverUrlStr) {
+                        URLSession.shared.dataTask(with: coverUrl) { [weak self] data, response, _ in
+                            if (response as? HTTPURLResponse)?.statusCode == 200,
+                               let data, let image = UIImage(data: data) {
+                                DispatchQueue.main.async { item.setImage(image) }
+                            } else {
+                                // Fall back to Navidrome cover art
+                                self?.loadCover(artId: coverArt) { image in
+                                    if let image { DispatchQueue.main.async { item.setImage(image) } }
+                                }
+                            }
+                        }.resume()
+                    } else {
+                        loadCover(artId: coverArt) { image in
+                            if let image { DispatchQueue.main.async { item.setImage(image) } }
+                        }
+                    }
+                } else {
+                    loadCover(artId: coverArt) { image in
+                        if let image { DispatchQueue.main.async { item.setImage(image) } }
+                    }
                 }
 
                 if isDailyMix { dailyItems.append(item) }
@@ -216,7 +251,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
 
                     if type == "album" {
                         item.handler = { [weak self] _, completion in
-                            self?.playAlbum(id: id)
+                            self?.showAlbumSongs(albumId: id, albumName: title)
                             completion()
                         }
                         loadCover(artId: coverArtId) { image in
@@ -224,7 +259,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                         }
                     } else {
                         item.handler = { [weak self] _, completion in
-                            self?.playPlaylist(id: id, name: title)
+                            self?.showPlaylistSongs(playlistId: id, playlistName: title)
                             completion()
                         }
                         // Cover from backend
@@ -270,7 +305,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                     accessoryType: .disclosureIndicator
                 )
                 item.handler = { [weak self] _, completion in
-                    self?.playAlbum(id: id)
+                    self?.showAlbumSongs(albumId: id, albumName: name)
                     completion()
                 }
                 loadCover(artId: coverArt) { image in
@@ -329,13 +364,94 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
             self?.playPlaylist(id: playlistId, name: playlistName)
         }
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+            self?.playPlaylistShuffled(id: playlistId, name: playlistName)
+        }
         songsTemplate.leadingNavigationBarButtons = [playAllButton]
+        songsTemplate.trailingNavigationBarButtons = [shuffleButton]
 
         interfaceController?.pushTemplate(songsTemplate, animated: true, completion: nil)
 
         Task {
             do {
                 let (_, songs) = try await NavidromeService.shared.getPlaylistSongs(playlistId: playlistId)
+
+                var songItems: [CPListItem] = []
+
+                // SmartMix action row
+                let smartMixItem = CPListItem(
+                    text: "SmartMix",
+                    detailText: "Orden inteligente DJ",
+                    image: UIImage(systemName: "wand.and.stars"),
+                    accessoryImage: nil,
+                    accessoryType: .disclosureIndicator
+                )
+                smartMixItem.handler = { [weak self] _, completion in
+                    self?.playSmartMix(playlistId: playlistId, playlistName: playlistName, songs: songs)
+                    completion()
+                }
+                songItems.append(smartMixItem)
+
+                for (index, song) in songs.enumerated() {
+                    let dur = Int(song.duration ?? 0)
+                    let mins = dur / 60
+                    let secs = dur % 60
+                    let detail = song.artist.isEmpty
+                        ? String(format: "%d:%02d", mins, secs)
+                        : String(format: "%@ · %d:%02d", song.artist, mins, secs)
+
+                    let item = CPListItem(
+                        text: song.title,
+                        detailText: detail,
+                        image: UIImage(systemName: "music.note"),
+                        accessoryImage: nil,
+                        accessoryType: .none
+                    )
+                    item.handler = { [weak self] _, completion in
+                        self?.playPlaylistSongs(songs, startIndex: index)
+                        self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                        completion()
+                    }
+                    songItems.append(item)
+                }
+
+                await MainActor.run {
+                    if songs.isEmpty {
+                        let empty = CPListItem(text: "Playlist vacía", detailText: nil, image: nil)
+                        songsTemplate.updateSections([CPListSection(items: [empty])])
+                    } else {
+                        songsTemplate.updateSections([CPListSection(items: songItems)])
+                    }
+                }
+            } catch {
+                print("[CarPlay] Error cargando canciones: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Detalle de Álbum
+
+    private func showAlbumSongs(albumId: String, albumName: String) {
+        let loadingItem = CPListItem(text: "Cargando canciones...", detailText: nil, image: nil)
+        let songsTemplate = CPListTemplate(
+            title: albumName,
+            sections: [CPListSection(items: [loadingItem])]
+        )
+
+        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
+            self?.playAlbum(id: albumId)
+        }
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+            self?.playAlbumShuffled(id: albumId)
+        }
+        songsTemplate.leadingNavigationBarButtons = [playAllButton]
+        songsTemplate.trailingNavigationBarButtons = [shuffleButton]
+
+        interfaceController?.pushTemplate(songsTemplate, animated: true, completion: nil)
+
+        Task {
+            do {
+                let (_, songs, _) = try await NavidromeService.shared.getAlbumDetail(albumId: albumId)
 
                 let songItems: [CPListItem] = songs.enumerated().map { index, song in
                     let dur = Int(song.duration ?? 0)
@@ -362,14 +478,14 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
 
                 await MainActor.run {
                     if songItems.isEmpty {
-                        let empty = CPListItem(text: "Playlist vacía", detailText: nil, image: nil)
+                        let empty = CPListItem(text: "Álbum vacío", detailText: nil, image: nil)
                         songsTemplate.updateSections([CPListSection(items: [empty])])
                     } else {
                         songsTemplate.updateSections([CPListSection(items: songItems)])
                     }
                 }
             } catch {
-                print("[CarPlay] Error cargando canciones: \(error)")
+                print("[CarPlay] Error cargando álbum: \(error)")
             }
         }
     }
@@ -383,6 +499,22 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
                 let (_, songs) = try await NavidromeService.shared.getPlaylistSongs(playlistId: id)
                 await MainActor.run {
                     PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(id)", contextName: name)
+                }
+            } catch {
+                print("[CarPlay] Error cargando playlist: \(error)")
+            }
+        }
+        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+    }
+
+    private func playPlaylistShuffled(id: String, name: String) {
+        print("[CarPlay] Shuffle playlist: \(name)")
+        Task {
+            do {
+                let (_, songs) = try await NavidromeService.shared.getPlaylistSongs(playlistId: id)
+                await MainActor.run {
+                    let shuffled = songs.shuffled()
+                    PlayerService.shared.playPlaylist(shuffled, contextUri: "playlist:\(id)", contextName: name)
                 }
             } catch {
                 print("[CarPlay] Error cargando playlist: \(error)")
@@ -406,9 +538,232 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
     }
 
+    private func playAlbumShuffled(id: String) {
+        print("[CarPlay] Shuffle álbum: \(id)")
+        Task {
+            do {
+                let (album, songs, _) = try await NavidromeService.shared.getAlbumDetail(albumId: id)
+                await MainActor.run {
+                    let shuffled = songs.shuffled()
+                    PlayerService.shared.playPlaylist(shuffled, contextUri: "album:\(id)", contextName: album?.name ?? "")
+                }
+            } catch {
+                print("[CarPlay] Error cargando álbum: \(error)")
+            }
+        }
+        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+    }
+
+    private func playSmartMix(playlistId: String, playlistName: String, songs: [NavidromeSong]) {
+        print("[CarPlay] SmartMix playlist: \(playlistName)")
+        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        Task { @MainActor in
+            SmartMixManager.shared.generate(playlistId: playlistId, songs: songs)
+            // Wait for SmartMix to finish analyzing
+            while SmartMixManager.shared.status == .analyzing {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if SmartMixManager.shared.status == .ready {
+                SmartMixManager.shared.playGenerated()
+            } else {
+                // Fallback: play in original order
+                PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(playlistId)", contextName: playlistName)
+            }
+        }
+    }
+
     private func playPlaylistSongs(_ songs: [NavidromeSong], startIndex: Int) {
         Task { @MainActor in
             PlayerService.shared.playPlaylist(songs, startingAt: startIndex)
+        }
+    }
+
+    // MARK: - CPSearchTemplateDelegate
+
+    func searchTemplate(
+        _ searchTemplate: CPSearchTemplate,
+        updatedSearchText searchText: String,
+        completionHandler: @escaping ([CPListItem]) -> Void
+    ) {
+        searchDebounce?.cancel()
+
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completionHandler([])
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            Task { [weak self] in
+                await self?.executeSearch(query: trimmed, completionHandler: completionHandler)
+            }
+        }
+        searchDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    func searchTemplate(
+        _ searchTemplate: CPSearchTemplate,
+        selectedResult item: CPListItem,
+        completionHandler: @escaping () -> Void
+    ) {
+        // Handled by individual item handlers
+        completionHandler()
+    }
+
+    private func executeSearch(query: String, completionHandler: @escaping ([CPListItem]) -> Void) async {
+        guard NavidromeService.shared.credentials != nil else {
+            completionHandler([])
+            return
+        }
+
+        do {
+            let results = try await NavidromeService.shared.searchAll(
+                query: query, artistCount: 5, albumCount: 8, songCount: 10
+            )
+
+            var items: [CPListItem] = []
+
+            // Artists
+            for artist in results.artists {
+                let item = CPListItem(
+                    text: artist.name,
+                    detailText: "Artista · \(artist.albumCount ?? 0) álbumes",
+                    image: UIImage(systemName: "person.fill"),
+                    accessoryImage: nil,
+                    accessoryType: .disclosureIndicator
+                )
+                let artistId = artist.id
+                let artistName = artist.name
+                item.handler = { [weak self] _, completion in
+                    self?.showArtistAlbums(artistId: artistId, artistName: artistName)
+                    completion()
+                }
+                items.append(item)
+            }
+
+            // Albums
+            for album in results.albums {
+                let item = CPListItem(
+                    text: album.name,
+                    detailText: "Álbum · \(album.artist)",
+                    image: UIImage(systemName: "square.stack"),
+                    accessoryImage: nil,
+                    accessoryType: .disclosureIndicator
+                )
+                let albumId = album.id
+                let albumName = album.name
+                item.handler = { [weak self] _, completion in
+                    self?.showAlbumSongs(albumId: albumId, albumName: albumName)
+                    completion()
+                }
+                loadCover(artId: album.coverArt) { image in
+                    if let image { DispatchQueue.main.async { item.setImage(image) } }
+                }
+                items.append(item)
+            }
+
+            // Songs
+            for song in results.songs {
+                let dur = Int(song.duration ?? 0)
+                let mins = dur / 60
+                let secs = dur % 60
+                let detail = song.artist.isEmpty
+                    ? String(format: "Canción · %d:%02d", mins, secs)
+                    : String(format: "%@ · %d:%02d", song.artist, mins, secs)
+
+                let item = CPListItem(
+                    text: song.title,
+                    detailText: detail,
+                    image: UIImage(systemName: "music.note"),
+                    accessoryImage: nil,
+                    accessoryType: .none
+                )
+                let allSongs = results.songs
+                let songIndex = results.songs.firstIndex(where: { $0.id == song.id }) ?? 0
+                item.handler = { [weak self] _, completion in
+                    self?.playPlaylistSongs(allSongs, startIndex: songIndex)
+                    self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                    completion()
+                }
+                loadCover(artId: song.coverArt) { image in
+                    if let image { DispatchQueue.main.async { item.setImage(image) } }
+                }
+                items.append(item)
+            }
+
+            await MainActor.run {
+                completionHandler(items)
+            }
+        } catch {
+            print("[CarPlay] Error buscando: \(error)")
+            await MainActor.run {
+                completionHandler([])
+            }
+        }
+    }
+
+    // MARK: - Artist Albums (search drill-down)
+
+    private func showArtistAlbums(artistId: String, artistName: String) {
+        let loadingItem = CPListItem(text: "Cargando álbumes...", detailText: nil, image: nil)
+        let artistTemplate = CPListTemplate(
+            title: artistName,
+            sections: [CPListSection(items: [loadingItem])]
+        )
+        interfaceController?.pushTemplate(artistTemplate, animated: true, completion: nil)
+
+        Task {
+            guard let creds = NavidromeService.shared.credentials else { return }
+            let urlStr = "\(creds.serverUrl)/rest/getArtist.view?\(authQuery())&id=\(artistId)"
+            guard let url = URL(string: urlStr) else { return }
+
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let response = json["subsonic-response"] as? [String: Any],
+                      let artistObj = response["artist"] as? [String: Any] else { return }
+
+                let albumsArr: [[String: Any]]
+                if let arr = artistObj["album"] as? [[String: Any]] { albumsArr = arr }
+                else if let single = artistObj["album"] as? [String: Any] { albumsArr = [single] }
+                else { albumsArr = [] }
+
+                var items: [CPListItem] = []
+                for album in albumsArr {
+                    let name = album["name"] as? String ?? ""
+                    let id = album["id"] as? String ?? ""
+                    let year = album["year"] as? Int
+                    let coverArt = album["coverArt"] as? String
+
+                    let item = CPListItem(
+                        text: name,
+                        detailText: year != nil ? "\(year!)" : nil,
+                        image: UIImage(systemName: "square.stack"),
+                        accessoryImage: nil,
+                        accessoryType: .disclosureIndicator
+                    )
+                    item.handler = { [weak self] _, completion in
+                        self?.showAlbumSongs(albumId: id, albumName: name)
+                        completion()
+                    }
+                    loadCover(artId: coverArt) { image in
+                        if let image { DispatchQueue.main.async { item.setImage(image) } }
+                    }
+                    items.append(item)
+                }
+
+                await MainActor.run {
+                    if items.isEmpty {
+                        let empty = CPListItem(text: "Sin álbumes", detailText: nil, image: nil)
+                        artistTemplate.updateSections([CPListSection(items: [empty])])
+                    } else {
+                        artistTemplate.updateSections([CPListSection(items: items)])
+                    }
+                }
+            } catch {
+                print("[CarPlay] Error cargando artista: \(error)")
+            }
         }
     }
 }

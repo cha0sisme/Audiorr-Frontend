@@ -29,12 +29,18 @@ Audiorr is a fully native iOS music player that connects to a [Navidrome](https:
 #### Playback Engine — AVAudioEngine
 - **Native AVAudioEngine pipeline:** Direct hardware-accelerated audio with zero WebView overhead. Dual-player architecture (Player A + Player B) for gapless crossfade.
 - **AVPlayer streaming fallback:** Automatically streams via AVPlayer when files need buffering, with seamless handoff to AVAudioEngine once downloaded.
-- **Smart Crossfade — Normal & DJ Modes:** Professional transition engine that reads acoustic structure (intro, outro, energy) and selects the optimal blend type:
-  - `NATURAL_BLEND` — organic ambient superimposition between soft tracks
+- **Smart Crossfade v2.0 "Velvet Transition" — Normal & DJ Modes:** Professional transition engine that reads acoustic structure (intro, outro, energy, harmony, beat grid) and selects the optimal blend type:
+  - `NATURAL_BLEND` — equal-power cos²/sin² crossfade for constant perceived energy
   - `FADE_OUT_A / CUT_B` — natural decay from A, hard entry of B
   - `CUT_A / FADE_IN_B` — A holds energy, B fades in
-  - `EQ_MIX / BEAT_MATCH_BLEND` — bass crossover synchronized to beat grid
+  - `EQ_MIX / BEAT_MATCH_BLEND` — bass crossover synchronized to beat grid with forced bass management
   - `CUT` — instant, clean switch for short fade settings
+- **Beat-aligned bass swap:** Bass frequencies hand off on actual downbeats (not linear time), preventing kick drum flamming during transitions.
+- **Harmonic BPM detection:** Recognizes half/double tempo relationships (70 BPM ↔ 140 BPM) so compatible tracks aren't penalized.
+- **4-level harmonic compatibility:** Compatible → Acceptable → Tense → Clash, with graduated fade shortening and filter intensity.
+- **Time-stretching:** Automatic tempo matching (±12 BPM) using AVAudioUnitTimePitch, with beat-quantized rate ramp and S-curve smoothing.
+- **Energy compensation:** +2–4 dB boost on quieter incoming tracks to prevent perceived loudness drops.
+- **Lowpass sweep:** Energy-down transitions use a darkening sweep (20 kHz → 800 Hz) instead of highpass, for a more natural fade.
 - **Safety mechanisms** modeled after Rekordbox: Vocal Trainwreck evasion, anti-polyrhythm lock, 25% limit on short tracks.
 - **ReplayGain v2 / EBU R128 normalization:** Automatic level normalization per track with True Peak limiter.
 - **Automatic transcoding:** VBR MP3s and incompatible formats are transparently transcoded to CAF (PCM 16-bit 44.1kHz) for AVAudioEngine compatibility.
@@ -96,9 +102,19 @@ Audiorr is a fully native iOS music player that connects to a [Navidrome](https:
 
 The following features require the optional **Audiorr Backend** (`backend/`), a separate Node.js service. The app detects backend availability automatically and hides these features when unavailable.
 
-#### Smart Mix (Harmonic DJ Ordering)
-- Reorders any playlist using **Camelot Wheel harmonic compatibility** (60% weight) and BPM proximity (40% weight).
-- Analysis results cached locally and in the backend SQLite database.
+#### Smart Mix v3.0 "Harmonic Flow"
+- Reorders any playlist using a multi-factor scoring algorithm:
+  - **Camelot Wheel harmonic compatibility** with energy boost key jump recognition (+7 semitone moves)
+  - **Harmonic BPM matching** (half/double tempo detection via `harmonicBPM`)
+  - **Energy arc shaping** — builds from gentle opener to peak, then descends to a curated closing song
+  - **BPM arc progression** — gradual tempo build-up with natural descent at the end
+  - **Vocal trainwreck avoidance** — graduated penalty when both tracks have vocals at transition points
+  - **Smooth energy valley detection** — continuous gradient penalty prevents back-to-back low-energy lulls
+  - **Artist diversity** — avoids same-artist clustering with proximity-based penalty
+  - **Key fatigue tracking** — penalizes repeating the same key 3+ times in recent history
+- **Closing song selection** — actively picks a track with low energy, slow BPM, and fading outro to end the set gracefully.
+- **Greedy sequencing + local 2-opt optimization** with windowed search (±20 positions) for efficient refinement.
+- Analysis results cached locally (MD5-hashed signature) and in the backend SQLite database.
 
 #### Daily Mixes
 - Up to 5 **personalized daily mixes** based on listening history — no external ML, 100% deterministic clustering.
@@ -175,7 +191,7 @@ ios/App/
 │   ├── CarPlaySceneDelegate.swift     CarPlay template browsing + playback
 │   ├── AudioEngineManager.swift       AVAudioEngine dual-player pipeline, crossfade, streaming
 │   ├── AudioFileLoader.swift          Download + transcode + dual-cache (temp + persistent)
-│   ├── CrossfadeExecutor.swift        Crossfade state machine
+│   ├── CrossfadeExecutor.swift        Crossfade execution engine ("Velvet Transition" v2.0)
 │   │
 │   ├── Models/
 │   │   ├── NavidromeModels.swift      API response models (Song, Album, Artist, Playlist)
@@ -192,9 +208,9 @@ ios/App/
 │   │   ├── PersistenceService.swift   UserDefaults for playback state + offline settings
 │   │   ├── CredentialsStore.swift     Keychain storage for server credentials
 │   │   ├── ScrobbleService.swift      Navidrome + backend scrobbling with retry queue
-│   │   ├── DJMixingService.swift      Crossfade intelligence (song analysis, blend selection)
+│   │   ├── DJMixingService.swift      Crossfade intelligence v2.0 "Velvet Transition"
 │   │   ├── AnalysisCacheService.swift  Audio analysis cache (BPM, key, energy, segments)
-│   │   ├── SmartMixManager.swift      Harmonic playlist reordering
+│   │   ├── SmartMixManager.swift      SmartMix v3.0 "Harmonic Flow" — playlist reordering
 │   │   ├── ConnectService.swift       Audiorr Connect (Socket.io multi-device sync)
 │   │   ├── BackendService.swift       Audiorr Backend API client
 │   │   ├── LyricsService.swift        LRCLib synchronized lyrics
@@ -281,7 +297,7 @@ The Audiorr Backend (`backend/`) is an optional Node.js service. The app is full
 | **Lock Screen & Dynamic Island** | Full controls | -- |
 | **ReplayGain normalization** | EBU R128 | -- |
 | **Audiorr Connect** | -- | Multi-device sync |
-| **Smart Mix** | -- | Harmonic playlist reordering |
+| **Smart Mix** | -- | v3.0 "Harmonic Flow" playlist reordering |
 | **Daily Mixes** | -- | 5 personalized mixes |
 | **Weekly Top 10** | -- | Server-wide chart |
 | **Canvas** | -- | Video loops |

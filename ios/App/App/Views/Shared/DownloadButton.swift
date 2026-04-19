@@ -138,7 +138,6 @@ struct DownloadButton: View {
     private func checkState() async {
         // Check how many songs are cached
         var cachedCount = 0
-        var pinnedCount = 0
         for song in songs {
             if await OfflineStorageManager.shared.isCached(songId: song.id) {
                 cachedCount += 1
@@ -147,18 +146,15 @@ struct DownloadButton: View {
 
         if cachedCount == songs.count && !songs.isEmpty {
             // Check if pinned
-            let group = DownloadManager.shared.groupProgress(groupId: groupId)
+            _ = DownloadManager.shared.groupProgress(groupId: groupId)
             // Simple heuristic: check if any song in the group is pinned
             downloadState = .downloaded
         } else if DownloadManager.shared.isSongQueued(songId: songs.first?.id ?? "") ||
                   DownloadManager.shared.activeDownloads.contains(where: { $0.groupId == groupId }) {
             downloadState = .downloading
             await updateProgress()
-        } else if cachedCount > 0 {
-            // Partially downloaded
-            downloadState = .downloading
-            progress = Double(cachedCount) / Double(songs.count)
         } else {
+            // Partially cached but no active download — show as not downloaded
             downloadState = .none
         }
     }

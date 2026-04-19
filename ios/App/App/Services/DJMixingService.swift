@@ -1,6 +1,28 @@
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║                                                                      ║
+// ║   DJMixingService — "Crossfade Intelligence Engine" v2.0             ║
+// ║   Codename: "Velvet Transition"                                      ║
+// ║                                                                      ║
+// ║   Audiorr — Audiophile-grade music player                            ║
+// ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
+// ║                                                                      ║
+// ║   Pure crossfade intelligence — no side effects, no audio playback.  ║
+// ║   Analyzes song structure, energy, harmony, and rhythm to decide     ║
+// ║   the optimal transition between any two tracks.                     ║
+// ║                                                                      ║
+// ║   v1.0 — JS DJMixingAlgorithms.ts (basic crossfade + beat sync)     ║
+// ║   v2.0 — Velvet Transition: equal-power curves, bass swap,           ║
+// ║          harmonic BPM detection (half/double tempo), 4-level          ║
+// ║          harmonic compatibility, energy compensation, lowpass sweep, ║
+// ║          beat-aligned bass swap on downbeats, time-stretch with       ║
+// ║          beat-quantized rate ramp, vocal trainwreck detection,       ║
+// ║          forced bass management for BEAT_MATCH_BLEND/EQ_MIX          ║
+// ║                                                                      ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
 import Foundation
 
-/// Native port of DJMixingAlgorithms.ts — pure crossfade intelligence calculations.
+/// DJMixingService v2.0 "Velvet Transition" — pure crossfade intelligence calculations.
 /// No side effects, no audio playback — just math.
 enum DJMixingService {
 
@@ -83,6 +105,11 @@ enum DJMixingService {
         /// Energy levels for preset selection and volume compensation.
         let energyA: Double
         let energyB: Double
+        /// Beat grid info for beat-aware automation in CrossfadeExecutor.
+        let beatIntervalA: Double
+        let beatIntervalB: Double
+        let downbeatTimesA: [Double]
+        let downbeatTimesB: [Double]
     }
 
     // MARK: - Main Entry Point
@@ -147,6 +174,18 @@ enum DJMixingService {
         let eA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
         let eB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
 
+        let biA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.beatInterval ?? 0) : 0
+        let rawBiB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.beatInterval ?? 0) : 0
+        // When time-stretch is active, B's effective beat interval changes by 1/rateB
+        // (faster playback = shorter beat intervals in wall-clock time)
+        let biB = timeStretch.useTimeStretch && timeStretch.rateB > 0
+            ? rawBiB / Double(timeStretch.rateB) : rawBiB
+        let dbA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.downbeatTimes ?? []) : []
+        let rawDbB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.downbeatTimes ?? []) : []
+        // Adjust B's downbeat times for time-stretch (wall-clock positions shift)
+        let dbB: [Double] = timeStretch.useTimeStretch && timeStretch.rateB > 0
+            ? rawDbB.map { $0 / Double(timeStretch.rateB) } : rawDbB
+
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
@@ -161,7 +200,11 @@ enum DJMixingService {
             rateA: timeStretch.rateA,
             rateB: timeStretch.rateB,
             energyA: eA,
-            energyB: eB
+            energyB: eB,
+            beatIntervalA: biA,
+            beatIntervalB: biB,
+            downbeatTimesA: dbA,
+            downbeatTimesB: dbB
         )
     }
 
@@ -239,18 +282,18 @@ enum DJMixingService {
             }
         }
 
-        // Beat matching (DJ mode only)
-        if mode == .dj {
-            let beatResult = applyBeatSync(
-                entryPoint: entryPoint,
-                currentAnalysis: currentAnalysis,
-                nextAnalysis: next,
-                currentPlaybackTimeA: currentPlaybackTimeA
-            )
-            entryPoint = beatResult.adjustedEntryPoint
-            beatSyncInfo = beatResult.info
-            isBeatSynced = beatResult.isSynced
-        }
+        // Beat matching — enabled for both DJ and normal modes when beat data is available.
+        // In normal mode, only align to downbeats (no cross-phase alignment) for subtle sync.
+        let beatResult = applyBeatSync(
+            entryPoint: entryPoint,
+            currentAnalysis: currentAnalysis,
+            nextAnalysis: next,
+            currentPlaybackTimeA: currentPlaybackTimeA,
+            mode: mode
+        )
+        entryPoint = beatResult.adjustedEntryPoint
+        beatSyncInfo = beatResult.info
+        isBeatSynced = beatResult.isSynced
 
         entryPoint = max(0, min(entryPoint, bufferDuration - 1))
 
@@ -274,45 +317,51 @@ enum DJMixingService {
         entryPoint: Double,
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis,
-        currentPlaybackTimeA: Double?
+        currentPlaybackTimeA: Double?,
+        mode: MixMode
     ) -> BeatSyncResult {
-        guard let current = currentAnalysis,
-              !current.hasError, !nextAnalysis.hasError,
-              current.beatInterval > 0, nextAnalysis.beatInterval > 0
-        else {
+        // Need valid beat intervals from at least B to sync
+        guard !nextAnalysis.hasError, nextAnalysis.beatInterval > 0 else {
             return BeatSyncResult(adjustedEntryPoint: entryPoint, info: "", isSynced: false)
         }
 
-        let beatIntervalA = current.beatInterval
+        let hasCurrentBeats = currentAnalysis != nil && currentAnalysis?.hasError != true
+            && (currentAnalysis?.beatInterval ?? 0) > 0
+        let beatIntervalA = currentAnalysis?.beatInterval ?? nextAnalysis.beatInterval
         let beatIntervalB = nextAnalysis.beatInterval
         let targetBeats = nextAnalysis.downbeatTimes
+
+        // Search range: ±2 beats for better downbeat candidates
+        let searchRange = beatIntervalB * 2.0
 
         var adjustedEntryPoint = entryPoint
         var info = ""
 
         // Phase 1: Align B to its own downbeat/measure grid
         if !targetBeats.isEmpty {
-            let nearest = targetBeats.min(by: { abs($0 - entryPoint) < abs($1 - entryPoint) }) ?? entryPoint
-            let rawAdj = nearest - entryPoint
-            let adj = max(-beatIntervalB, min(beatIntervalB, rawAdj))
-            adjustedEntryPoint = entryPoint + adj
-            info = "Downbeat real: \(adj >= 0 ? "+" : "")\(String(format: "%.3f", adj))s"
-        } else {
-            let measureB = beatIntervalB * 4
-            let timeIntoMeasure = entryPoint.truncatingRemainder(dividingBy: measureB)
-            var rawAdj: Double = 0
-            if timeIntoMeasure > measureB * 0.1 {
-                rawAdj = measureB - timeIntoMeasure
-            } else if timeIntoMeasure > 0.001 {
-                rawAdj = -timeIntoMeasure
+            // Find best downbeat within ±2 beats of the desired entry point
+            let candidates = targetBeats.filter { abs($0 - entryPoint) <= searchRange }
+            if let best = candidates.min(by: { abs($0 - entryPoint) < abs($1 - entryPoint) }) {
+                let adj = best - entryPoint
+                adjustedEntryPoint = best
+                info = "Downbeat real: \(adj >= 0 ? "+" : "")\(String(format: "%.3f", adj))s"
+            } else {
+                // All downbeats too far — snap to nearest measure grid
+                let measureB = beatIntervalB * 4
+                let gridSnap = snapToMeasureGrid(entryPoint, measureLength: measureB, beatInterval: beatIntervalB)
+                adjustedEntryPoint = entryPoint + gridSnap
+                info = "Grid snap: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
             }
-            let adj = max(-beatIntervalB, min(beatIntervalB, rawAdj))
-            adjustedEntryPoint = entryPoint + adj
-            info = "Estimacion 4-beats: \(adj >= 0 ? "+" : "")\(String(format: "%.3f", adj))s"
+        } else {
+            // No downbeat data — estimate measure grid
+            let measureB = beatIntervalB * 4
+            let gridSnap = snapToMeasureGrid(entryPoint, measureLength: measureB, beatInterval: beatIntervalB)
+            adjustedEntryPoint = entryPoint + gridSnap
+            info = "Estimacion 4-beats: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
         }
 
-        // Phase 2: Cross-phase alignment A↔B
-        if let playbackA = currentPlaybackTimeA, playbackA > 0 {
+        // Phase 2: Cross-phase alignment A↔B (DJ mode only — too aggressive for normal)
+        if mode == .dj, hasCurrentBeats, let playbackA = currentPlaybackTimeA, playbackA > 0 {
             let beatFractionA = playbackA.truncatingRemainder(dividingBy: beatIntervalA) / beatIntervalA
             let targetPhaseOffsetB = beatFractionA * beatIntervalB
             let currentPhaseB = adjustedEntryPoint.truncatingRemainder(dividingBy: beatIntervalB)
@@ -320,14 +369,61 @@ enum DJMixingService {
             if phaseError > beatIntervalB / 2 { phaseError -= beatIntervalB }
             if phaseError < -beatIntervalB / 2 { phaseError += beatIntervalB }
 
+            // Only correct if the phase error is significant (>10% of a beat)
             if abs(phaseError) > beatIntervalB * 0.10 {
-                let phaseAdj = max(-beatIntervalB, min(beatIntervalB, phaseError))
-                adjustedEntryPoint += phaseAdj
-                info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                // Search nearby downbeats for one that also satisfies phase alignment
+                if !targetBeats.isEmpty {
+                    // Try all downbeats within ±2 beats and pick the one with smallest phase error
+                    let candidates = targetBeats.filter {
+                        abs($0 - adjustedEntryPoint) <= searchRange && $0 >= 0
+                    }
+                    var bestCandidate = adjustedEntryPoint + max(-searchRange, min(searchRange, phaseError))
+                    var bestError = abs(phaseError)
+                    for candidate in candidates {
+                        let candPhase = candidate.truncatingRemainder(dividingBy: beatIntervalB)
+                        var candError = targetPhaseOffsetB - candPhase
+                        if candError > beatIntervalB / 2 { candError -= beatIntervalB }
+                        if candError < -beatIntervalB / 2 { candError += beatIntervalB }
+                        if abs(candError) < bestError {
+                            bestError = abs(candError)
+                            bestCandidate = candidate
+                        }
+                    }
+                    let phaseAdj = bestCandidate - adjustedEntryPoint
+                    adjustedEntryPoint = bestCandidate
+                    info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                } else {
+                    let phaseAdj = max(-searchRange, min(searchRange, phaseError))
+                    adjustedEntryPoint += phaseAdj
+                    info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                }
             }
         }
 
-        return BeatSyncResult(adjustedEntryPoint: adjustedEntryPoint, info: info, isSynced: true)
+        return BeatSyncResult(adjustedEntryPoint: max(0, adjustedEntryPoint), info: info, isSynced: true)
+    }
+
+    /// Snap a time position to the nearest measure boundary within ±1 beat.
+    private static func snapToMeasureGrid(_ time: Double, measureLength: Double, beatInterval: Double) -> Double {
+        guard measureLength > 0 else { return 0 }
+        let timeIntoMeasure = time.truncatingRemainder(dividingBy: measureLength)
+        // Close to start of measure — snap backward
+        if timeIntoMeasure < beatInterval * 0.5 && timeIntoMeasure > 0.001 {
+            return -timeIntoMeasure
+        }
+        // Close to end of measure — snap forward
+        let distToNext = measureLength - timeIntoMeasure
+        if distToNext < beatInterval * 0.5 {
+            return distToNext
+        }
+        // Not near a measure boundary — snap to nearest beat
+        let timeIntoBeat = timeIntoMeasure.truncatingRemainder(dividingBy: beatInterval)
+        if timeIntoBeat < beatInterval * 0.25 {
+            return -timeIntoBeat
+        } else if timeIntoBeat > beatInterval * 0.75 {
+            return beatInterval - timeIntoBeat
+        }
+        return 0
     }
 
     // MARK: - Fade Duration

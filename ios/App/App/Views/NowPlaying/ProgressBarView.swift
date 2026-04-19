@@ -79,9 +79,7 @@ struct ProgressBarView: View {
                 Spacer()
 
                 if state.isCrossfading {
-                    Text("AutoMix")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.cyan)
+                    WaveText("AutoMix", font: .caption2.weight(.bold), color: .cyan)
                         .transition(.opacity.combined(with: .scale))
                 }
 
@@ -143,5 +141,47 @@ struct ProgressBarView: View {
         let m = total / 60
         let s = total % 60
         return String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Wave Text Animation
+
+/// Displays text with a CSS-like wave animation where each character oscillates
+/// in opacity with a staggered delay, creating a loading/shimmer effect.
+/// Uses TimelineView for continuous per-frame updates.
+struct WaveText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let cycleDuration: Double
+
+    @State private var startDate: Date?
+
+    init(_ text: String, font: Font = .caption2.weight(.bold), color: Color = .cyan,
+         cycleDuration: Double = 1.4) {
+        self.text = text
+        self.font = font
+        self.color = color
+        self.cycleDuration = cycleDuration
+    }
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let elapsed = startDate.map { timeline.date.timeIntervalSince($0) } ?? 0
+            let phase = elapsed / cycleDuration
+
+            HStack(spacing: 0) {
+                ForEach(Array(text.enumerated()), id: \.offset) { index, char in
+                    let delay = Double(index) / Double(max(1, text.count))
+                    let wave = sin((phase - delay) * 2.0 * .pi)
+                    let opacity = 0.3 + 0.7 * ((wave + 1.0) / 2.0)
+
+                    Text(String(char))
+                        .font(font)
+                        .foregroundStyle(color.opacity(opacity))
+                }
+            }
+        }
+        .onAppear { startDate = .now }
     }
 }

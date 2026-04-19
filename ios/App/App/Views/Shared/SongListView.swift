@@ -138,18 +138,31 @@ private struct SongRowView: View {
     var showArtist: Bool = true
 
     @State private var isCached = false
+    private let nowPlaying = NowPlayingState.shared
 
     private var isLight: Bool { palette.isPrimaryLight }
     private var primaryText:   Color { isLight ? .black                  : .white }
     private var secondaryText: Color { isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60) }
     private var tertiaryText:  Color { isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.45) }
 
+    private var isCurrentSong: Bool { nowPlaying.isVisible && nowPlaying.songId == song.id }
+
     var body: some View {
         HStack(spacing: 14) {
-            Text("\(index)")
-                .font(.system(size: 15).monospacedDigit())
-                .foregroundStyle(tertiaryText)
-                .frame(width: 24, alignment: .trailing)
+            if isCurrentSong {
+                NowPlayingIndicator(
+                    isPlaying: nowPlaying.isPlaying,
+                    color: isLight ? Color.black : Color.white,
+                    barWidth: 2.5,
+                    height: 12
+                )
+                .frame(width: 24)
+            } else {
+                Text("\(index)")
+                    .font(.system(size: 15).monospacedDigit())
+                    .foregroundStyle(tertiaryText)
+                    .frame(width: 24, alignment: .trailing)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -177,7 +190,7 @@ private struct SongRowView: View {
             if isCached {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 11))
-                    .foregroundStyle(.green.opacity(0.7))
+                    .foregroundStyle(isLight ? Color.black.opacity(0.3) : Color.white.opacity(0.3))
             }
 
             if let dur = song.duration, dur > 0 {

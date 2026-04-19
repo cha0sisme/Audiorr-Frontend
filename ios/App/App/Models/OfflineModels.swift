@@ -124,6 +124,25 @@ final class CachedPlaylistMeta {
     }
 }
 
+// MARK: - CachedSong → NavidromeSong conversion
+
+extension CachedSong {
+    /// Convert to NavidromeSong for playback via PlayerService / QueueManager.
+    func toNavidromeSong() -> NavidromeSong {
+        NavidromeSong(
+            id: songId, title: title, artist: artist,
+            artistId: artistId.isEmpty ? nil : artistId,
+            album: album,
+            albumId: albumId.isEmpty ? nil : albumId,
+            coverArt: coverArt.isEmpty ? nil : coverArt,
+            duration: duration, track: nil, year: nil, genre: nil,
+            explicitStatus: nil,
+            replayGainTrackGain: nil, replayGainTrackPeak: nil,
+            replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+        )
+    }
+}
+
 // MARK: - Download Group (batch download tracking for albums/playlists)
 
 @Model

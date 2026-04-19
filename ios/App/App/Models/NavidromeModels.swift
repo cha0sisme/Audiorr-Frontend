@@ -37,6 +37,47 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
         let peak = replayGainTrackPeak ?? replayGainAlbumPeak ?? 0.0
         return AudioEngineManager.computeReplayGainMultiplier(gainDb: db, trackPeak: peak)
     }
+
+}
+
+extension NavidromeSong {
+    /// Serialize to dictionary for Socket.IO remote commands.
+    func toDictionary() -> [String: Any] {
+        var d: [String: Any] = [
+            "id": id, "title": title, "artist": artist, "album": album,
+        ]
+        if let v = artistId   { d["artistId"] = v }
+        if let v = albumId    { d["albumId"] = v }
+        if let v = coverArt   { d["coverArt"] = v }
+        if let v = duration   { d["duration"] = v }
+        if let v = track      { d["track"] = v }
+        if let v = year       { d["year"] = v }
+        if let v = genre      { d["genre"] = v }
+        return d
+    }
+
+    /// Deserialize from a Socket.IO dictionary.
+    init?(fromDictionary d: [String: Any]) {
+        guard let id = d["id"] as? String, !id.isEmpty else { return nil }
+        self.init(
+            id: id,
+            title: d["title"] as? String ?? "",
+            artist: d["artist"] as? String ?? "",
+            artistId: d["artistId"] as? String,
+            album: d["album"] as? String ?? "",
+            albumId: d["albumId"] as? String,
+            coverArt: d["coverArt"] as? String,
+            duration: d["duration"] as? Double,
+            track: d["track"] as? Int,
+            year: d["year"] as? Int,
+            genre: d["genre"] as? String,
+            explicitStatus: d["explicitStatus"] as? String,
+            replayGainTrackGain: d["replayGainTrackGain"] as? Double,
+            replayGainTrackPeak: d["replayGainTrackPeak"] as? Double,
+            replayGainAlbumGain: d["replayGainAlbumGain"] as? Double,
+            replayGainAlbumPeak: d["replayGainAlbumPeak"] as? Double
+        )
+    }
 }
 
 struct NavidromeAlbum: Identifiable, Decodable, Hashable {

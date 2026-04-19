@@ -158,6 +158,15 @@ final class ConnectService {
         sendEvent("remote_command", data: payload)
     }
 
+    /// Send a full playlist to the remote device to replace its queue and start playing.
+    func sendRemotePlaylist(_ songs: [NavidromeSong], startIndex: Int) {
+        let queue = songs.map { $0.toDictionary() }
+        sendRemoteCommand(action: "playPlaylist", value: [
+            "queue": queue,
+            "startIndex": startIndex,
+        ] as [String: Any])
+    }
+
     /// Send local playback state to other devices.
     /// Called automatically by QueueManager on song change, play/pause, and throttled progress.
     func broadcastPlaybackState(includeQueue: Bool = true) {
@@ -210,6 +219,7 @@ final class ConnectService {
             "volume": 1.0,
             "queue": queueData,
             "deviceId": deviceId,
+            "contextUri": state.contextUri,
         ]
 
         sendEvent("playback_state_update", data: payload)
@@ -480,6 +490,7 @@ final class ConnectService {
         state.duration = duration
         state.progress = position
         state.isPlaying = playing
+        state.contextUri = dict["contextUri"] as? String ?? ""
         state.isRemote = true
         remoteSourceDeviceId = remoteDeviceId
         let deviceName = knownDevices[remoteDeviceId] ?? remoteDeviceId
@@ -492,9 +503,9 @@ final class ConnectService {
             state.artworkUrl = NavidromeService.shared.coverURL(id: coverArt, size: 300)?.absoluteString
         }
 
-        // Parse remote queue
+        // Parse remote queue and sync to QueueManager (not just UI display)
         if let queueArr = dict["queue"] as? [[String: Any]], !queueArr.isEmpty {
-            state.queue = queueArr.compactMap { item -> QueueSong? in
+            let parsedQueue: [QueueSong] = queueArr.compactMap { item -> QueueSong? in
                 let meta = item["metadata"] as? [String: Any]
                 let songId: String = (item["id"] as? String) ?? (item["trackId"] as? String) ?? ""
                 guard !songId.isEmpty else { return nil }
@@ -515,6 +526,16 @@ final class ConnectService {
                 d["coverArt"] = songCoverArt
                 d["duration"] = songDuration
                 return QueueSong(from: d)
+            }
+            state.queue = parsedQueue
+
+            // Load queue into QueueManager so it persists locally and is ready to play.
+            // Only do this when local player is idle (no active playback).
+            let qm = QueueManager.shared
+            if !qm.isPlaying {
+                let songs = parsedQueue.map { PersistableSong(from: $0) }
+                let targetIndex = songs.firstIndex(where: { $0.id == (trackId ?? "") }) ?? 0
+                qm.loadRemoteQueue(songs: songs, currentIndex: targetIndex, position: position)
             }
         }
     }
@@ -553,6 +574,24 @@ final class ConnectService {
             if let songId = dict["value"] as? String,
                let idx = QueueManager.shared.queue.firstIndex(where: { $0.id == songId }) {
                 QueueManager.shared.play(queue: QueueManager.shared.queue, startIndex: idx)
+            }
+        case "playPlaylist":
+            if let value = dict["value"] as? [String: Any],
+               let queueArr = value["queue"] as? [[String: Any]],
+               let startIndex = value["startIndex"] as? Int {
+                let songs = queueArr.compactMap { NavidromeSong(fromDictionary: $0) }
+                guard !songs.isEmpty else { break }
+                QueueManager.shared.play(songs: songs, startIndex: min(startIndex, songs.count - 1))
+            }
+        case "insertNext":
+            if let songDict = dict["value"] as? [String: Any],
+               let song = NavidromeSong(fromDictionary: songDict) {
+                QueueManager.shared.insertNext(song)
+            }
+        case "addToQueue":
+            if let songDict = dict["value"] as? [String: Any],
+               let song = NavidromeSong(fromDictionary: songDict) {
+                QueueManager.shared.addToQueue(song)
             }
         default:
             print("[Connect] Unknown remote command: \(action)")

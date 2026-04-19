@@ -226,12 +226,21 @@ struct ArtistsView: View {
         } else if !vm.isConfigured {
             notConfiguredView
         } else if vm.allArtists.isEmpty {
-            ContentUnavailableView(
-                "Sin artistas",
-                systemImage: "person.2",
-                description: Text("No se encontraron artistas en tu servidor.")
-            )
-            .padding(.top, 40)
+            if !NetworkMonitor.shared.isConnected {
+                ContentUnavailableView(
+                    "Sin conexión",
+                    systemImage: "wifi.slash",
+                    description: Text("Conecta a internet para ver tus artistas. Las canciones descargadas siguen disponibles.")
+                )
+                .padding(.top, 40)
+            } else {
+                ContentUnavailableView(
+                    "Sin artistas",
+                    systemImage: "person.2",
+                    description: Text("No se encontraron artistas en tu servidor.")
+                )
+                .padding(.top, 40)
+            }
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 featuredSection

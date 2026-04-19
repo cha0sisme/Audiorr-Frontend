@@ -55,6 +55,9 @@ final class NowPlayingState {
     var albumId = ""
     var artistId = ""
     var coverArt = ""
+
+    // -- Playback context (e.g. "playlist:abc", "album:xyz", "top-weekly") --
+    var contextUri = ""
     var queue: [QueueSong] = []
     var shuffleMode = false
     var repeatMode = "off"     // "off", "all", "one"

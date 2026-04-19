@@ -25,6 +25,8 @@ struct AlbumCardView: View {
     @State private var coverImage: UIImage?
     @State private var retryCount = 0
 
+    private let nowPlaying = NowPlayingState.shared
+
     private var isGrid: Bool { axis == .grid }
     private var titleColor: Color {
         guard let isLight else { return .primary }
@@ -35,22 +37,39 @@ struct AlbumCardView: View {
         return isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55)
     }
 
+    private var isCurrentContext: Bool {
+        nowPlaying.isVisible && nowPlaying.contextUri == "album:\(album.id)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                if let img = coverImage {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    coverPlaceholder
+            ZStack(alignment: .bottomLeading) {
+                ZStack {
+                    if let img = coverImage {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        coverPlaceholder
+                    }
+                }
+                .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
+                .if(!isGrid) { $0.frame(width: size, height: size) }
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(album.id)", in: heroNamespace!) }
+
+                if isCurrentContext {
+                    NowPlayingIndicator(
+                        isPlaying: nowPlaying.isPlaying,
+                        color: Color.white,
+                        barWidth: 3, height: 14
+                    )
+                    .padding(8)
+                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .padding(6)
                 }
             }
-            .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
-            .if(!isGrid) { $0.frame(width: size, height: size) }
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
-            .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(album.id)", in: heroNamespace!) }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
@@ -165,5 +184,45 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+// MARK: - Animated equalizer bars (now-playing indicator)
+
+/// Shows 3 bars that animate when `isPlaying` is true, freezes when paused.
+struct NowPlayingIndicator: View {
+    var isPlaying: Bool
+    var color: Color = .accentColor
+    var barWidth: CGFloat = 3
+    var height: CGFloat = 14
+    var spacing: CGFloat = 1.5
+
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: spacing) {
+            bar(delay: 0.0, minScale: 0.3, maxScale: 1.0)
+            bar(delay: 0.15, minScale: 0.2, maxScale: 0.85)
+            bar(delay: 0.3, minScale: 0.35, maxScale: 0.95)
+        }
+        .frame(height: height)
+        .onChange(of: isPlaying, initial: true) { _, playing in
+            animating = playing
+        }
+    }
+
+    private func bar(delay: Double, minScale: CGFloat, maxScale: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: barWidth / 2)
+            .fill(color)
+            .frame(width: barWidth, height: height)
+            .scaleEffect(y: animating ? maxScale : minScale, anchor: .bottom)
+            .animation(
+                animating
+                    ? .easeInOut(duration: 0.45)
+                        .repeatForever(autoreverses: true)
+                        .delay(delay)
+                    : .easeOut(duration: 0.2),
+                value: animating
+            )
     }
 }

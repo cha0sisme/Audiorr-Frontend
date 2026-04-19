@@ -17,6 +17,8 @@ struct PlaylistCardView: View {
     var size: CGFloat = 150
     var heroNamespace: Namespace.ID?
 
+    private let nowPlaying = NowPlayingState.shared
+
     private var isGrid: Bool { axis == .grid }
     private var titleColor: Color {
         guard let isLight else { return .primary }
@@ -27,12 +29,29 @@ struct PlaylistCardView: View {
         return isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.55)
     }
 
+    private var isCurrentContext: Bool {
+        nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(playlist.id)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            PlaylistCoverView(playlist: playlist, size: isGrid ? .infinity : size)
-                .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(playlist.id)", in: heroNamespace!) }
+            ZStack(alignment: .bottomLeading) {
+                PlaylistCoverView(playlist: playlist, size: isGrid ? .infinity : size)
+                    .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                    .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(playlist.id)", in: heroNamespace!) }
+
+                if isCurrentContext {
+                    NowPlayingIndicator(
+                        isPlaying: nowPlaying.isPlaying,
+                        color: Color.white,
+                        barWidth: 3, height: 14
+                    )
+                    .padding(8)
+                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .padding(6)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(playlist.name)
