@@ -34,6 +34,13 @@ final class NavidromeService: ObservableObject {
         cache[key] = (value, Date().addingTimeInterval(ttl ?? cacheTTL))
     }
 
+    /// Invalidate the cached backend availability so the next check hits the network.
+    func invalidateBackendAvailableCache() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cache.removeValue(forKey: "backendAvailable")
+    }
+
     private init() {
         reloadCredentials()
     }
@@ -49,12 +56,15 @@ final class NavidromeService: ObservableObject {
     func saveCredentials(_ creds: NavidromeCredentials) {
         credentials = creds
         CredentialsStore.shared.save(creds)
+        invalidateBackendAvailableCache()
+        Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
         NotificationCenter.default.post(name: .audiorrDidLogin, object: nil)
     }
 
     func clearCredentials() {
         credentials = nil
         CredentialsStore.shared.delete()
+        Task { @MainActor in BackendState.shared.reset() }
     }
 
     var isConfigured: Bool { credentials != nil }
@@ -82,15 +92,9 @@ final class NavidromeService: ObservableObject {
 
 
 
-    /// URL base del backend de Audiorr (puerto 2999 por defecto).
-    /// Prioridad: 1) UserDefaults (bridgeado desde React)
-    ///            2) Derivado del serverUrl de Navidrome (mismo host, puerto 2999)
+    /// URL base del backend de Audiorr (puerto 2999).
+    /// Siempre derivado del serverUrl de Navidrome (mismo host, puerto 2999).
     func backendURL() -> String? {
-        if let stored = UserDefaults.standard.string(forKey: "audiorr_backend_url"),
-           !stored.isEmpty, !stored.contains("capacitor:") {
-            return stored
-        }
-        // Derivar del servidor Navidrome: mismo host, puerto 2999
         guard let serverUrl = credentials?.serverUrl,
               let components = URLComponents(string: serverUrl),
               let host = components.host else { return nil }
@@ -117,17 +121,18 @@ final class NavidromeService: ObservableObject {
         else { return false }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 5
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
 
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200..<400).contains(http.statusCode)
-        else {
-            cacheSet(cacheKey, value: false, ttl: 30)
-            return false
+        // Any HTTP response means the server is running.
+        // Only network errors (timeout, unreachable) count as unavailable.
+        let available: Bool
+        if let (_, response) = try? await URLSession.shared.data(for: request),
+           response is HTTPURLResponse {
+            available = true
+        } else {
+            available = false
         }
-        let available = true
         cacheSet(cacheKey, value: available, ttl: 30)
         return available
     }
@@ -641,7 +646,7 @@ final class NavidromeService: ObservableObject {
             .compactMap { URL(string: $0) }
             .first
 
-        cacheSet(cacheKey, value: imageUrl ?? NSNull())
+        cacheSet(cacheKey, value: imageUrl ?? NSNull(), ttl: 3600) // 1 hour — URLs rarely change
         return imageUrl
     }
 }

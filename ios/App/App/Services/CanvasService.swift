@@ -90,8 +90,7 @@ final class CanvasService {
     }
 
     private func backendBaseURL() -> URL? {
-        guard let urlStr = UserDefaults.standard.string(forKey: "audiorr_backend_url"),
-              !urlStr.isEmpty,
+        guard let urlStr = NavidromeService.shared.backendURL(),
               let url = URL(string: urlStr) else { return nil }
         return url
     }

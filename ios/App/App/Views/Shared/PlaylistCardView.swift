@@ -39,7 +39,7 @@ struct PlaylistCardView: View {
                 PlaylistCoverView(playlist: playlist, size: isGrid ? .infinity : size)
                     .if(isGrid) { $0.aspectRatio(1, contentMode: .fit) }
                     .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                    .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(playlist.id)", in: heroNamespace!) }
+                    .if(heroNamespace != nil) { $0.matchedTransitionSource(id: playlist.id, in: heroNamespace!) }
 
                 if isCurrentContext {
                     NowPlayingIndicator(

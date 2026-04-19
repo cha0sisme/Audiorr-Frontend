@@ -10,7 +10,6 @@ final class PlaylistDetailViewModel: ObservableObject {
     @Published var isLoading = true
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
-    @Published var isBackendAvailable = false
     @Published var smartMixStatus: SmartMixStatus = .idle
     @Published var isPinned = false
     @Published var isDeleting = false
@@ -22,6 +21,11 @@ final class PlaylistDetailViewModel: ObservableObject {
     init(playlist: NavidromePlaylist) {
         self.initialPlaylist = playlist
         self.playlist = playlist
+
+        // Pre-load cached cover so hero transition doesn't flash placeholder
+        if let cached = AlbumCoverCache.shared.image(for: playlist.coverArt) {
+            self.coverImage = cached
+        }
 
         // Observe SmartMix status from PlayerService
         PlayerService.shared.$smartMixStatus
@@ -50,29 +54,34 @@ final class PlaylistDetailViewModel: ObservableObject {
     func load() async {
         guard songs.isEmpty else { return }
         isLoading = true
-        defer { isLoading = false }
 
-        async let songsTask = api.getPlaylistSongs(playlistId: initialPlaylist.id)
-        async let imageTask = fetchCover()
-        async let pinnedTask: Void = loadPinnedStatus()
-        let backendAvailable = await api.checkBackendAvailable()
-        self.isBackendAvailable = backendAvailable
-
-        let (songsResult, image) = await (try? songsTask, imageTask)
-        _ = await pinnedTask
-
-        if let (pl, songs) = songsResult {
+        // Songs first — don't let cover fetch block the list
+        if let (pl, songs) = try? await api.getPlaylistSongs(playlistId: initialPlaylist.id) {
             self.songs = songs
             if let pl { self.playlist = pl }
         }
 
-        if let image {
+        // Songs ready — show them immediately
+        isLoading = false
+
+        // Cover + backend features load in background without blocking UI
+        async let coverTask: Void = loadCover()
+        async let pinnedTask: Void = loadPinnedIfAvailable()
+        _ = await (coverTask, pinnedTask)
+    }
+
+    private func loadCover() async {
+        if let image = await fetchCover() {
             self.coverImage = image
             let extracted = await Task.detached(priority: .userInitiated) {
                 ColorExtractor.extract(from: image)
             }.value
             self.palette = extracted
         }
+    }
+
+    private func loadPinnedIfAvailable() async {
+        if BackendState.shared.isAvailable { await loadPinnedStatus() }
     }
 
     // MARK: - Pinned Playlists (backend-synced)
@@ -127,9 +136,11 @@ final class PlaylistDetailViewModel: ObservableObject {
     }
 
     /// Backend cover first, Navidrome as fallback — mirrors PlaylistCoverView logic.
+    /// Skips backend when unavailable to avoid long timeouts blocking the UI.
     private func fetchCover() async -> UIImage? {
-        // 1. Try backend generated cover
-        if let backendURL = api.playlistBackendCoverURL(playlistId: initialPlaylist.id),
+        // 1. Try backend generated cover (only if backend is reachable)
+        if BackendState.shared.isAvailable,
+           let backendURL = api.playlistBackendCoverURL(playlistId: initialPlaylist.id),
            let (data, _) = try? await URLSession.shared.data(from: backendURL),
            let img = UIImage(data: data) {
             return img
@@ -149,17 +160,14 @@ final class PlaylistDetailViewModel: ObservableObject {
 struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
-    @State private var suppressHero = false
     @State private var showDeleteConfirm = false
-    var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
     var onDeleted: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
 
-    init(playlist: NavidromePlaylist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
+    init(playlist: NavidromePlaylist, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
-        self.heroNamespace = heroNamespace
         self.onDismiss = onDismiss
         self.onDeleted = onDeleted
     }
@@ -198,9 +206,7 @@ struct PlaylistDetailView: View {
         .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
         .task {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = .dark
-            }
+            AppTheme.shared.overlayColorScheme = .dark
             await vm.load()
             AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
         }
@@ -208,20 +214,12 @@ struct PlaylistDetailView: View {
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
         .onDisappear {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = nil
-            }
-        }
-        .task(id: "hero-settle") {
-            if heroNamespace != nil {
-                try? await Task.sleep(for: .milliseconds(600))
-                suppressHero = true
-            }
+            AppTheme.shared.overlayColorScheme = nil
         }
         .toolbar {
-            if let onDismiss {
+            if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onDismiss) {
+                    Button { onDismiss?() } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(isLight ? Color.accentColor : .white)
@@ -289,17 +287,6 @@ struct PlaylistDetailView: View {
             Color(vm.palette.primary).ignoresSafeArea(edges: .top)
         } else {
             ZStack {
-                if let img = vm.coverImage {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 55)
-                        .scaleEffect(1.25)
-                        .clipped()
-                } else {
-                    Color(vm.palette.primary)
-                }
-
                 LinearGradient(
                     colors: [
                         Color(vm.palette.primary).opacity(0.82),
@@ -319,6 +306,18 @@ struct PlaylistDetailView: View {
                     endPoint: .bottom
                 )
             }
+            .background {
+                if let img = vm.coverImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: 55)
+                        .scaleEffect(1.25)
+                } else {
+                    Color(vm.palette.primary)
+                }
+            }
+            .clipped()
             .ignoresSafeArea(edges: .top)
         }
     }
@@ -331,7 +330,6 @@ struct PlaylistDetailView: View {
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "cover_\(vm.initialPlaylist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
 
             Spacer(minLength: 20)
@@ -382,7 +380,7 @@ struct PlaylistDetailView: View {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
-                if vm.isBackendAvailable {
+                if BackendState.shared.isAvailable {
                     Image(systemName: "play.fill")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(labelColor)
@@ -407,7 +405,7 @@ struct PlaylistDetailView: View {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
-                if vm.isBackendAvailable {
+                if BackendState.shared.isAvailable {
                     Image(systemName: "shuffle")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(labelColor)
@@ -440,7 +438,7 @@ struct PlaylistDetailView: View {
             }
 
             // SmartMix + Star + More (only when backend is available)
-            if vm.isBackendAvailable {
+            if BackendState.shared.isAvailable {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
 
                 Button {
@@ -664,22 +662,49 @@ struct PlaylistCoverView: View {
     private func loadCover() async {
         guard coverImage == nil else { return }
 
-        // Try backend URL first, then Navidrome
-        let urls: [URL] = [
-            NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
-            NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize),
-        ].compactMap { $0 }
+        let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id)
+        let navidromeURL = NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize)
 
-        for url in urls {
-            for attempt in 0..<2 {
-                if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
-                guard let (data, resp) = try? await URLSession.shared.data(from: url),
-                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                      let img = UIImage(data: data) else { continue }
+        // Try backend and Navidrome in parallel — use whichever responds first successfully
+        if let backendURL, let navidromeURL {
+            // Race both: backend cover (richer) vs Navidrome cover (faster fallback)
+            let img = await withTaskGroup(of: UIImage?.self, returning: UIImage?.self) { group in
+                group.addTask {
+                    guard let (data, resp) = try? await URLSession.shared.data(from: backendURL),
+                          let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                          let img = UIImage(data: data) else { return nil }
+                    return img
+                }
+                group.addTask {
+                    // Small delay to prefer backend cover if it's fast
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard let (data, resp) = try? await URLSession.shared.data(from: navidromeURL),
+                          let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                          let img = UIImage(data: data) else { return nil }
+                    return img
+                }
+                // Return the first successful result
+                for await result in group {
+                    if let result {
+                        group.cancelAll()
+                        return result
+                    }
+                }
+                return nil
+            }
+            if let img { coverImage = img; return }
+        } else {
+            // Only one URL available — try it directly
+            let url = backendURL ?? navidromeURL
+            if let url,
+               let (data, resp) = try? await URLSession.shared.data(from: url),
+               let http = resp as? HTTPURLResponse, http.statusCode == 200,
+               let img = UIImage(data: data) {
                 coverImage = img
                 return
             }
         }
+
         didFail = true
     }
 
@@ -719,37 +744,3 @@ struct SkeletonView: View {
 
 // MARK: - Playlist hero overlay modifier
 
-struct PlaylistHeroOverlay: ViewModifier {
-    @Binding var selectedPlaylist: NavidromePlaylist?
-    var namespace: Namespace.ID
-    var onDeleted: (() -> Void)?
-
-    func body(content: Content) -> some View {
-        ZStack {
-            content
-
-            if let playlist = selectedPlaylist {
-                PlaylistDetailView(
-                    playlist: playlist,
-                    heroNamespace: namespace,
-                    onDismiss: {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
-                            selectedPlaylist = nil
-                        }
-                    },
-                    onDeleted: {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
-                            selectedPlaylist = nil
-                        }
-                        onDeleted?()
-                    }
-                )
-                .transition(.opacity)
-                .zIndex(1)
-            }
-        }
-        .onChange(of: selectedPlaylist) { _, playlist in
-            AppTheme.shared.overlayColorScheme = playlist != nil ? .dark : nil
-        }
-    }
-}

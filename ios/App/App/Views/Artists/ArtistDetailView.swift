@@ -64,15 +64,18 @@ final class ArtistDetailViewModel: ObservableObject {
         infoIsLoading = true
         playlistsAreLoading = true
 
-        async let infoTask     = api.getArtistInfo(artistId: artist.id)
-        async let collabsTask  = api.getArtistCollaborations(artistName: artist.name)
-        async let playlistTask = api.getPlaylistsByArtist(artistName: artist.name)
+        // Info + collaborations are Navidrome-only — safe to run always
+        async let infoTask    = api.getArtistInfo(artistId: artist.id)
+        async let collabsTask = api.getArtistCollaborations(artistName: artist.name)
 
         self.info = await infoTask
         self.collaborations = await collabsTask
-        self.playlists = await playlistTask
-
         self.infoIsLoading = false
+
+        // Playlist matching fetches every playlist's songs — expensive and
+        // requires Navidrome to be responsive. Run separately so it never
+        // blocks the sections above.
+        self.playlists = await api.getPlaylistsByArtist(artistName: artist.name)
         self.playlistsAreLoading = false
     }
 
@@ -90,10 +93,7 @@ final class ArtistDetailViewModel: ObservableObject {
             return cached
         }
         guard let avatarURL = await api.artistAvatarURL(artistId: artist.id) else { return nil }
-        guard let (data, _) = try? await URLSession.shared.data(from: avatarURL) else { return nil }
-        guard let img = UIImage(data: data) else { return nil }
-        ArtistImageCache.shared.setImage(img, for: artist.id)
-        return img
+        return await ArtistImageCache.shared.loadImage(artistId: artist.id, url: avatarURL)
     }
 }
 
@@ -102,20 +102,14 @@ final class ArtistDetailViewModel: ObservableObject {
 struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
-    @State private var suppressHero = false
-    @State private var selectedAlbum: NavidromeAlbum?
-    @State private var selectedPlaylist: NavidromePlaylist?
-    @State private var selectedSimilarArtist: NavidromeArtist?
-    @Namespace private var subHeroNS
-    var heroNamespace: Namespace.ID?
+    @Namespace private var heroNS
     var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 400
     private let avatarSize: CGFloat = 160
 
-    init(artist: NavidromeArtist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
+    init(artist: NavidromeArtist, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
-        self.heroNamespace = heroNamespace
         self.onDismiss = onDismiss
     }
 
@@ -126,7 +120,6 @@ struct ArtistDetailView: View {
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
-    private var subHeroActive: Bool { selectedAlbum != nil || selectedPlaylist != nil || selectedSimilarArtist != nil }
 
     // Deterministic color from artist name (fallback when no avatar)
     private var nameColor: Color {
@@ -153,55 +146,51 @@ struct ArtistDetailView: View {
                 scrollY = y
             }
         }
-        .modifier(AlbumHeroOverlay(selectedAlbum: $selectedAlbum, namespace: subHeroNS))
-        .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: subHeroNS))
-        .modifier(ArtistHeroOverlay(selectedArtist: $selectedSimilarArtist, namespace: subHeroNS))
+        .navigationDestination(for: NavidromeAlbum.self) {
+            AlbumDetailView(album: $0)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
+        .navigationDestination(for: NavidromePlaylist.self) {
+            PlaylistDetailView(playlist: $0)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
+        .navigationDestination(for: NavidromeArtist.self) {
+            ArtistDetailView(artist: $0)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
         .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
         .task {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = .dark
-            }
-            await vm.load()
+            AppTheme.shared.overlayColorScheme = .dark
+            async let primary: Void = vm.load()
+            async let secondary: Void = vm.loadSecondary()
+            _ = await (primary, secondary)
             AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
-            await vm.loadSecondary()
         }
         .onChange(of: isLight) { _, light in
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
         .onDisappear {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = nil
-            }
-        }
-        .task(id: "hero-settle") {
-            // Disable matchedGeometryEffect once the hero transition completes
-            // to prevent avatar displacement when navigating to sub-pages.
-            if heroNamespace != nil {
-                try? await Task.sleep(for: .milliseconds(600))
-                suppressHero = true
-            }
+            AppTheme.shared.overlayColorScheme = nil
         }
         .toolbar {
-            if !subHeroActive {
-                if let onDismiss {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button(action: onDismiss) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(isLight ? Color.accentColor : .white)
-                        }
+            if onDismiss != nil {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { onDismiss?() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(isLight ? Color.accentColor : .white)
                     }
                 }
-                ToolbarItem(placement: .principal) {
-                    Text(vm.artist.name)
-                        .font(.headline)
-                        .foregroundStyle(isLight ? Color.black : .white)
-                        .lineLimit(1)
-                        .opacity(stickyOpacity)
-                }
+            }
+            ToolbarItem(placement: .principal) {
+                Text(vm.artist.name)
+                    .font(.headline)
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .lineLimit(1)
+                    .opacity(stickyOpacity)
             }
         }
     }
@@ -238,13 +227,6 @@ struct ArtistDetailView: View {
                 .ignoresSafeArea(edges: .top)
         } else if let img = vm.avatarImage {
             ZStack {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 55)
-                    .scaleEffect(1.25)
-                    .clipped()
-
                 // Gradient overlay at 140° (top-trailing → bottom-leading)
                 LinearGradient(
                     colors: [
@@ -264,6 +246,14 @@ struct ArtistDetailView: View {
                     startPoint: .top, endPoint: .bottom
                 )
             }
+            .background {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 55)
+                    .scaleEffect(1.25)
+            }
+            .clipped()
             .ignoresSafeArea(edges: .top)
         } else {
             ZStack {
@@ -282,7 +272,6 @@ struct ArtistDetailView: View {
             Spacer(minLength: 90)
 
             avatarView
-                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "artist_\(vm.artist.id)", in: heroNamespace!) }
                 .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
 
             Spacer(minLength: 16)
@@ -414,15 +403,10 @@ struct ArtistDetailView: View {
         if !vm.albums.isEmpty {
             HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
                 ForEach(vm.albums) { album in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedAlbum = album
-                        }
-                    } label: {
-                        AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: subHeroNS)
+                    NavigationLink(value: album) {
+                        AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
             }
         }
@@ -435,15 +419,10 @@ struct ArtistDetailView: View {
         if !vm.collaborations.isEmpty {
             HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
                 ForEach(vm.collaborations) { album in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedAlbum = album
-                        }
-                    } label: {
-                        AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: subHeroNS)
+                    NavigationLink(value: album) {
+                        AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
             }
         }
@@ -459,15 +438,10 @@ struct ArtistDetailView: View {
                 isLight: isLight
             ) {
                 ForEach(vm.playlists) { playlist in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedPlaylist = playlist
-                        }
-                    } label: {
-                        PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: subHeroNS)
+                    NavigationLink(value: playlist) {
+                        PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
                 }
             }
         }
@@ -490,15 +464,10 @@ struct ArtistDetailView: View {
 
             HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
                 ForEach(artists) { artist in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedSimilarArtist = artist
-                        }
-                    } label: {
-                        ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: subHeroNS)
+                    NavigationLink(value: artist) {
+                        ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedSimilarArtist?.id == artist.id ? 0 : 1)
                 }
             }
         }
@@ -595,32 +564,3 @@ private struct SimilarArtistPlaceholder: View {
     }
 }
 
-// MARK: - Artist hero overlay modifier
-
-struct ArtistHeroOverlay: ViewModifier {
-    @Binding var selectedArtist: NavidromeArtist?
-    var namespace: Namespace.ID
-
-    func body(content: Content) -> some View {
-        ZStack {
-            content
-
-            if let artist = selectedArtist {
-                ArtistDetailView(
-                    artist: artist,
-                    heroNamespace: namespace,
-                    onDismiss: {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
-                            selectedArtist = nil
-                        }
-                    }
-                )
-                .transition(.opacity)
-                .zIndex(1)
-            }
-        }
-        .onChange(of: selectedArtist) { _, artist in
-            AppTheme.shared.overlayColorScheme = artist != nil ? .dark : nil
-        }
-    }
-}

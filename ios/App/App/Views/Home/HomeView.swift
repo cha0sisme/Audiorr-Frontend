@@ -15,8 +15,6 @@ final class HomeViewModel: ObservableObject {
 
     @Published var isLoading = true
     @Published var isGeneratingMixes = false
-    @Published var isBackendAvailable = false
-
     private let api = NavidromeService.shared
     private var lastLoadedAt: Date?
     /// Cache TTL — skip network if loaded less than 2 minutes ago.
@@ -32,36 +30,41 @@ final class HomeViewModel: ObservableObject {
 
     func load() async {
         isLoading = true
-        defer {
-            isLoading = false
-            lastLoadedAt = Date()
-        }
 
         api.reloadCredentials()
-        guard api.isConfigured else { return }
+        guard api.isConfigured else {
+            isLoading = false
+            lastLoadedAt = Date()
+            return
+        }
 
-        // Check backend availability via shared service
-        isBackendAvailable = await api.checkBackendAvailable()
-
-        // Load all sections in parallel
-        async let topTask: Void = loadTopWeekly()
-        async let recentCtxTask: Void = loadRecentContexts()
+        // Load Navidrome-only sections
         async let releasesTask: Void = loadRecentReleases()
-        async let mixesTask: Void = loadDailyMixes()
         async let latestTask: Void = loadLatestAlbums()
+        _ = await (releasesTask, latestTask)
 
-        _ = await (topTask, recentCtxTask, releasesTask, mixesTask, latestTask)
+        // Navidrome content is ready — show it immediately
+        isLoading = false
+        lastLoadedAt = Date()
+
+        // Load backend-dependent sections (BackendState already checked centrally)
+        if BackendState.shared.isAvailable {
+            async let topTask: Void = loadTopWeekly()
+            async let recentCtxTask: Void = loadRecentContexts()
+            async let mixesTask: Void = loadDailyMixes()
+            _ = await (topTask, recentCtxTask, mixesTask)
+        }
     }
 
     // MARK: - Section loaders
 
     private func loadTopWeekly() async {
-        guard isBackendAvailable else { return }
+        guard BackendState.shared.isAvailable else { return }
         topWeekly = await api.getTopWeekly()
     }
 
     private func loadRecentContexts() async {
-        guard isBackendAvailable else { return }
+        guard BackendState.shared.isAvailable else { return }
         var contexts = Array(await api.getRecentContexts().prefix(6))
 
         // Enrich playlist/smartmix contexts with real name + song count from Navidrome
@@ -89,7 +92,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     private func loadDailyMixes() async {
-        guard isBackendAvailable else { return }
+        guard BackendState.shared.isAvailable else { return }
         let mixes = await api.getDailyMixes()
         dailyMixes = mixes
 
@@ -140,8 +143,6 @@ struct HomeView: View {
     @State private var scrollY: CGFloat = 0
     @State private var offlineAlbums: [(albumId: String, name: String, artist: String, coverArt: String, songCount: Int, year: Int?)] = []
     @Namespace private var heroNS
-    @State private var selectedAlbum: NavidromeAlbum?
-    @State private var selectedPlaylist: NavidromePlaylist?
     @State private var navigationPath = NavigationPath()
 
     private let collapseThreshold: CGFloat = 44
@@ -180,23 +181,25 @@ struct HomeView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-            .modifier(AlbumHeroOverlay(selectedAlbum: $selectedAlbum, namespace: heroNS))
-            .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: heroNS))
             .background(Color(.systemBackground))
-            .toolbarBackground((selectedAlbum != nil || selectedPlaylist != nil) ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
+            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
             .toolbar {
-                if selectedAlbum == nil && selectedPlaylist == nil {
-                    ToolbarItem(placement: .principal) {
-                        Text("Inicio")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .opacity(stickyOpacity)
-                    }
+                ToolbarItem(placement: .principal) {
+                    Text("Inicio")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .opacity(stickyOpacity)
                 }
             }
-            .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
+            .navigationDestination(for: NavidromeAlbum.self) {
+                AlbumDetailView(album: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
             .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
-            .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
+            .navigationDestination(for: NavidromePlaylist.self) {
+                PlaylistDetailView(playlist: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
@@ -235,7 +238,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var topWeeklySection: some View {
-        if vm.isBackendAvailable && network.isConnected && !vm.topWeekly.isEmpty {
+        if BackendState.shared.isAvailable && network.isConnected && !vm.topWeekly.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Lo más escuchado")
                     .font(.system(size: 22, weight: .bold))
@@ -344,9 +347,7 @@ struct HomeView: View {
                     coverArt: song.coverArt, songCount: nil, duration: nil,
                     year: nil, genre: nil, explicitStatus: nil
                 )
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                    selectedAlbum = album
-                }
+                navigationPath.append(album)
             } label: {
                 Label("Ir al álbum", systemImage: "square.stack")
             }
@@ -402,7 +403,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var jumpBackInSection: some View {
-        if vm.isBackendAvailable && network.isConnected && !vm.recentContexts.isEmpty {
+        if BackendState.shared.isAvailable && network.isConnected && !vm.recentContexts.isEmpty {
             HorizontalScrollSection(title: "Volver a escuchar") {
                 ForEach(vm.recentContexts) { ctx in
                     let isAlbum = ctx.type == "album"
@@ -414,30 +415,20 @@ struct HomeView: View {
                             coverArt: ctx.coverArtId, songCount: nil, duration: nil,
                             year: nil, genre: nil, explicitStatus: nil
                         )
-                        Button {
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                selectedAlbum = album
-                            }
-                        } label: {
+                        NavigationLink(value: album) {
                             AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
-                        .opacity(selectedAlbum?.id == ctx.id ? 0 : 1)
                     } else if isPlaylist {
                         let playlist = NavidromePlaylist(
                             id: ctx.id, name: ctx.title, comment: nil,
                             songCount: ctx.songCount ?? 0, duration: 0,
                             owner: nil, coverArt: ctx.coverArtId, changed: nil
                         )
-                        Button {
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                selectedPlaylist = playlist
-                            }
-                        } label: {
+                        NavigationLink(value: playlist) {
                             PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
-                        .opacity(selectedPlaylist?.id == ctx.id ? 0 : 1)
                     } else if ctx.type == "artist" {
                         let artist = NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil)
                         NavigationLink(value: artist) {
@@ -462,15 +453,10 @@ struct HomeView: View {
 
             HorizontalScrollSection(title: "Lanzamientos recientes") {
                 ForEach(visible) { album in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedAlbum = album
-                        }
-                    } label: {
+                    NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(
@@ -488,7 +474,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var dailyMixSection: some View {
-        if vm.isBackendAvailable && network.isConnected {
+        if BackendState.shared.isAvailable && network.isConnected {
             if vm.isGeneratingMixes {
                 // Generating state
                 VStack(alignment: .leading, spacing: 12) {
@@ -532,15 +518,10 @@ struct HomeView: View {
                 // Show mixes
                 HorizontalScrollSection(title: "Tus mixes diarios") {
                     ForEach(vm.dailyMixPlaylists) { playlist in
-                        Button {
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                selectedPlaylist = playlist
-                            }
-                        } label: {
+                        NavigationLink(value: playlist) {
                             PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
-                        .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
                     }
                 }
             }
@@ -559,15 +540,10 @@ struct HomeView: View {
 
             HorizontalScrollSection(title: "Últimos álbumes añadidos") {
                 ForEach(visible) { album in
-                    Button {
-                        withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                            selectedAlbum = album
-                        }
-                    } label: {
+                    NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
-                    .opacity(selectedAlbum?.id == album.id ? 0 : 1)
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(
@@ -642,11 +618,11 @@ struct HomeView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(offlineAlbums, id: \.albumId) { album in
                         Button {
-                            selectedAlbum = NavidromeAlbum(
+                            navigationPath.append(NavidromeAlbum(
                                 id: album.albumId, name: album.name, artist: album.artist,
                                 coverArt: album.coverArt, songCount: album.songCount,
                                 duration: nil, year: album.year, genre: nil, explicitStatus: nil
-                            )
+                            ))
                         } label: {
                             HStack(spacing: 12) {
                                 AlbumCoverThumbnail(coverArt: album.coverArt, size: 50)

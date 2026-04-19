@@ -66,7 +66,7 @@ struct ArtistCardView: View {
             .frame(width: size, height: size)
             .clipShape(Circle())
             .overlay(Circle().stroke(Color(.separator).opacity(0.15), lineWidth: 0.5))
-            .modifier(OptionalHeroSource(id: "artist_\(artist.id)", namespace: heroNamespace))
+            .if(heroNamespace != nil) { $0.matchedTransitionSource(id: artist.id, in: heroNamespace!) }
 
             Text(artist.name)
                 .font(.system(size: 16, weight: .semibold))
@@ -107,69 +107,107 @@ struct ArtistCardView: View {
     }
 
     private func loadAvatar() async {
-        // Check in-memory cache first
+        // 1. Check disk + memory cache (instant)
         if let cached = ArtistImageCache.shared.image(for: artist.id) {
             avatarImage = cached
             didFinishLoading = true
             return
         }
 
+        // 2. Resolve avatar URL (cached in NavidromeService for 5 min)
         guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artist.id) else {
             withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
             return
         }
 
-        // Retry up to 2 times with backoff
-        for attempt in 0..<3 {
-            if attempt > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
-            }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data) else { continue }
-            ArtistImageCache.shared.setImage(img, for: artist.id)
+        // 3. Download with coalescing (deduplicates parallel requests for the same artist)
+        if let img = await ArtistImageCache.shared.loadImage(artistId: artist.id, url: url) {
             withAnimation(.easeOut(duration: 0.25)) {
                 avatarImage = img
                 didFinishLoading = true
             }
-            return
-        }
-
-        // All retries failed — show initial fallback
-        withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
-    }
-}
-
-// MARK: - Conditional hero source modifier
-
-private struct OptionalHeroSource: ViewModifier {
-    let id: String
-    let namespace: Namespace.ID?
-
-    func body(content: Content) -> some View {
-        if let ns = namespace {
-            content.matchedGeometryEffect(id: id, in: ns)
         } else {
-            content
+            withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
         }
     }
 }
 
-// MARK: - In-memory image cache for artist avatars
+// MARK: - Two-tier image cache for artist avatars (RAM + disk)
 
 final class ArtistImageCache: @unchecked Sendable {
     static let shared = ArtistImageCache()
 
-    private let cache = NSCache<NSString, UIImage>()
+    private let memory = NSCache<NSString, UIImage>()
+    private let diskDir: URL
+    private let ioQueue = DispatchQueue(label: "artist.image.cache", qos: .utility)
+
+    /// Actor-isolated in-flight tracker to coalesce duplicate downloads.
+    private let coordinator = DownloadCoordinator()
 
     private init() {
-        cache.countLimit = 200
+        memory.countLimit = 300
+
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        diskDir = caches.appendingPathComponent("artist_avatars", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
     }
+
+    private func diskPath(for artistId: String) -> URL {
+        diskDir.appendingPathComponent(artistId + ".jpg")
+    }
+
+    // MARK: Read
 
     func image(for artistId: String) -> UIImage? {
-        cache.object(forKey: artistId as NSString)
+        // 1. RAM
+        if let img = memory.object(forKey: artistId as NSString) { return img }
+        // 2. Disk (sync — small JPEGs, fast SSD)
+        let path = diskPath(for: artistId)
+        guard let data = try? Data(contentsOf: path),
+              let img = UIImage(data: data) else { return nil }
+        memory.setObject(img, forKey: artistId as NSString)
+        return img
     }
 
+    // MARK: Write
+
     func setImage(_ image: UIImage, for artistId: String) {
-        cache.setObject(image, forKey: artistId as NSString)
+        memory.setObject(image, forKey: artistId as NSString)
+        let path = diskPath(for: artistId)
+        ioQueue.async {
+            if let data = image.jpegData(compressionQuality: 0.82) {
+                try? data.write(to: path, options: .atomic)
+            }
+        }
+    }
+
+    // MARK: Coalesced download
+
+    /// Returns a cached image or downloads it, coalescing duplicate in-flight requests.
+    func loadImage(artistId: String, url: URL) async -> UIImage? {
+        if let cached = image(for: artistId) { return cached }
+        let cache = self
+        return await coordinator.download(artistId: artistId) {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return nil }
+            cache.setImage(img, for: artistId)
+            return img
+        }
+    }
+}
+
+/// Actor that deduplicates concurrent downloads for the same artist.
+private actor DownloadCoordinator {
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+
+    func download(artistId: String, work: @Sendable @escaping () async -> UIImage?) async -> UIImage? {
+        if let existing = inFlight[artistId] {
+            return await existing.value
+        }
+        let task = Task<UIImage?, Never> { await work() }
+        inFlight[artistId] = task
+        let result = await task.value
+        inFlight.removeValue(forKey: artistId)
+        return result
     }
 }

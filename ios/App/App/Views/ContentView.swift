@@ -81,6 +81,7 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .task { BackendState.shared.check() }
         .preferredColorScheme(theme.colorScheme)
         .animation(.easeInOut(duration: 0.3), value: network.isConnected)
         .animation(.spring(response: 0.4, dampingFraction: 0.88), value: nowPlaying.viewerIsOpen)

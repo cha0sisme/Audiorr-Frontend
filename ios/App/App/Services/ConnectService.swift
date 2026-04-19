@@ -65,6 +65,14 @@ final class ConnectService {
     func connect() {
         guard !isConnected, !isConnecting else { return }
         shouldReconnect = true
+
+        // Don't attempt connection when offline — wait for network to return
+        guard NetworkMonitor.shared.isConnected else {
+            print("[Connect] Offline — waiting for network before connecting")
+            observeNetworkForReconnect()
+            return
+        }
+
         isConnecting = true
 
         Task {
@@ -314,6 +322,8 @@ final class ConnectService {
         hubConnected = true
         reconnectTimer?.invalidate()
         reconnectTimer = nil
+        // Hub connection confirms backend is reachable — refresh centralized state
+        BackendState.shared.invalidateAndRecheck()
         print("[Connect] Connected to hub (sid: \(engineSid ?? "?"))")
 
         // 4. Register this device
@@ -686,6 +696,14 @@ final class ConnectService {
 
     private func scheduleReconnect() {
         guard shouldReconnect, reconnectTimer == nil else { return }
+
+        // Don't schedule reconnect timer when offline — observe network instead
+        guard NetworkMonitor.shared.isConnected else {
+            print("[Connect] Offline — pausing reconnect until network returns")
+            observeNetworkForReconnect()
+            return
+        }
+
         print("[Connect] Will reconnect in 5s...")
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -695,9 +713,35 @@ final class ConnectService {
         }
     }
 
+    /// Observe network state and trigger reconnect when connectivity returns.
+    private var networkWaitTimer: Timer?
+
+    private func observeNetworkForReconnect() {
+        guard networkWaitTimer == nil else { return }
+
+        networkWaitTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] t in
+            Task { @MainActor in
+                guard let self else { t.invalidate(); return }
+                guard self.shouldReconnect else {
+                    t.invalidate()
+                    self.networkWaitTimer = nil
+                    return
+                }
+                if NetworkMonitor.shared.isConnected {
+                    t.invalidate()
+                    self.networkWaitTimer = nil
+                    print("[Connect] Network restored — attempting reconnect")
+                    self.connect()
+                }
+            }
+        }
+    }
+
     private func tearDown() {
         pingTimer?.invalidate()
         pingTimer = nil
+        networkWaitTimer?.invalidate()
+        networkWaitTimer = nil
         webSocket?.cancel(with: .normalClosure, reason: nil)
         webSocket = nil
         isConnected = false

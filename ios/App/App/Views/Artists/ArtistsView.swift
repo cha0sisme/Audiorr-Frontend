@@ -64,6 +64,29 @@ final class ArtistsViewModel: ObservableObject {
         async let genreTask: Void = loadRandomGenre()
 
         _ = await (featuredTask, recentTask, genreTask)
+
+        // Pre-warm avatar URLs + images for visible artists in background
+        prefetchAvatars(for: featuredArtists + recentArtists + genreArtists)
+    }
+
+    /// Pre-fetch avatar URLs and images in background so cards render instantly.
+    private func prefetchAvatars(for artists: [NavidromeArtist]) {
+        let unique = Array(Set(artists.map(\.id)))
+            .filter { ArtistImageCache.shared.image(for: $0) == nil }
+        guard !unique.isEmpty else { return }
+
+        Task.detached(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                for artistId in unique {
+                    group.addTask {
+                        // 1. Resolve avatar URL (caches in NavidromeService)
+                        guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artistId) else { return }
+                        // 2. Download image (caches in ArtistImageCache disk + RAM)
+                        _ = await ArtistImageCache.shared.loadImage(artistId: artistId, url: url)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Featured (most frequent albums → top artists)
@@ -151,7 +174,6 @@ struct ArtistsView: View {
     @State private var showSettings = false
     @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
-    @State private var selectedArtist: NavidromeArtist?
 
     private let collapseThreshold: CGFloat = 44
 
@@ -176,26 +198,32 @@ struct ArtistsView: View {
                     scrollY = y
                 }
             }
-            .modifier(ArtistHeroOverlay(selectedArtist: $selectedArtist, namespace: heroNS))
             .background(Color(.systemBackground))
-            .toolbarBackground(selectedArtist != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
+            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
             .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
-            .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
-            .navigationDestination(for: NavidromeAlbum.self) { AlbumDetailView(album: $0) }
-            .navigationDestination(for: NavidromePlaylist.self) { PlaylistDetailView(playlist: $0) }
+            .navigationDestination(for: NavidromeArtist.self) {
+                ArtistDetailView(artist: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
+            .navigationDestination(for: NavidromeAlbum.self) {
+                AlbumDetailView(album: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
+            .navigationDestination(for: NavidromePlaylist.self) {
+                PlaylistDetailView(playlist: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
             }
             .toolbar {
-                if selectedArtist == nil {
-                    ToolbarItem(placement: .principal) {
-                        Text("Artistas")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .opacity(stickyOpacity)
-                    }
+                ToolbarItem(placement: .principal) {
+                    Text("Artistas")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .opacity(stickyOpacity)
                 }
             }
         }
@@ -288,15 +316,10 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.featuredArtists) { artist in
-                            Button {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                    selectedArtist = artist
-                                }
-                            } label: {
+                            NavigationLink(value: artist) {
                                 ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
-                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -318,15 +341,10 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.recentArtists) { artist in
-                            Button {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                    selectedArtist = artist
-                                }
-                            } label: {
+                            NavigationLink(value: artist) {
                                 ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
-                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -359,15 +377,10 @@ struct ArtistsView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.genreArtists) { artist in
-                            Button {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                    selectedArtist = artist
-                                }
-                            } label: {
+                            NavigationLink(value: artist) {
                                 ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
-                            .opacity(selectedArtist?.id == artist.id ? 0 : 1)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -591,15 +604,13 @@ private struct ArtistRowCell: View {
                 withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
                 return
             }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data) else {
+            if let img = await ArtistImageCache.shared.loadImage(artistId: artist.id, url: url) {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    avatarImage = img
+                    didFinishLoading = true
+                }
+            } else {
                 withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
-                return
-            }
-            ArtistImageCache.shared.setImage(img, for: artist.id)
-            withAnimation(.easeOut(duration: 0.25)) {
-                avatarImage = img
-                didFinishLoading = true
             }
         }
     }

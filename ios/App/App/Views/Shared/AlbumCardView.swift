@@ -57,7 +57,7 @@ struct AlbumCardView: View {
                 .if(!isGrid) { $0.frame(width: size, height: size) }
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
-                .if(heroNamespace != nil) { $0.matchedGeometryEffect(id: "cover_\(album.id)", in: heroNamespace!) }
+                .if(heroNamespace != nil) { $0.matchedTransitionSource(id: album.id, in: heroNamespace!) }
 
                 if isCurrentContext {
                     NowPlayingIndicator(
@@ -226,3 +226,4 @@ struct NowPlayingIndicator: View {
             )
     }
 }
+

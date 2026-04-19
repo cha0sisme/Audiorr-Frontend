@@ -429,6 +429,15 @@ final class QueueManager: AudioEngineDelegate {
                 persistState()
                 syncNowPlayingState()
 
+                // Push high-res artwork for the new song
+                if let newSong = currentSong {
+                    let artworkUrl = NavidromeService.shared.coverURL(id: newSong.coverArt, size: 1024)?.absoluteString
+                    AudioEngineManager.shared?.updateNowPlayingMetadata(
+                        title: newSong.title, artist: newSong.artist, album: newSong.album,
+                        duration: newSong.duration, artworkUrl: artworkUrl
+                    )
+                }
+
                 // Broadcast to Audiorr Connect (song changed = significant)
                 ConnectService.shared.broadcastStateIfNeeded(significantChange: true)
 
@@ -757,6 +766,13 @@ final class QueueManager: AudioEngineDelegate {
         self.duration = duration
         self.currentTime = 0
         syncNowPlayingState()
+
+        // Push high-res artwork to lock screen / Dynamic Island / Control Center
+        let artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 1024)?.absoluteString
+        engine.updateNowPlayingMetadata(
+            title: song.title, artist: song.artist, album: song.album,
+            duration: duration, artworkUrl: artworkUrl
+        )
 
         // Broadcast to Audiorr Connect (song changed = significant)
         ConnectService.shared.broadcastStateIfNeeded(significantChange: true)

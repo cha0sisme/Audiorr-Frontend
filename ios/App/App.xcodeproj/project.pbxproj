@@ -35,6 +35,7 @@
 		3400FF312FA8000000000031 /* OfflineModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF302FA8000000000030 /* OfflineModels.swift */; };
 		3400FF332FA8000000000033 /* OfflineStorageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF322FA8000000000032 /* OfflineStorageManager.swift */; };
 		3400FF352FA8000000000035 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF342FA8000000000034 /* NetworkMonitor.swift */; };
+		3400FF412FA8000000000041 /* BackendState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF402FA8000000000040 /* BackendState.swift */; };
 		3400FF372FA8000000000037 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF362FA8000000000036 /* DownloadManager.swift */; };
 		3400FF392FA8000000000039 /* DownloadButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF382FA8000000000038 /* DownloadButton.swift */; };
 		3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF3A2FA800000000003A /* StorageManagementView.swift */; };
@@ -96,6 +97,7 @@
 		3400FF302FA8000000000030 /* OfflineModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineModels.swift; sourceTree = "<group>"; };
 		3400FF322FA8000000000032 /* OfflineStorageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineStorageManager.swift; sourceTree = "<group>"; };
 		3400FF342FA8000000000034 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
+		3400FF402FA8000000000040 /* BackendState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendState.swift; sourceTree = "<group>"; };
 		3400FF362FA8000000000036 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		3400FF382FA8000000000038 /* DownloadButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadButton.swift; sourceTree = "<group>"; };
 		3400FF3A2FA800000000003A /* StorageManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageManagementView.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				3400FF062FA8000000000006 /* QueueManager.swift */,
 				3400FF082FA8000000000008 /* ScrobbleService.swift */,
 				3400FF342FA8000000000034 /* NetworkMonitor.swift */,
+				3400FF402FA8000000000040 /* BackendState.swift */,
 				3400FF362FA8000000000036 /* DownloadManager.swift */,
 				3400FF3C2FA800000000003C /* OfflineContentProvider.swift */,
 				3400FF322FA8000000000032 /* OfflineStorageManager.swift */,
@@ -424,6 +427,7 @@
 				3400FF072FA8000000000007 /* QueueManager.swift in Sources */,
 				3400FF092FA8000000000009 /* ScrobbleService.swift in Sources */,
 				3400FF352FA8000000000035 /* NetworkMonitor.swift in Sources */,
+				3400FF412FA8000000000041 /* BackendState.swift in Sources */,
 				3400FF372FA8000000000037 /* DownloadManager.swift in Sources */,
 				3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */,
 				3400FF3D2FA800000000003D /* OfflineContentProvider.swift in Sources */,
@@ -589,7 +593,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 0;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -616,7 +620,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 0;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;

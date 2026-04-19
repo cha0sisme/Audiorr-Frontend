@@ -17,6 +17,10 @@ final class AlbumDetailViewModel: ObservableObject {
     init(album: NavidromeAlbum) {
         self.initialAlbum = album
         self.album = album
+        // Pre-load cached cover immediately so the hero transition doesn't flash a placeholder
+        if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
+            self.coverImage = cached
+        }
     }
 
     var displayAlbum: NavidromeAlbum { album ?? initialAlbum }
@@ -64,15 +68,12 @@ final class AlbumDetailViewModel: ObservableObject {
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
-    @State private var suppressHero = false
-    var heroNamespace: Namespace.ID?
     var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
 
-    init(album: NavidromeAlbum, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
+    init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
-        self.heroNamespace = heroNamespace
         self.onDismiss = onDismiss
     }
 
@@ -116,9 +117,7 @@ struct AlbumDetailView: View {
         .environment(\.colorScheme, isLight ? .light : .dark)
         .tint(isLight ? .accentColor : .white)
         .task {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = .dark
-            }
+            AppTheme.shared.overlayColorScheme = .dark
             await vm.load()
             AppTheme.shared.overlayColorScheme = isLight ? .light : .dark
         }
@@ -126,20 +125,12 @@ struct AlbumDetailView: View {
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
         .onDisappear {
-            if heroNamespace == nil {
-                AppTheme.shared.overlayColorScheme = nil
-            }
-        }
-        .task(id: "hero-settle") {
-            if heroNamespace != nil {
-                try? await Task.sleep(for: .milliseconds(600))
-                suppressHero = true
-            }
+            AppTheme.shared.overlayColorScheme = nil
         }
         .toolbar {
-            if let onDismiss {
+            if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onDismiss) {
+                    Button { onDismiss?() } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(isLight ? Color.accentColor : .white)
@@ -208,18 +199,6 @@ struct AlbumDetailView: View {
                 .ignoresSafeArea(edges: .top)
         } else {
             ZStack {
-                // Blurred artwork backdrop
-                if let img = vm.coverImage {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 55)
-                        .scaleEffect(1.25)     // prevent blur edges showing
-                        .clipped()
-                } else {
-                    Color(vm.palette.primary)
-                }
-
                 // Gradient overlay at 140° (top-trailing → bottom-leading)
                 LinearGradient(
                     colors: [
@@ -241,6 +220,22 @@ struct AlbumDetailView: View {
                     endPoint: .bottom
                 )
             }
+            // Blurred artwork in background layer — scaledToFill can overflow
+            // its frame but .background() prevents it from inflating the
+            // parent's layout size, which was causing width miscalculation
+            // on albums with non-square cover art.
+            .background {
+                if let img = vm.coverImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: 55)
+                        .scaleEffect(1.25)
+                } else {
+                    Color(vm.palette.primary)
+                }
+            }
+            .clipped()
             .ignoresSafeArea(edges: .top)
         }
     }
@@ -255,7 +250,6 @@ struct AlbumDetailView: View {
             coverArtImage
                 .frame(width: 190, height: 190)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .if(heroNamespace != nil && !suppressHero) { $0.matchedGeometryEffect(id: "cover_\(vm.initialAlbum.id)", in: heroNamespace!) }
                 .shadow(
                     color: vm.palette.isSolid
                         ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
@@ -376,6 +370,18 @@ struct AlbumDetailView: View {
 
     // MARK: - Song list
 
+    private var recordLabelFooter: some View {
+        let year = String(vm.displayAlbum.year ?? Calendar.current.component(.year, from: Date()))
+        let labels = vm.recordLabels.map(\.name).joined(separator: ", ")
+        return Text("© \(year) \(labels)")
+            .font(.system(size: 12))
+            .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+    }
+
     private var songListSection: some View {
         VStack(spacing: 0) {
             if vm.isLoading {
@@ -387,50 +393,10 @@ struct AlbumDetailView: View {
                 SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
 
                 if !vm.recordLabels.isEmpty {
-                    let year = String(vm.displayAlbum.year ?? Calendar.current.component(.year, from: Date()))
-                    let labels = vm.recordLabels.map(\.name).joined(separator: ", ")
-                    Text("© \(year) \(labels)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 16)
+                    recordLabelFooter
                 }
             }
         }
     }
 
-}
-
-// MARK: - Album hero overlay modifier
-
-struct AlbumHeroOverlay: ViewModifier {
-    @Binding var selectedAlbum: NavidromeAlbum?
-    var namespace: Namespace.ID
-
-    func body(content: Content) -> some View {
-        ZStack {
-            content
-
-            if let album = selectedAlbum {
-                AlbumDetailView(
-                    album: album,
-                    heroNamespace: namespace,
-                    onDismiss: {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.88)) {
-                            selectedAlbum = nil
-                        }
-                    }
-                )
-                .transition(.opacity)
-                .zIndex(1)
-            }
-        }
-        .onChange(of: selectedAlbum) { _, album in
-            // Default to dark for the hero overlay; the detail view
-            // refines once its palette loads.
-            AppTheme.shared.overlayColorScheme = album != nil ? .dark : nil
-        }
-    }
 }

@@ -12,8 +12,6 @@ final class SettingsViewModel: ObservableObject {
     @Published var lastfmHasSecret = false
     @Published var scrobbleStatus: ScrobbleStatus = .idle
 
-    @Published var isBackendAvailable = false
-
     private let settingsKey = "audiorr_settings"
 
     enum ScrobbleStatus { case idle, testing, success, error }
@@ -23,8 +21,7 @@ final class SettingsViewModel: ObservableObject {
         loadScrobble()
 
         Task {
-            isBackendAvailable = await NavidromeService.shared.checkBackendAvailable()
-            if isBackendAvailable {
+            if BackendState.shared.isAvailable {
                 await loadLastFmConfig()
             }
         }
@@ -260,11 +257,11 @@ struct SettingsView: View {
             // ── Reproducción ──
             settingsSection(
                 header: "Reproducción",
-                footer: vm.isBackendAvailable
+                footer: BackendState.shared.isAvailable
                     ? "Modo DJ activa mezclas dinámicas. ReplayGain normaliza el volumen entre canciones."
                     : "ReplayGain normaliza el volumen entre canciones."
             ) {
-                if vm.isBackendAvailable {
+                if BackendState.shared.isAvailable {
                     settingsRow {
                         Label("Modo DJ", systemImage: "dial.medium.fill")
                         Spacer()
@@ -288,7 +285,7 @@ struct SettingsView: View {
             }
 
             // ── Last.fm ──
-            if vm.isBackendAvailable {
+            if BackendState.shared.isAvailable {
                 settingsSection(
                     header: "Last.fm",
                     footer: vm.scrobbleEnabled

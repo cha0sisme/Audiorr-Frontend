@@ -17,7 +17,6 @@ final class PlaylistsViewModel: ObservableObject {
     @Published var playlists: [NavidromePlaylist] = []
     @Published var sections:  [PlaylistSection]   = []
     @Published var isLoading  = true
-    @Published var isBackendAvailable = false
     @Published var isCreating = false
 
     private let api = NavidromeService.shared
@@ -35,19 +34,23 @@ final class PlaylistsViewModel: ObservableObject {
 
     func load() async {
         isLoading = true
-        defer {
-            isLoading = false
-            lastLoadedAt = Date()
-        }
 
         api.reloadCredentials()
-        guard api.isConfigured else { return }
+        guard api.isConfigured else {
+            isLoading = false
+            lastLoadedAt = Date()
+            return
+        }
 
+        // Fetch playlists from Navidrome
         playlists = (try? await api.getPlaylists()) ?? []
 
-        isBackendAvailable = await api.checkBackendAvailable()
+        // Playlists ready — show them immediately
+        isLoading = false
+        lastLoadedAt = Date()
 
-        if isBackendAvailable {
+        // Load backend-dependent sections (BackendState already checked centrally)
+        if BackendState.shared.isAvailable {
             let fetched = await api.getHomepageLayout()
             sections = fetched.isEmpty ? defaultSections : fetched
         } else {
@@ -106,8 +109,8 @@ struct PlaylistsView: View {
     @State private var newPlaylistName = ""
     @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
-    @State private var selectedPlaylist: NavidromePlaylist?
     @State private var cachedSongCount = 0
+    @State private var navigationPath = NavigationPath()
 
     private let collapseThreshold: CGFloat = 44
 
@@ -119,7 +122,7 @@ struct PlaylistsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     largeHeader
@@ -130,11 +133,8 @@ struct PlaylistsView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-            .modifier(PlaylistHeroOverlay(selectedPlaylist: $selectedPlaylist, namespace: heroNS, onDeleted: {
-                Task { await vm.load() }
-            }))
             .background(Color(.systemBackground))
-            .toolbarBackground(selectedPlaylist != nil ? .hidden : (stickyOpacity > 0.5 ? .visible : .hidden), for: .navigationBar)
+            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
             .task {
                 await vm.loadIfNeeded()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
@@ -147,26 +147,25 @@ struct PlaylistsView: View {
                 PlaylistDetailView(playlist: $0, onDeleted: {
                     Task { await vm.load() }
                 })
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
             }
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
             }
             .toolbar {
-                if selectedPlaylist == nil {
-                    ToolbarItem(placement: .principal) {
-                        Text("Playlists")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .opacity(stickyOpacity)
-                    }
-                    if vm.isConfigured {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                showCreateSheet = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 17, weight: .semibold))
-                            }
+                ToolbarItem(placement: .principal) {
+                    Text("Playlists")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .opacity(stickyOpacity)
+                }
+                if vm.isConfigured {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showCreateSheet = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 17, weight: .semibold))
                         }
                     }
                 }
@@ -178,9 +177,7 @@ struct PlaylistsView: View {
                     newPlaylistName = ""
                     Task {
                         if let playlist = await vm.createPlaylist(name: name) {
-                            withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                selectedPlaylist = playlist
-                            }
+                            navigationPath.append(playlist)
                         }
                     }
                 }
@@ -232,7 +229,7 @@ struct PlaylistsView: View {
                 )
                 .padding(.top, 40)
             }
-        } else if vm.isBackendAvailable {
+        } else if BackendState.shared.isAvailable {
             downloadsCard
             sectionsContent
         } else {
@@ -323,15 +320,10 @@ struct PlaylistsView: View {
                 if !items.isEmpty {
                     HorizontalScrollSection(title: section.title) {
                         ForEach(items) { playlist in
-                            Button {
-                                withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                                    selectedPlaylist = playlist
-                                }
-                            } label: {
+                            NavigationLink(value: playlist) {
                                 PlaylistCardView(playlist: playlist, size: 140, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
-                            .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
                         }
                     }
                 }
@@ -350,15 +342,10 @@ struct PlaylistsView: View {
     private var gridContent: some View {
         LazyVGrid(columns: gridColumns, spacing: 20) {
             ForEach(vm.playlists) { playlist in
-                Button {
-                    withAnimation(.spring(response: 0.45, dampingFraction: 0.88)) {
-                        selectedPlaylist = playlist
-                    }
-                } label: {
+                NavigationLink(value: playlist) {
                     PlaylistCardView(playlist: playlist, axis: .grid, heroNamespace: heroNS)
                 }
                 .buttonStyle(.plain)
-                .opacity(selectedPlaylist?.id == playlist.id ? 0 : 1)
             }
         }
         .padding(16)

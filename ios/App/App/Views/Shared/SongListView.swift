@@ -8,8 +8,7 @@ import UIKit
 /// Set `showAlbumInMenu: false` when already inside an album page.
 ///
 /// Layout notes:
-/// - Each row's width is hard-pinned to `UIScreen.main.bounds.width` via a
-///   fixed `.frame(width:)` — `containerRelativeFrame` proved unreliable.
+/// - Rows expand to fill the available width via `maxWidth: .infinity`.
 /// - The row content and the `···` menu live in a flat `HStack` so their
 ///   gesture recognisers are completely independent — no overlap, no delay.
 struct SongListView: View {
@@ -26,18 +25,11 @@ struct SongListView: View {
 
     private var isLight: Bool { palette.isPrimaryLight }
 
-    /// Device screen width — computed once and cached.
-    private static let screenWidth: CGFloat = {
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 390
-    }()
-
-    private var screenWidth: CGFloat { Self.screenWidth }
-
     var body: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(songs.enumerated()), id: \.element.id) { idx, song in
                 rowView(for: song, at: idx)
-                    .frame(width: screenWidth)
+                    .frame(maxWidth: .infinity)
 
                 if idx < songs.count - 1 {
                     Divider()
@@ -46,11 +38,10 @@ struct SongListView: View {
                         )
                         .padding(.leading, 58)
                         .padding(.trailing, 16)
-                        .frame(width: screenWidth)
                 }
             }
         }
-        .frame(width: screenWidth)
+        .frame(maxWidth: .infinity)
         // Navigation driven by Button state — avoids NavigationLink-inside-Menu bug
         .navigationDestination(item: $navAlbum)  { album  in AlbumDetailView(album: album) }
         .navigationDestination(item: $navArtist) { artist in ArtistDetailView(artist: artist) }
@@ -200,6 +191,7 @@ private struct SongRowView: View {
             }
         }
         .padding(.leading, 16)
+        .padding(.trailing, 4)
         .padding(.vertical, 10)
         .task {
             isCached = await OfflineStorageManager.shared.isCached(songId: song.id)
