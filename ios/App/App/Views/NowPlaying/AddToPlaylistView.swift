@@ -78,8 +78,8 @@ struct AddToPlaylistView: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task { await loadPlaylists() }
-        .animation(.easeInOut(duration: 0.25), value: addedTo)
-        .animation(.easeInOut(duration: 0.25), value: errorMessage)
+        .animation(Anim.small, value: addedTo)
+        .animation(Anim.small, value: errorMessage)
     }
 
     // MARK: - Load
@@ -115,33 +115,7 @@ struct AddToPlaylistView: View {
 
     // MARK: - Cover
 
-    @ViewBuilder
     private func playlistCover(_ playlist: NavidromePlaylist) -> some View {
-        if let coverArt = playlist.coverArt,
-           let url = NavidromeService.shared.coverURL(id: coverArt, size: 100) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                default:
-                    coverPlaceholder
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else {
-            coverPlaceholder
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-    }
-
-    private var coverPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note.list")
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-        }
+        CachedCoverThumbnail(coverArt: playlist.coverArt, size: 44)
     }
 }

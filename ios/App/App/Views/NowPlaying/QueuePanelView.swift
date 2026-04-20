@@ -171,32 +171,8 @@ struct QueuePanelView: View {
 
     // MARK: - Cover
 
-    @ViewBuilder
     private func songCover(coverArt: String) -> some View {
-        if let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
-            AsyncImage(url: url) { phase in
-                if case .success(let image) = phase {
-                    image.resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    coverPlaceholder
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else {
-            coverPlaceholder
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        }
-    }
-
-    private var coverPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemFill)
-            Image(systemName: "music.note")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-        }
+        CachedCoverThumbnail(coverArt: coverArt, size: 44)
     }
 
     // MARK: - Actions

@@ -13,6 +13,7 @@ struct ContentView: View {
     // Navigation from viewer context menu
     @State private var navigationAlbum: NavidromeAlbum?
     @State private var navigationArtist: NavidromeArtist?
+    @Namespace private var overlayHeroNS
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -66,11 +67,23 @@ struct ContentView: View {
 
             if let artist = navigationArtist {
                 NavigationStack {
-                    ArtistDetailView(artist: artist, onDismiss: {
+                    ArtistDetailView(artist: artist, heroNamespace: overlayHeroNS, onDismiss: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                             navigationArtist = nil
                         }
                     })
+                    .navigationDestination(for: NavidromeAlbum.self) {
+                        AlbumDetailView(album: $0)
+                            .navigationTransition(.zoom(sourceID: $0.id, in: overlayHeroNS))
+                    }
+                    .navigationDestination(for: NavidromePlaylist.self) {
+                        PlaylistDetailView(playlist: $0)
+                            .navigationTransition(.zoom(sourceID: $0.id, in: overlayHeroNS))
+                    }
+                    .navigationDestination(for: NavidromeArtist.self) {
+                        ArtistDetailView(artist: $0, heroNamespace: overlayHeroNS)
+                            .navigationTransition(.zoom(sourceID: $0.id, in: overlayHeroNS))
+                    }
                 }
                 .transition(.move(edge: .trailing))
                 .zIndex(5)

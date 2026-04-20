@@ -66,7 +66,7 @@ struct ProgressBarView: View {
                             lastSyncTime = .now
                         }
                 )
-                .animation(.easeInOut(duration: 0.15), value: isDragging)
+                .animation(Anim.micro, value: isDragging)
             }
             .frame(height: 16)
 
@@ -89,7 +89,7 @@ struct ProgressBarView: View {
                     .font(.caption2.monospacedDigit().weight(.medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
-            .animation(.easeInOut(duration: 0.3), value: state.isCrossfading)
+            .animation(Anim.content, value: state.isCrossfading)
         }
         .onAppear { startInterpolation() }
         .onDisappear { stopInterpolation() }

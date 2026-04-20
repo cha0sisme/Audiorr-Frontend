@@ -130,7 +130,7 @@ struct LoginView: View {
                     .disabled(!canSubmit)
                     .padding(.horizontal, 20)
                     .padding(.top, 24)
-                    .animation(.easeInOut(duration: 0.2), value: canSubmit)
+                    .animation(Anim.small, value: canSubmit)
 
                     Spacer(minLength: 40)
                 }
@@ -141,7 +141,7 @@ struct LoginView: View {
         .background(Color(.systemGroupedBackground))
         .opacity(dismissPhase ? 0 : 1)
         .scaleEffect(dismissPhase ? 1.05 : 1)
-        .animation(.easeInOut(duration: 0.4), value: dismissPhase)
+        .animation(Anim.color, value: dismissPhase)
         .onSubmit {
             switch focusedField {
             case .server:   focusedField = .user
@@ -193,7 +193,7 @@ struct LoginView: View {
                 .textInputAutocapitalization(.never)
                 .focused($focusedField, equals: field)
             }
-            .animation(.easeInOut(duration: 0.15), value: text.wrappedValue.isEmpty)
+            .animation(Anim.micro, value: text.wrappedValue.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -242,7 +242,7 @@ struct LoginView: View {
                     status = .success
                     // Animate out, then dismiss
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        withAnimation {
+                        withAnimation(Anim.color) {
                             dismissPhase = true
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {

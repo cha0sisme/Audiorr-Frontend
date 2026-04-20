@@ -48,7 +48,7 @@ struct PlaylistCardView: View {
                         barWidth: 3, height: 14
                     )
                     .padding(8)
-                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .padding(6)
                 }
             }

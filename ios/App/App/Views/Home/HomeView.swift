@@ -28,8 +28,12 @@ final class HomeViewModel: ObservableObject {
         await load()
     }
 
+    /// True only on the very first load (no data yet).
+    private var hasData: Bool { !latestAlbums.isEmpty || !recentReleases.isEmpty }
+
     func load() async {
-        isLoading = true
+        // Only show skeleton on first load — subsequent refreshes keep existing data visible
+        if !hasData { isLoading = true }
 
         api.reloadCredentials()
         guard api.isConfigured else {
@@ -67,20 +71,21 @@ final class HomeViewModel: ObservableObject {
         guard BackendState.shared.isAvailable else { return }
         var contexts = Array(await api.getRecentContexts().prefix(6))
 
-        // Enrich playlist/smartmix contexts with real name + song count from Navidrome
+        // Enrich playlist/smartmix contexts with real name, song count, and cover from Navidrome
         let playlistIndices = contexts.enumerated().compactMap { (i, ctx) -> (Int, String)? in
             (ctx.type == "playlist" || ctx.type == "smartmix") ? (i, ctx.id) : nil
         }
-        await withTaskGroup(of: (Int, String?, Int?).self) { group in
+        await withTaskGroup(of: (Int, String?, Int?, String?).self) { group in
             for (index, pid) in playlistIndices {
                 group.addTask {
                     let (playlist, _) = (try? await self.api.getPlaylistSongs(playlistId: pid)) ?? (nil, [])
-                    return (index, playlist?.name, playlist?.songCount)
+                    return (index, playlist?.name, playlist?.songCount, playlist?.coverArt)
                 }
             }
-            for await (index, name, count) in group {
+            for await (index, name, count, coverArt) in group {
                 if let name { contexts[index].title = name }
                 if let count { contexts[index].songCount = count }
+                if let coverArt { contexts[index].coverArtId = coverArt }
             }
         }
 
@@ -195,7 +200,10 @@ struct HomeView: View {
                 AlbumDetailView(album: $0)
                     .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
             }
-            .navigationDestination(for: NavidromeArtist.self) { ArtistDetailView(artist: $0) }
+            .navigationDestination(for: NavidromeArtist.self) {
+                ArtistDetailView(artist: $0, heroNamespace: heroNS)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
             .navigationDestination(for: NavidromePlaylist.self) {
                 PlaylistDetailView(playlist: $0)
                     .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
@@ -295,17 +303,8 @@ struct HomeView: View {
                     .frame(width: 20, alignment: .trailing)
             }
 
-            // Cover
-            AsyncImage(url: NavidromeService.shared.coverURL(id: song.coverArt, size: 80)) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    Color(.tertiarySystemFill)
-                }
-            }
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            // Cover (uses AlbumCoverCache to survive tab switches)
+            CachedCoverView(coverArt: song.coverArt, size: 48)
 
             // Title + Artist
             VStack(alignment: .leading, spacing: 2) {
@@ -432,7 +431,7 @@ struct HomeView: View {
                     } else if ctx.type == "artist" {
                         let artist = NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil)
                         NavigationLink(value: artist) {
-                            ArtistCardView(artist: artist, size: 150)
+                            ArtistCardView(artist: artist, size: 150, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -654,11 +653,16 @@ struct HomeView: View {
     }
 }
 
-// MARK: - Album Cover Thumbnail (small, for offline list)
+// MARK: - Cached cover view (small thumbnails — uses AlbumCoverCache)
 
-private struct AlbumCoverThumbnail: View {
+/// Small cover thumbnail that checks AlbumCoverCache first.
+/// Used in top weekly rows, offline album list, and anywhere a small
+/// cached cover is needed. Survives tab switches without flashing.
+private struct CachedCoverView: View {
     let coverArt: String?
-    let size: CGFloat
+    var size: CGFloat = 48
+    var cornerRadius: CGFloat = 8
+    var fallbackIcon: String = "music.note"
 
     @State private var image: UIImage?
 
@@ -671,20 +675,29 @@ private struct AlbumCoverThumbnail: View {
             } else {
                 Color(.tertiarySystemFill)
                     .overlay(
-                        Image(systemName: "music.note")
+                        Image(systemName: fallbackIcon)
                             .foregroundStyle(.secondary)
                     )
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .onAppear {
+            if image == nil, let coverArt {
+                image = AlbumCoverCache.shared.image(for: coverArt)
+            }
+        }
         .task {
-            guard let coverArt, !coverArt.isEmpty,
+            guard image == nil, let coverArt, !coverArt.isEmpty,
                   let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let img = UIImage(data: data) else { return }
+            AlbumCoverCache.shared.setImage(img, for: coverArt)
             image = img
         }
     }
 }
+
+/// Alias for offline album list (same component, different default icon).
+private typealias AlbumCoverThumbnail = CachedCoverView
 

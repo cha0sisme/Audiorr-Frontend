@@ -66,7 +66,7 @@ struct AlbumCardView: View {
                         barWidth: 3, height: 14
                     )
                     .padding(8)
-                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Material.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .padding(6)
                 }
             }
@@ -189,7 +189,9 @@ extension View {
 
 // MARK: - Animated equalizer bars (now-playing indicator)
 
-/// Shows 3 bars that animate when `isPlaying` is true, freezes when paused.
+/// Apple Music-style 4-bar equalizer. Each bar animates independently with
+/// randomized target heights that change at different rates, producing an
+/// organic "audio visualization" feel rather than a mechanical loop.
 struct NowPlayingIndicator: View {
     var isPlaying: Bool
     var color: Color = .accentColor
@@ -197,33 +199,115 @@ struct NowPlayingIndicator: View {
     var height: CGFloat = 14
     var spacing: CGFloat = 1.5
 
-    @State private var animating = false
+    /// Each bar gets its own random height factor (0…1) updated on a timer.
+    @State private var levels: [CGFloat] = [0.4, 0.6, 0.3, 0.5]
+    @State private var timer: Timer?
+
+    private let barCount = 4
+    /// How often each bar picks a new random height (seconds).
+    private let tickInterval: TimeInterval = 0.28
 
     var body: some View {
-        HStack(spacing: spacing) {
-            bar(delay: 0.0, minScale: 0.3, maxScale: 1.0)
-            bar(delay: 0.15, minScale: 0.2, maxScale: 0.85)
-            bar(delay: 0.3, minScale: 0.35, maxScale: 0.95)
+        HStack(alignment: .bottom, spacing: spacing) {
+            ForEach(0..<barCount, id: \.self) { i in
+                RoundedRectangle(cornerRadius: barWidth / 2)
+                    .fill(color)
+                    .frame(width: barWidth, height: barHeight(for: i))
+            }
         }
-        .frame(height: height)
+        .frame(height: height, alignment: .bottom)
         .onChange(of: isPlaying, initial: true) { _, playing in
-            animating = playing
+            if playing { startTimer() } else { stopTimer() }
+        }
+        .onDisappear { stopTimer() }
+    }
+
+    private func barHeight(for index: Int) -> CGFloat {
+        let minH: CGFloat = height * 0.15
+        return minH + levels[index] * (height - minH)
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { _ in
+            withAnimation(.easeInOut(duration: tickInterval * 1.6)) {
+                for i in 0..<barCount {
+                    levels[i] = CGFloat.random(in: 0.1...1.0)
+                }
+            }
         }
     }
 
-    private func bar(delay: Double, minScale: CGFloat, maxScale: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: barWidth / 2)
-            .fill(color)
-            .frame(width: barWidth, height: height)
-            .scaleEffect(y: animating ? maxScale : minScale, anchor: .bottom)
-            .animation(
-                animating
-                    ? .easeInOut(duration: 0.45)
-                        .repeatForever(autoreverses: true)
-                        .delay(delay)
-                    : .easeOut(duration: 0.2),
-                value: animating
-            )
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+        withAnimation(Anim.content) {
+            for i in 0..<barCount {
+                levels[i] = 0.15
+            }
+        }
+    }
+}
+
+// MARK: - Cached cover thumbnail (shared — used in queue, search, add-to-playlist)
+
+/// Small cover thumbnail backed by AlbumCoverCache.
+/// Survives view recreation without flashing.
+struct CachedCoverThumbnail: View {
+    let coverArt: String?
+    var size: CGFloat = 48
+    var cornerRadius: CGFloat = 6
+
+    /// Convenience: accept either `coverArt` (String?) or legacy `id` label.
+    init(coverArt: String?, size: CGFloat = 48, cornerRadius: CGFloat = 6) {
+        self.coverArt = coverArt
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
+
+    /// Legacy init for SearchView (parameter named `id`).
+    init(id: String?, cornerRadius: CGFloat = 6) {
+        self.coverArt = id
+        self.size = 48
+        self.cornerRadius = cornerRadius
+    }
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.tertiarySystemFill)
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .foregroundStyle(.quaternary)
+                            .font(.system(size: size * 0.33))
+                    )
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .onAppear {
+            if image == nil, let coverArt, !coverArt.isEmpty {
+                image = AlbumCoverCache.shared.image(for: coverArt)
+            }
+        }
+        .task(id: coverArt) {
+            guard let coverArt, !coverArt.isEmpty else { return }
+            if let cached = AlbumCoverCache.shared.image(for: coverArt) {
+                image = cached
+                return
+            }
+            guard let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return }
+            AlbumCoverCache.shared.setImage(img, for: coverArt)
+            image = img
+        }
     }
 }
 

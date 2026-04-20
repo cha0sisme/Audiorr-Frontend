@@ -431,7 +431,7 @@ struct RecentContext: Identifiable, Decodable {
     let id: String
     var title: String
     let artist: String
-    let coverArtId: String?
+    var coverArtId: String?
     let lastPlayedAt: String
     var songCount: Int?
 }

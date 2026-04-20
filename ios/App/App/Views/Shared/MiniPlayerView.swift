@@ -89,7 +89,7 @@ struct MiniPlayerView: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             NowPlayingState.shared.viewerIsOpen = true
         }
-        .animation(.easeInOut(duration: 0.2), value: state.subtitle)
+        .animation(Anim.small, value: state.subtitle)
     }
 
     // MARK: - Idle Placeholder
@@ -121,29 +121,8 @@ struct MiniPlayerView: View {
         state.duration > 0 ? CGFloat(state.progress / state.duration) : 0
     }
 
-    @ViewBuilder
     private var artworkImage: some View {
-        if let urlStr = state.artworkUrl, let url = URL(string: urlStr) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                default:
-                    Rectangle()
-                        .fill(Color(.secondarySystemFill))
-                }
-            }
-        } else {
-            ZStack {
-                Rectangle()
-                    .fill(Color(.secondarySystemFill))
-                Image(systemName: "music.note")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-            }
-        }
+        MiniPlayerArtwork(coverArt: state.coverArt, artworkUrl: state.artworkUrl)
     }
 
     private func controlButton(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
@@ -155,5 +134,51 @@ struct MiniPlayerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Cached mini player artwork
+
+/// Uses AlbumCoverCache so the artwork survives tab switches without flashing.
+private struct MiniPlayerArtwork: View {
+    let coverArt: String
+    let artworkUrl: String?
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Rectangle()
+                        .fill(Color(.secondarySystemFill))
+                    Image(systemName: "music.note")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onAppear {
+            if image == nil, !coverArt.isEmpty {
+                image = AlbumCoverCache.shared.image(for: coverArt)
+            }
+        }
+        .task(id: coverArt) {
+            // Already cached — show instantly
+            if let cached = AlbumCoverCache.shared.image(for: coverArt) {
+                image = cached
+                return
+            }
+            // Download and cache
+            guard let urlStr = artworkUrl, let url = URL(string: urlStr),
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let img = UIImage(data: data) else { return }
+            AlbumCoverCache.shared.setImage(img, for: coverArt)
+            image = img
+        }
     }
 }

@@ -102,14 +102,23 @@ final class ArtistDetailViewModel: ObservableObject {
 struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
-    @Namespace private var heroNS
+    /// Namespace provided by the NavigationStack owner so that
+    /// `matchedTransitionSource` on cards aligns with the root-level
+    /// `navigationDestination(.zoom)` — SwiftUI only honours destinations
+    /// declared closest to the stack root.
+    var heroNamespace: Namespace.ID?
+    @Namespace private var localHeroNS
     var onDismiss: (() -> Void)?
+
+    /// Use parent namespace when available, local fallback otherwise.
+    private var heroNS: Namespace.ID { heroNamespace ?? localHeroNS }
 
     private let heroHeight: CGFloat = 400
     private let avatarSize: CGFloat = 160
 
-    init(artist: NavidromeArtist, onDismiss: (() -> Void)? = nil) {
+    init(artist: NavidromeArtist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
+        self.heroNamespace = heroNamespace
         self.onDismiss = onDismiss
     }
 
@@ -145,18 +154,6 @@ struct ArtistDetailView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 scrollY = y
             }
-        }
-        .navigationDestination(for: NavidromeAlbum.self) {
-            AlbumDetailView(album: $0)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
-        }
-        .navigationDestination(for: NavidromePlaylist.self) {
-            PlaylistDetailView(playlist: $0)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
-        }
-        .navigationDestination(for: NavidromeArtist.self) {
-            ArtistDetailView(artist: $0)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
         }
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbarColorScheme(isLight ? .light : .dark, for: .navigationBar)
@@ -379,7 +376,7 @@ struct ArtistDetailView: View {
                     Spacer()
                     if vm.topSongs.count > 5 {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { vm.showAllSongs.toggle() }
+                            withAnimation(Anim.small) { vm.showAllSongs.toggle() }
                         } label: {
                             Text(vm.showAllSongs ? "Ver menos" : "Ver más")
                                 .font(.system(size: 14, weight: .semibold))

@@ -113,6 +113,7 @@ struct SearchView: View {
     @ObservedObject private var vm = SearchViewModel.shared
     @FocusState private var searchFocused: Bool
     @State private var scrollY: CGFloat = 0
+    @Namespace private var heroNS
 
     var onPlaySong: ((NavidromeSong) -> Void)?
 
@@ -177,9 +178,15 @@ struct SearchView: View {
             }
             .navigationDestination(for: NavidromeAlbum.self) { album in
                 AlbumDetailView(album: album)
+                    .navigationTransition(.zoom(sourceID: album.id, in: heroNS))
             }
             .navigationDestination(for: NavidromeArtist.self) { artist in
-                ArtistDetailView(artist: artist)
+                ArtistDetailView(artist: artist, heroNamespace: heroNS)
+                    .navigationTransition(.zoom(sourceID: artist.id, in: heroNS))
+            }
+            .navigationDestination(for: NavidromePlaylist.self) { playlist in
+                PlaylistDetailView(playlist: playlist)
+                    .navigationTransition(.zoom(sourceID: playlist.id, in: heroNS))
             }
         }
     }
@@ -261,7 +268,7 @@ struct SearchView: View {
                 Spacer()
                 if vm.history.count > 1 {
                     Button("Borrar") {
-                        withAnimation { vm.clearHistory() }
+                        withAnimation(Anim.small) { vm.clearHistory() }
                     }
                     .font(.subheadline)
                 }
@@ -482,7 +489,7 @@ private struct ArtistSearchRow: View {
             }
 
             ArtistImageCache.shared.setImage(img, for: artist.id)
-            withAnimation(.easeOut(duration: 0.2)) {
+            withAnimation(Anim.small) {
                 avatarImage = img
                 didLoad = true
             }
@@ -544,48 +551,7 @@ private struct SongSearchRow: View {
 
 // MARK: - Cached cover thumbnail (uses AlbumCoverCache + URLSession instead of AsyncImage)
 
-private struct CachedCoverThumbnail: View {
-    let id: String?
-    var cornerRadius: CGFloat = 6
-
-    @State private var image: UIImage?
-
-    var body: some View {
-        ZStack {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Color(.tertiarySystemFill)
-                    .overlay(
-                        Image(systemName: "music.note")
-                            .foregroundStyle(.quaternary)
-                            .font(.system(size: 16))
-                    )
-            }
-        }
-        .frame(width: 48, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .task(id: id) {
-            guard let id, !id.isEmpty else { return }
-
-            // Check cache first
-            if let cached = AlbumCoverCache.shared.image(for: id) {
-                image = cached
-                return
-            }
-
-            // Download
-            guard let url = NavidromeService.shared.coverURL(id: id, size: 100),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
-                  let img = UIImage(data: data) else { return }
-
-            AlbumCoverCache.shared.setImage(img, for: id)
-            image = img
-        }
-    }
-}
+// CachedCoverThumbnail is now shared — defined in AlbumCardView.swift
 
 // MARK: - Preview
 

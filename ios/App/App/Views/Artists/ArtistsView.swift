@@ -203,7 +203,7 @@ struct ArtistsView: View {
             .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
             .navigationDestination(for: NavidromeArtist.self) {
-                ArtistDetailView(artist: $0)
+                ArtistDetailView(artist: $0, heroNamespace: heroNS)
                     .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
             }
             .navigationDestination(for: NavidromeAlbum.self) {
@@ -403,7 +403,7 @@ struct ArtistsView: View {
                 .padding(.bottom, 20)
 
             Button {
-                withAnimation(.easeInOut(duration: 0.25)) {
+                withAnimation(Anim.small) {
                     vm.showAllArtists.toggle()
                 }
             } label: {
@@ -430,7 +430,7 @@ struct ArtistsView: View {
                     HStack(spacing: 2) {
                         ForEach(vm.letters, id: \.self) { letter in
                             Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
+                                withAnimation(Anim.small) {
                                     proxy.scrollTo(letter, anchor: .top)
                                 }
                             } label: {
@@ -601,16 +601,16 @@ private struct ArtistRowCell: View {
                 return
             }
             guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artist.id) else {
-                withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
+                withAnimation(Anim.small) { didFinishLoading = true }
                 return
             }
             if let img = await ArtistImageCache.shared.loadImage(artistId: artist.id, url: url) {
-                withAnimation(.easeOut(duration: 0.25)) {
+                withAnimation(Anim.small) {
                     avatarImage = img
                     didFinishLoading = true
                 }
             } else {
-                withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
+                withAnimation(Anim.small) { didFinishLoading = true }
             }
         }
     }

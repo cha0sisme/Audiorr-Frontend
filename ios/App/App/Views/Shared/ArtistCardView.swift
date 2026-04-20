@@ -116,18 +116,18 @@ struct ArtistCardView: View {
 
         // 2. Resolve avatar URL (cached in NavidromeService for 5 min)
         guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artist.id) else {
-            withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
+            withAnimation(Anim.small) { didFinishLoading = true }
             return
         }
 
         // 3. Download with coalescing (deduplicates parallel requests for the same artist)
         if let img = await ArtistImageCache.shared.loadImage(artistId: artist.id, url: url) {
-            withAnimation(.easeOut(duration: 0.25)) {
+            withAnimation(Anim.small) {
                 avatarImage = img
                 didFinishLoading = true
             }
         } else {
-            withAnimation(.easeOut(duration: 0.25)) { didFinishLoading = true }
+            withAnimation(Anim.small) { didFinishLoading = true }
         }
     }
 }

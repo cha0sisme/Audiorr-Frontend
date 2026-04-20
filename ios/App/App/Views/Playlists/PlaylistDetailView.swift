@@ -611,15 +611,33 @@ struct PlaylistCoverImage: View {
     }
 }
 
+// MARK: - Playlist cover cache (RAM — survives tab switches)
+
+final class PlaylistCoverCache: @unchecked Sendable {
+    static let shared = PlaylistCoverCache()
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() { cache.countLimit = 200 }
+
+    func image(for playlistId: String) -> UIImage? {
+        cache.object(forKey: playlistId as NSString)
+    }
+
+    func setImage(_ image: UIImage, for playlistId: String) {
+        cache.setObject(image, forKey: playlistId as NSString)
+    }
+}
+
 // MARK: - PlaylistCoverView (grid thumbnail — PlaylistsView.swift)
 
 /// Thumbnail variant used in the playlists grid.
-/// Accepts an optional pre-loaded UIImage (nil for grid cells — loads via AsyncImage).
+/// Loads Navidrome cover instantly, then upgrades to backend cover if available.
+/// Cached in PlaylistCoverCache to survive tab switches without flashing.
 struct PlaylistCoverView: View {
     let playlist: NavidromePlaylist
     var size: CGFloat = 160
 
-    @State private var useBackend = true
     @State private var coverImage: UIImage?
     @State private var didFail = false
 
@@ -633,7 +651,11 @@ struct PlaylistCoverView: View {
             .task(id: playlist.id) { await loadCover() }
             .onAppear {
                 if coverImage == nil && !didFail {
-                    Task { await loadCover() }
+                    if let cached = PlaylistCoverCache.shared.image(for: playlist.id) {
+                        coverImage = cached
+                    } else {
+                        Task { await loadCover() }
+                    }
                 }
             }
     }
@@ -660,51 +682,34 @@ struct PlaylistCoverView: View {
     }
 
     private func loadCover() async {
-        guard coverImage == nil else { return }
-
-        let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id)
-        let navidromeURL = NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize)
-
-        // Try backend and Navidrome in parallel — use whichever responds first successfully
-        if let backendURL, let navidromeURL {
-            // Race both: backend cover (richer) vs Navidrome cover (faster fallback)
-            let img = await withTaskGroup(of: UIImage?.self, returning: UIImage?.self) { group in
-                group.addTask {
-                    guard let (data, resp) = try? await URLSession.shared.data(from: backendURL),
-                          let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                          let img = UIImage(data: data) else { return nil }
-                    return img
-                }
-                group.addTask {
-                    // Small delay to prefer backend cover if it's fast
-                    try? await Task.sleep(for: .milliseconds(300))
-                    guard let (data, resp) = try? await URLSession.shared.data(from: navidromeURL),
-                          let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                          let img = UIImage(data: data) else { return nil }
-                    return img
-                }
-                // Return the first successful result
-                for await result in group {
-                    if let result {
-                        group.cancelAll()
-                        return result
-                    }
-                }
-                return nil
-            }
-            if let img { coverImage = img; return }
-        } else {
-            // Only one URL available — try it directly
-            let url = backendURL ?? navidromeURL
-            if let url,
-               let (data, resp) = try? await URLSession.shared.data(from: url),
-               let http = resp as? HTTPURLResponse, http.statusCode == 200,
-               let img = UIImage(data: data) {
-                coverImage = img
-                return
-            }
+        // 1. Check cache (instant — survives tab switches)
+        if let cached = PlaylistCoverCache.shared.image(for: playlist.id) {
+            coverImage = cached
+            return
         }
 
+        // 2. Backend first (custom cover — preferred)
+        if BackendState.shared.isAvailable,
+           let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
+           let (data, resp) = try? await URLSession.shared.data(from: backendURL),
+           let http = resp as? HTTPURLResponse, http.statusCode == 200,
+           let img = UIImage(data: data) {
+            coverImage = img
+            PlaylistCoverCache.shared.setImage(img, for: playlist.id)
+            return
+        }
+
+        // 3. Navidrome fallback
+        if let navidromeURL = NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize),
+           let (data, resp) = try? await URLSession.shared.data(from: navidromeURL),
+           let http = resp as? HTTPURLResponse, http.statusCode == 200,
+           let img = UIImage(data: data) {
+            coverImage = img
+            PlaylistCoverCache.shared.setImage(img, for: playlist.id)
+            return
+        }
+
+        // 4. Nothing worked — show placeholder
         didFail = true
     }
 

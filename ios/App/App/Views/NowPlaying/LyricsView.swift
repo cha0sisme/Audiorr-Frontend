@@ -67,7 +67,7 @@ struct LyricsView: View {
             )
             .onChange(of: activeLineId) { _, newId in
                 guard !userIsScrolling, let id = newId else { return }
-                withAnimation(.easeInOut(duration: 0.35)) {
+                withAnimation(Anim.content) {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
@@ -103,7 +103,7 @@ struct LyricsView: View {
             .foregroundStyle(.white.opacity(isActive ? 1.0 : opacity))
             .scaleEffect(isActive ? 1.0 : 0.95, anchor: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(.easeInOut(duration: 0.3), value: isActive)
+            .animation(Anim.content, value: isActive)
             .contentShape(Rectangle())
     }
 

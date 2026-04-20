@@ -95,7 +95,7 @@ struct DownloadButton: View {
     private func handleTap() {
         switch downloadState {
         case .none:
-            withAnimation(.easeInOut(duration: 0.2)) { downloadState = .downloading }
+            withAnimation(Anim.small) { downloadState = .downloading }
             if groupType == "album" {
                 DownloadManager.shared.downloadAlbum(
                     albumId: groupId, title: title, songs: songs, pin: false
@@ -107,7 +107,7 @@ struct DownloadButton: View {
             }
         case .downloading:
             DownloadManager.shared.cancelGroup(groupId: groupId)
-            withAnimation(.easeInOut(duration: 0.2)) { downloadState = .none }
+            withAnimation(Anim.small) { downloadState = .none }
         case .downloaded, .pinned:
             break  // Context menu handles these
         }
@@ -117,10 +117,10 @@ struct DownloadButton: View {
         Task {
             if downloadState == .pinned {
                 await OfflineStorageManager.shared.unpinGroup(groupId: groupId)
-                withAnimation { downloadState = .downloaded }
+                withAnimation(Anim.small) { downloadState = .downloaded }
             } else {
                 await OfflineStorageManager.shared.pinGroup(groupId: groupId)
-                withAnimation { downloadState = .pinned }
+                withAnimation(Anim.small) { downloadState = .pinned }
             }
         }
     }
@@ -130,7 +130,7 @@ struct DownloadButton: View {
         for song in songs {
             Task { await OfflineStorageManager.shared.deleteFile(songId: song.id) }
         }
-        withAnimation { downloadState = .none }
+        withAnimation(Anim.small) { downloadState = .none }
     }
 
     // MARK: - State
@@ -163,7 +163,7 @@ struct DownloadButton: View {
         if let groupProg = DownloadManager.shared.groupProgress(groupId: groupId) {
             progress = groupProg
             if progress >= 1.0 {
-                withAnimation(.easeInOut(duration: 0.3)) { downloadState = .downloaded }
+                withAnimation(Anim.content) { downloadState = .downloaded }
             }
         }
     }
