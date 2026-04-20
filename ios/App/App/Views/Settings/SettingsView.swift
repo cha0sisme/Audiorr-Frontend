@@ -6,6 +6,8 @@ import SwiftUI
 final class SettingsViewModel: ObservableObject {
     @Published var isDjMode = false
     @Published var useReplayGain = true
+    @Published var crossfadeEnabled = true
+    @Published var crossfadeDuration: Double = 8  // seconds (2–15)
     @Published var scrobbleEnabled = false
 
     @Published var lastfmApiKey = ""
@@ -38,6 +40,8 @@ final class SettingsViewModel: ObservableObject {
 
         isDjMode = dict["isDjMode"] as? Bool ?? false
         useReplayGain = dict["useReplayGain"] as? Bool ?? true
+        crossfadeEnabled = dict["crossfadeEnabled"] as? Bool ?? true
+        crossfadeDuration = dict["crossfadeDuration"] as? Double ?? 8
     }
 
     private func saveJSSettings() {
@@ -45,6 +49,8 @@ final class SettingsViewModel: ObservableObject {
             "isDjMode": isDjMode,
             "useWebAudio": false,
             "useReplayGain": useReplayGain,
+            "crossfadeEnabled": crossfadeEnabled,
+            "crossfadeDuration": crossfadeDuration,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: dict),
               let json = String(data: data, encoding: .utf8)
@@ -61,6 +67,16 @@ final class SettingsViewModel: ObservableObject {
 
     func toggleReplayGain() {
         useReplayGain.toggle()
+        saveJSSettings()
+    }
+
+    func toggleCrossfade() {
+        crossfadeEnabled.toggle()
+        saveJSSettings()
+    }
+
+    func setCrossfadeDuration(_ value: Double) {
+        crossfadeDuration = value
         saveJSSettings()
     }
 
@@ -257,22 +273,62 @@ struct SettingsView: View {
             // ── Reproducción ──
             settingsSection(
                 header: "Reproducción",
-                footer: BackendState.shared.isAvailable
-                    ? "Modo DJ activa mezclas dinámicas. ReplayGain normaliza el volumen entre canciones."
-                    : "ReplayGain normaliza el volumen entre canciones."
+                footer: crossfadeFooter
             ) {
-                if BackendState.shared.isAvailable {
-                    settingsRow {
-                        Label("Modo DJ", systemImage: "dial.medium.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { vm.isDjMode },
-                            set: { _ in vm.toggleDjMode() }
-                        ))
-                        .labelsHidden()
-                    }
-                    Divider().padding(.leading, 16)
+                // Crossfade toggle (always visible)
+                settingsRow {
+                    Label("Crossfade", systemImage: "arrow.trianglehead.swap")
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { vm.crossfadeEnabled },
+                        set: { _ in vm.toggleCrossfade() }
+                    ))
+                    .labelsHidden()
                 }
+
+                // Duration slider (when crossfade is ON)
+                if vm.crossfadeEnabled {
+                    Divider().padding(.leading, 16)
+                    settingsRow {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label("Duración", systemImage: "timer")
+                                Spacer()
+                                Text("\(Int(vm.crossfadeDuration))s")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                            Slider(value: Binding(
+                                get: { vm.crossfadeDuration },
+                                set: { vm.setCrossfadeDuration($0) }
+                            ), in: 2...15, step: 1)
+                            .tint(.accentColor)
+                            HStack {
+                                Text("2s")
+                                Spacer()
+                                Text("15s")
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    // DJ mode (only when backend is available + crossfade ON)
+                    if BackendState.shared.isAvailable {
+                        Divider().padding(.leading, 16)
+                        settingsRow {
+                            Label("Modo DJ", systemImage: "dial.medium.fill")
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { vm.isDjMode },
+                                set: { _ in vm.toggleDjMode() }
+                            ))
+                            .labelsHidden()
+                        }
+                    }
+                }
+
+                Divider().padding(.leading, 16)
                 settingsRow {
                     Label("ReplayGain", systemImage: "speaker.wave.2.fill")
                     Spacer()
@@ -401,6 +457,21 @@ struct SettingsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 100)
+    }
+
+    // MARK: - Dynamic footers
+
+    private var crossfadeFooter: String {
+        if !vm.crossfadeEnabled {
+            return "Las canciones cambiarán sin transición. ReplayGain normaliza el volumen entre canciones."
+        }
+        if BackendState.shared.isAvailable && vm.isDjMode {
+            return "Modo DJ analiza las canciones para crear mezclas dinámicas inteligentes. La duración se ajusta automáticamente según el análisis. ReplayGain normaliza el volumen."
+        }
+        if BackendState.shared.isAvailable {
+            return "Crossfade mezcla las canciones con transiciones suaves. Con el backend conectado, el análisis optimiza los puntos de entrada y salida. ReplayGain normaliza el volumen."
+        }
+        return "Crossfade mezcla las canciones con una transición de \(Int(vm.crossfadeDuration))s. ReplayGain normaliza el volumen entre canciones."
     }
 
     // MARK: - Section / row helpers

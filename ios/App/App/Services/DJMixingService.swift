@@ -121,11 +121,17 @@ enum DJMixingService {
         bufferADuration: Double,
         bufferBDuration: Double,
         mode: MixMode,
-        currentPlaybackTimeA: Double? = nil
+        currentPlaybackTimeA: Double? = nil,
+        userFadeDuration: Double? = nil
     ) -> CrossfadeResult {
+        // Sanitize all analysis data before any calculations.
+        // Protects against out-of-range values from the backend.
+        let safeCurrent = currentAnalysis.map { sanitize($0, duration: bufferADuration) }
+        let safeNext = nextAnalysis.map { sanitize($0, duration: bufferBDuration) }
+
         let entry = calculateSmartEntryPoint(
-            nextAnalysis: nextAnalysis,
-            currentAnalysis: currentAnalysis,
+            nextAnalysis: safeNext,
+            currentAnalysis: safeCurrent,
             bufferDuration: bufferBDuration,
             mode: mode,
             currentPlaybackTimeA: currentPlaybackTimeA
@@ -135,14 +141,15 @@ enum DJMixingService {
             entryPoint: entry.entryPoint,
             bufferADuration: bufferADuration,
             bufferBDuration: bufferBDuration,
-            currentAnalysis: currentAnalysis,
-            nextAnalysis: nextAnalysis,
-            mode: mode
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
+            mode: mode,
+            userFadeDuration: userFadeDuration
         )
 
         let filter = decideFilterUsage(
-            currentAnalysis: currentAnalysis,
-            nextAnalysis: nextAnalysis,
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
             fadeDuration: fade.duration,
             mode: mode
         )
@@ -153,8 +160,8 @@ enum DJMixingService {
         )
 
         let transition = decideTransitionType(
-            currentAnalysis: currentAnalysis,
-            nextAnalysis: nextAnalysis,
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
             isBeatSynced: entry.isBeatSynced,
@@ -166,22 +173,22 @@ enum DJMixingService {
         )
 
         let timeStretch = decideTimeStretch(
-            currentAnalysis: currentAnalysis,
-            nextAnalysis: nextAnalysis,
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
             transitionType: transition.type
         )
 
-        let eA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
-        let eB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
+        let eA = (safeCurrent?.hasError != true) ? (safeCurrent?.energy ?? 0.5) : 0.5
+        let eB = (safeNext?.hasError != true) ? (safeNext?.energy ?? 0.5) : 0.5
 
-        let biA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.beatInterval ?? 0) : 0
-        let rawBiB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.beatInterval ?? 0) : 0
+        let biA = (safeCurrent?.hasError != true) ? (safeCurrent?.beatInterval ?? 0) : 0
+        let rawBiB = (safeNext?.hasError != true) ? (safeNext?.beatInterval ?? 0) : 0
         // When time-stretch is active, B's effective beat interval changes by 1/rateB
         // (faster playback = shorter beat intervals in wall-clock time)
         let biB = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawBiB / Double(timeStretch.rateB) : rawBiB
-        let dbA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.downbeatTimes ?? []) : []
-        let rawDbB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.downbeatTimes ?? []) : []
+        let dbA = (safeCurrent?.hasError != true) ? (safeCurrent?.downbeatTimes ?? []) : []
+        let rawDbB = (safeNext?.hasError != true) ? (safeNext?.downbeatTimes ?? []) : []
         // Adjust B's downbeat times for time-stretch (wall-clock positions shift)
         let dbB: [Double] = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawDbB.map { $0 / Double(timeStretch.rateB) } : rawDbB
@@ -217,6 +224,29 @@ enum DJMixingService {
         let isBeatSynced: Bool
     }
 
+    /// Clamp analysis timing values to valid range [0, duration].
+    /// Protects against bad backend data (e.g. introEndTime=500 for a 200s song).
+    private static func sanitize(_ analysis: SongAnalysis, duration: Double) -> SongAnalysis {
+        var a = analysis
+        let maxT = max(0, duration)
+        a.introEndTime = min(max(0, a.introEndTime), maxT)
+        a.outroStartTime = min(max(0, a.outroStartTime), maxT)
+        a.vocalStartTime = min(max(0, a.vocalStartTime), maxT)
+        a.chorusStartTime = min(max(0, a.chorusStartTime), maxT)
+        a.phraseBoundaries = a.phraseBoundaries.filter { $0 >= 0 && $0 <= maxT }
+        a.downbeatTimes = a.downbeatTimes.filter { $0 >= 0 && $0 <= maxT }
+        a.speechSegments = a.speechSegments.compactMap { seg in
+            let s = max(0, seg.start)
+            let e = min(maxT, seg.end)
+            return s < e ? (start: s, end: e) : nil
+        }
+        // BPM sanity: reject extreme values
+        if a.bpm < 30 || a.bpm > 300 { a.bpm = 120 }
+        // Energy sanity: clamp to [0, 1]
+        a.energy = min(max(0, a.energy), 1)
+        return a
+    }
+
     static func calculateSmartEntryPoint(
         nextAnalysis: SongAnalysis?,
         currentAnalysis: SongAnalysis?,
@@ -231,10 +261,12 @@ enum DJMixingService {
         var usedFallback = false
         var isBeatSynced = false
 
-        guard let next = nextAnalysis, !next.hasError else {
+        guard let rawNext = nextAnalysis, !rawNext.hasError else {
             entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
             return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "", usedFallback: true, isBeatSynced: false)
         }
+
+        let next = sanitize(rawNext, duration: bufferDuration)
 
         let introEndTime = next.introEndTime
         let vocalStartTime = next.vocalStartTime
@@ -439,10 +471,15 @@ enum DJMixingService {
         bufferBDuration: Double,
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis?,
-        mode: MixMode
+        mode: MixMode,
+        userFadeDuration: Double? = nil
     ) -> FadeDurationResult {
         let config = configs[mode]!
-        var fadeDuration = config.baseFadeDuration
+        // Use user's custom duration as the base when provided.
+        // The intelligent algorithm (DJ/Normal) will still adapt it based on analysis,
+        // but the user's preference anchors the starting point.
+        let baseDuration = userFadeDuration ?? config.baseFadeDuration
+        var fadeDuration = baseDuration
         var decision = "Usando duracion base (\(fadeDuration)s)."
 
         let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError == false
@@ -475,8 +512,8 @@ enum DJMixingService {
                 fadeDuration = max(config.minFadeDuration, min(config.maxFadeDuration - 2, outroADuration * 0.8))
                 decision = "Adaptada a outro (\(String(format: "%.2f", outroADuration))s) → \(String(format: "%.2f", fadeDuration))s."
             } else {
-                fadeDuration = mode == .dj ? 5 : 6
-                decision = "Duración extendida por canción abrupta: \(fadeDuration)s."
+                fadeDuration = userFadeDuration ?? (mode == .dj ? 5 : 6)
+                decision = "Duración por canción abrupta: \(fadeDuration)s."
             }
 
             // Energy flow dropdown
@@ -498,10 +535,9 @@ enum DJMixingService {
                 decision += " Reducido 25% por clash armonico a \(String(format: "%.2f", fadeDuration))s."
             }
         } else {
-            if bufferADuration < 30 || nextAnalysis == nil {
-                fadeDuration = 3
-                decision = "Duracion corta de seguridad: \(fadeDuration)s."
-            }
+            // No analysis available — use user's duration or a safe default.
+            fadeDuration = userFadeDuration ?? (bufferADuration < 30 ? 3 : baseDuration)
+            decision = "Sin analisis — duracion \(String(format: "%.0f", fadeDuration))s."
         }
 
         // Absolute max: 25% of the shorter track
@@ -509,6 +545,16 @@ enum DJMixingService {
         if fadeDuration > absoluteMax {
             fadeDuration = max(2, absoluteMax)
             decision += " Acortado por limite 25% a \(String(format: "%.2f", fadeDuration))s."
+        }
+
+        // Cap fade to B's available audio after entry point.
+        // Without this, if B is 20s and entry is at 5s, a 6s fade would end at 11s
+        // but B only has 15s of audio — if B ends before fade completes, there's a gap.
+        // Leave 2s buffer so B doesn't end right as the fade finishes.
+        let bAvailable = bufferBDuration - entryPoint - 2.0
+        if bAvailable > 0 && fadeDuration > bAvailable {
+            fadeDuration = max(2, bAvailable)
+            decision += " Acortado por B corta (disponible: \(String(format: "%.1f", bAvailable + 2))s) a \(String(format: "%.2f", fadeDuration))s."
         }
 
         return FadeDurationResult(duration: max(2, fadeDuration), decision: decision)
@@ -837,4 +883,5 @@ enum DJMixingService {
 
         return HarmonicPenalty(distance: totalDistance, compatibility: compatibility)
     }
+
 }

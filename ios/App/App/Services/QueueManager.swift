@@ -45,21 +45,30 @@ final class QueueManager: AudioEngineDelegate {
     private let api = NavidromeService.shared
     private var isAdvancingTrack = false
 
-    /// Read user settings for DJ mode and ReplayGain from UserDefaults.
-    private var isDjMode: Bool {
+    /// Read user settings from UserDefaults (audiorr_settings JSON dict).
+    private var settingsDict: [String: Any]? {
         guard let json = UserDefaults.standard.string(forKey: "audiorr_settings"),
               let data = json.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return false }
-        return dict["isDjMode"] as? Bool ?? false
+        else { return nil }
+        return dict
+    }
+
+    private var isDjMode: Bool {
+        settingsDict?["isDjMode"] as? Bool ?? false
     }
 
     private var useReplayGain: Bool {
-        guard let json = UserDefaults.standard.string(forKey: "audiorr_settings"),
-              let data = json.data(using: .utf8),
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return true }
-        return dict["useReplayGain"] as? Bool ?? true
+        settingsDict?["useReplayGain"] as? Bool ?? true
+    }
+
+    private var crossfadeEnabled: Bool {
+        settingsDict?["crossfadeEnabled"] as? Bool ?? true
+    }
+
+    /// User-configured crossfade duration (seconds). Used as base/override depending on mode.
+    private var crossfadeDuration: Double {
+        settingsDict?["crossfadeDuration"] as? Double ?? 8
     }
 
     /// Get the effective ReplayGain multiplier for a song (1.0 if disabled).
@@ -258,6 +267,16 @@ final class QueueManager: AudioEngineDelegate {
 
     func remove(at index: Int) {
         guard index >= 0 && index < queue.count else { return }
+
+        // If removing the NEXT song while crossfading into it, cancel the crossfade.
+        // The crossfade is transitioning to queue[currentIndex+1] — removing it would
+        // leave the executor playing a song that's no longer in the queue.
+        let isCrossfading = AudioEngineManager.shared?.isCrossfading == true
+        if isCrossfading && index == currentIndex + 1 {
+            AudioEngineManager.shared?.cancelCrossfade()
+            print("[QueueManager] Cancelled crossfade: next song removed from queue")
+        }
+
         let removed = queue.remove(at: index)
         originalQueue.removeAll { $0.id == removed.id }
 
@@ -279,6 +298,12 @@ final class QueueManager: AudioEngineDelegate {
     }
 
     func move(from source: IndexSet, to destination: Int) {
+        // Cancel crossfade if the next song (being faded into) is moved away
+        if AudioEngineManager.shared?.isCrossfading == true,
+           let first = source.first, first == currentIndex + 1 {
+            AudioEngineManager.shared?.cancelCrossfade()
+            print("[QueueManager] Cancelled crossfade: next song moved in queue")
+        }
         queue.move(fromOffsets: source, toOffset: destination)
         // Recalculate currentIndex if needed
         if let first = source.first {
@@ -295,11 +320,17 @@ final class QueueManager: AudioEngineDelegate {
 
     func clearUpcoming() {
         guard currentIndex >= 0 else { return }
+        // Cancel crossfade if in progress — the next song is being removed
+        if AudioEngineManager.shared?.isCrossfading == true {
+            AudioEngineManager.shared?.cancelCrossfade()
+            print("[QueueManager] Cancelled crossfade: upcoming queue cleared")
+        }
         queue = Array(queue.prefix(currentIndex + 1))
         persistState()
     }
 
     func clear() {
+        // stop() already handles crossfade cancellation internally
         AudioEngineManager.shared?.stop()
         queue = []
         originalQueue = []
@@ -426,6 +457,15 @@ final class QueueManager: AudioEngineDelegate {
             if currentIndex < queue.count - 1 {
                 if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
+
+                // CRITICAL: Read fresh values from the engine BEFORE syncing UI.
+                // Without this, syncNowPlayingState() uses stale currentTime/duration
+                // from the old song, causing progress bar overflow and time glitches.
+                if let engine = AudioEngineManager.shared {
+                    self.currentTime = engine.currentTime()
+                    self.duration = engine.currentSongDuration
+                }
+
                 persistState()
                 syncNowPlayingState()
 
@@ -511,6 +551,13 @@ final class QueueManager: AudioEngineDelegate {
         guard let streamURL = api.streamURL(songId: nextSong.id) else { return }
         let currentStreamURL = api.streamURL(songId: current.id)
 
+        // If crossfade is disabled, don't set any automix trigger.
+        // Songs will transition via audioEngineDidFinishSong (natural end).
+        guard crossfadeEnabled else {
+            print("[QueueManager] Crossfade disabled — skipping automix preparation")
+            return
+        }
+
         // Increment preparation ID so stale async results are discarded
         crossfadePreparationId += 1
         let thisPreparationId = crossfadePreparationId
@@ -563,7 +610,9 @@ final class QueueManager: AudioEngineDelegate {
                 // (Navidrome sometimes returns null duration; AVPlayerItem resolves it later).
                 let metaDuration = current.duration
                 let engineDuration = self.duration  // fed by audioEngineProgressUpdate
-                let currentDuration = metaDuration > 0 ? metaDuration : (engineDuration > 0 ? engineDuration : 0)
+                // Prefer engine duration (derived from actual file frames) over metadata.
+                // Metadata from Navidrome can be wrong for re-encoded/VBR files.
+                let currentDuration = engineDuration > 0 ? engineDuration : (metaDuration > 0 ? metaDuration : 0)
                 let nextMetaDuration = nextSong.duration
                 // When next song duration is unknown, use a generous default (5 min).
                 // This prevents the 25%-of-shortest-track cap from crushing the fade to 2s.
@@ -622,7 +671,8 @@ final class QueueManager: AudioEngineDelegate {
                     nextAnalysis: nextSongAnalysis,
                     bufferADuration: currentDuration,
                     bufferBDuration: nextDuration,
-                    mode: self.isDjMode ? .dj : .normal
+                    mode: self.isDjMode ? .dj : .normal,
+                    userFadeDuration: self.crossfadeDuration
                 )
 
                 // Map to CrossfadeExecutor.Config
@@ -656,18 +706,72 @@ final class QueueManager: AudioEngineDelegate {
                     downbeatTimesB: crossfadeResult.downbeatTimesB
                 )
 
+                // ── Trailing silence on A (analysis-based) ──
+                // Use speechSegments to find where audio really ends.
+                // If the last speech/audio is well before file end, there's trailing silence.
+                // Without backend (no analysis), we use full duration — users can disable crossfade.
+                var effectiveDuration = currentDuration
+                if currentSongAnalysis.hasOutroData && !currentSongAnalysis.speechSegments.isEmpty {
+                    let lastAudioEnd = currentSongAnalysis.speechSegments.map(\.end).max() ?? currentDuration
+                    if lastAudioEnd < currentDuration - 3 {
+                        effectiveDuration = lastAudioEnd + 1.0
+                        print("[QueueManager] 🔇 Trailing silence: audio ends ~\(String(format: "%.1f", lastAudioEnd))s, file=\(String(format: "%.1f", currentDuration))s")
+                    }
+                }
+
+                // ── Leading silence on B (analysis-based) ──
+                // If B's entry point is at 0 but vocal/chorus starts later, skip past silence.
+                var adjustedEntryPoint = crossfadeResult.entryPoint
+
+                // Update config with adjusted entry point if needed
+                let finalConfig: CrossfadeExecutor.Config
+                if adjustedEntryPoint != crossfadeResult.entryPoint {
+                    finalConfig = CrossfadeExecutor.Config(
+                        entryPoint: adjustedEntryPoint,
+                        fadeDuration: config.fadeDuration,
+                        transitionType: config.transitionType,
+                        useFilters: config.useFilters,
+                        useAggressiveFilters: config.useAggressiveFilters,
+                        needsAnticipation: config.needsAnticipation,
+                        anticipationTime: config.anticipationTime,
+                        useTimeStretch: config.useTimeStretch,
+                        rateA: config.rateA,
+                        rateB: config.rateB,
+                        energyA: config.energyA,
+                        energyB: config.energyB,
+                        beatIntervalA: config.beatIntervalA,
+                        beatIntervalB: config.beatIntervalB,
+                        downbeatTimesA: config.downbeatTimesA,
+                        downbeatTimesB: config.downbeatTimesB
+                    )
+                } else {
+                    finalConfig = config
+                }
+
                 // Set automix trigger on engine.
                 // triggerTime = when in song A the crossfade should START.
                 // entryPoint = where in song B to begin playing (NOT the trigger).
-                // Use outroStartTime of song A, falling back to (duration - fadeDuration).
+                // Use outroStartTime of song A, falling back to (effectiveDuration - fadeDuration).
                 let outroStart = currentSongAnalysis.outroStartTime
                 var triggerTime: Double
-                if outroStart > 0 && outroStart < currentDuration - 5 {
+                if outroStart > 0 && outroStart < effectiveDuration - 5 {
                     // Use analysis-based outro start
                     triggerTime = outroStart
                 } else {
-                    // Fallback: start crossfade `fadeDuration` seconds before song A ends
-                    triggerTime = max(0, currentDuration - crossfadeResult.fadeDuration - 2)
+                    // Fallback: start crossfade `fadeDuration` seconds before effective end
+                    triggerTime = max(0, effectiveDuration - crossfadeResult.fadeDuration - 2)
+                }
+
+                // CRITICAL: For CUT_A type transitions (A ends abruptly), the trigger must be
+                // early enough so B reaches full volume BEFORE A cuts. The fade duration is the
+                // time B needs to ramp up — trigger must be at least fadeDuration before effective end.
+                // Without this, A cuts while B is still at partial volume → audible gap.
+                if executorType == .cutAFadeInB || executorType == .cut || executorType == .eqMix {
+                    let minTrigger = effectiveDuration - crossfadeResult.fadeDuration - 1
+                    if triggerTime > minTrigger {
+                        triggerTime = max(0, minTrigger)
+                        print("[QueueManager] Adjusted trigger for abrupt-A transition: \(String(format: "%.1f", triggerTime))s (ensures B reaches full volume)")
+                    }
                 }
 
                 // Safety: if we already passed the trigger point (e.g. after a seek),
@@ -676,9 +780,9 @@ final class QueueManager: AudioEngineDelegate {
                 let nowTime = AudioEngineManager.shared?.currentTime() ?? 0
                 if nowTime >= triggerTime {
                     // We're already past the ideal crossfade point.
-                    // Set trigger to (duration - 3s) to at least transition at the very end,
+                    // Set trigger to (effectiveDuration - 3s) to at least transition at the very end,
                     // but only if there's still enough time left.
-                    let safeTime = currentDuration - 3.0
+                    let safeTime = effectiveDuration - 3.0
                     if nowTime < safeTime {
                         triggerTime = safeTime
                         print("[QueueManager] ⚠️ Already past trigger \(String(format: "%.1f", outroStart))s, moving to safe fallback \(String(format: "%.1f", triggerTime))s")
@@ -690,9 +794,9 @@ final class QueueManager: AudioEngineDelegate {
                     }
                 }
 
-                AudioEngineManager.shared?.setAutomixTrigger(triggerTime: triggerTime, config: config)
+                AudioEngineManager.shared?.setAutomixTrigger(triggerTime: triggerTime, config: finalConfig)
 
-                print("[QueueManager] Crossfade prepared: \(executorType.rawValue) trigger=\(String(format: "%.1f", triggerTime))s (outro=\(String(format: "%.1f", outroStart))s, dur=\(String(format: "%.1f", currentDuration))s, now=\(String(format: "%.1f", nowTime))s), fade=\(String(format: "%.1f", crossfadeResult.fadeDuration))s, B-entry=\(String(format: "%.1f", crossfadeResult.entryPoint))s")
+                print("[QueueManager] Crossfade prepared: \(executorType.rawValue) trigger=\(String(format: "%.1f", triggerTime))s (outro=\(String(format: "%.1f", outroStart))s, effDur=\(String(format: "%.1f", effectiveDuration))s, dur=\(String(format: "%.1f", currentDuration))s, now=\(String(format: "%.1f", nowTime))s), fade=\(String(format: "%.1f", crossfadeResult.fadeDuration))s, B-entry=\(String(format: "%.1f", adjustedEntryPoint))s")
             }
         }
     }

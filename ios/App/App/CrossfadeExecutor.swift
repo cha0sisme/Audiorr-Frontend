@@ -222,7 +222,7 @@ class CrossfadeExecutor {
 
         // Seleccionar preset
         // Energy-down: if B is significantly less energetic, use lowpass sweep on A
-        let isEnergyDown = config.energyB < config.energyA - 0.2 && config.useFilters
+        let isEnergyDown = config.energyB < config.energyA - 0.2
         if config.needsAnticipation {
             preset = Self.presetAnticipation
         } else if isEnergyDown {
@@ -391,6 +391,12 @@ class CrossfadeExecutor {
             // limpie isCrossfading y no quede en estado fantasma.
             print("[CrossfadeExecutor] ⚠️ Setup falló (sin frames en B) — restaurando A")
             mixerA.outputVolume = maxVolumeA
+            // Reset EQ and time-stretch that setupInitialEQ/setupTimeStretch already applied
+            for i in 0..<min(eqA.bands.count, 2) {
+                eqA.bands[i].bypass = true
+                eqB.bands[i].bypass = true
+            }
+            resetTimeStretch()
             isCancelled = true
             DispatchQueue.main.async { [weak self] in
                 self?.onComplete?(0)
@@ -457,15 +463,25 @@ class CrossfadeExecutor {
     private var hasBeatData: Bool = false
 
     private func setupInitialEQ() {
-        // Determine if bass management is needed:
-        // - Always for BEAT_MATCH_BLEND (two kicks without bass swap = flamming)
-        // - Whenever filters are active and we have a lowshelfA preset
-        useBassManagement = (config.useFilters && preset.lowshelfA != nil) ||
-            config.transitionType == .beatMatchBlend || config.transitionType == .eqMix
-        useLowpassA = preset.lowpassA != nil && config.useFilters
+        // EQ filters ALWAYS active during crossfade — they are the core of a
+        // professional-sounding transition. config.useFilters/useAggressiveFilters
+        // now only influence preset selection (normal vs aggressive), not whether
+        // filters run at all.
 
-        if config.useFilters {
-            // Highpass A
+        // Bass management: always when preset supports it, forced for beat-match types
+        useBassManagement = preset.lowshelfA != nil ||
+            config.transitionType == .beatMatchBlend || config.transitionType == .eqMix
+        useLowpassA = preset.lowpassA != nil
+
+        // ── Player A: highpass (or lowpass for energy-down) ──
+        if useLowpassA, let lpA = preset.lowpassA {
+            // Lowpass sweep on A for energy-down transitions: song "goes dark"
+            eqA.bands[0].bypass = false
+            eqA.bands[0].filterType = .lowPass
+            eqA.bands[0].frequency = lpA.startFreq
+            eqA.bands[0].bandwidth = qToBandwidth(lpA.q)
+        } else {
+            // Highpass A: sweeps up to thin out the outgoing song
             eqA.bands[0].bypass = false
             eqA.bands[0].filterType = .highPass
             eqA.bands[0].frequency = preset.highpassA.startFreq
@@ -480,32 +496,16 @@ class CrossfadeExecutor {
             eqA.bands[1].gain = lsA.startGain
         }
 
-        // Lowpass sweep on A for energy-down transitions
-        // Reuse band[0] as lowpass instead of highpass when lowpassA is set
-        if useLowpassA, let lpA = preset.lowpassA {
-            eqA.bands[0].bypass = false
-            eqA.bands[0].filterType = .lowPass
-            eqA.bands[0].frequency = lpA.startFreq
-            eqA.bands[0].bandwidth = qToBandwidth(lpA.q)
-        }
+        // ── Player B: highpass sweep (bass gradually enters) + lowshelf ──
+        eqB.bands[0].bypass = false
+        eqB.bands[0].filterType = .highPass
+        eqB.bands[0].frequency = preset.highpassB.startFreq
+        eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
 
-        if config.useFilters || config.needsAnticipation {
-            eqB.bands[0].bypass = false
-            eqB.bands[0].frequency = preset.highpassB.startFreq
-            eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
-
-            eqB.bands[1].bypass = false
-            eqB.bands[1].filterType = .lowShelf
-            eqB.bands[1].frequency = preset.lowshelfB.frequency
-            eqB.bands[1].gain = preset.lowshelfB.startGain
-        } else if useBassManagement {
-            // Force bass management on B even without general filters
-            // (BEAT_MATCH_BLEND without filters still needs bass coordination)
-            eqB.bands[1].bypass = false
-            eqB.bands[1].filterType = .lowShelf
-            eqB.bands[1].frequency = preset.lowshelfB.frequency
-            eqB.bands[1].gain = preset.lowshelfB.startGain
-        }
+        eqB.bands[1].bypass = false
+        eqB.bands[1].filterType = .lowShelf
+        eqB.bands[1].frequency = preset.lowshelfB.frequency
+        eqB.bands[1].gain = preset.lowshelfB.startGain
 
         // Copy global EQ (bands 2-5) from A to B
         for i in 2..<6 {
@@ -514,16 +514,6 @@ class CrossfadeExecutor {
             eqB.bands[i].frequency = eqA.bands[i].frequency
             eqB.bands[i].bandwidth = eqA.bands[i].bandwidth
             eqB.bands[i].gain = eqA.bands[i].gain
-        }
-
-        if !config.useFilters && !config.needsAnticipation && !useBassManagement {
-            for i in 0..<2 {
-                eqB.bands[i].bypass = eqA.bands[i].bypass
-                eqB.bands[i].filterType = eqA.bands[i].filterType
-                eqB.bands[i].frequency = eqA.bands[i].frequency
-                eqB.bands[i].bandwidth = eqA.bands[i].bandwidth
-                eqB.bands[i].gain = eqA.bands[i].gain
-            }
         }
     }
 
@@ -679,14 +669,9 @@ class CrossfadeExecutor {
         mixerA.outputVolume = gA
         mixerB.outputVolume = gB
 
-        // ── Filter automation ──
-        if config.useFilters || useLowpassA || useBassManagement {
-            applyFiltersA(at: t)
-        }
-
-        if config.useFilters || config.needsAnticipation || useBassManagement {
-            applyFiltersB(at: t)
-        }
+        // ── Filter automation (always active on both players) ──
+        applyFiltersA(at: t)
+        applyFiltersB(at: t)
 
         // ── Time-stretch rate automation for A ──
         // A ramps from 1.0 → config.rateA during the fade, using a stepped curve
@@ -790,6 +775,7 @@ class CrossfadeExecutor {
         let lsB = eqB.bands[1]
 
         if config.needsAnticipation {
+            // Anticipation: multi-phase sweep with teaser section
             if t < timings.filterStartTime {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return }
@@ -812,13 +798,14 @@ class CrossfadeExecutor {
                 hpB.frequency = preset.highpassB.endFreq
                 lsB.gain = preset.lowshelfB.endGain
             }
-        } else if config.useFilters {
+        } else {
+            // Standard: highpass sweep + bass ramp during fade-in
             guard t >= timings.fadeInStartTime else { return }
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
             guard dur > 0 else { return }
             let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
             hpB.frequency = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
-            // Beat-aligned bass ramp: B's bass reaches full at bassSwapTime
+            // Beat-aligned bass ramp when available, otherwise linear
             if useBassManagement {
                 let bassDur = bassSwapTime - timings.fadeInStartTime
                 let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
@@ -826,13 +813,6 @@ class CrossfadeExecutor {
             } else {
                 lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
             }
-        } else if useBassManagement {
-            // Bass management only (no general filters) — BEAT_MATCH_BLEND without filters
-            // Beat-aligned: B's bass reaches full at bassSwapTime
-            guard t >= timings.fadeInStartTime else { return }
-            let bassDur = bassSwapTime - timings.fadeInStartTime
-            let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
-            lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, bassP)
         }
     }
 

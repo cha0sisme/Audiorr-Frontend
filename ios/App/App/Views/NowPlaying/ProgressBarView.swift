@@ -79,7 +79,7 @@ struct ProgressBarView: View {
                 Spacer()
 
                 if state.isCrossfading {
-                    WaveText("AutoMix", font: .caption2.weight(.bold), color: .cyan)
+                    WaveText("AutoMix", font: .caption2.weight(.bold), color: .white)
                         .transition(.opacity.combined(with: .scale))
                 }
 
@@ -98,6 +98,13 @@ struct ProgressBarView: View {
             lastSyncProgress = newProgress
             lastSyncTime = .now
             interpolatedProgress = newProgress
+        }
+        .onChange(of: state.songId) { _, _ in
+            // Song changed (crossfade completed or track advanced) — hard-reset interpolation
+            // to prevent stale values from old song bleeding through
+            interpolatedProgress = state.progress
+            lastSyncProgress = state.progress
+            lastSyncTime = .now
         }
     }
 
@@ -126,14 +133,15 @@ struct ProgressBarView: View {
     // MARK: - Helpers
 
     private var smoothFraction: CGFloat {
-        state.duration > 0 ? CGFloat(interpolatedProgress / state.duration) : 0
+        guard state.duration > 0 else { return 0 }
+        return min(max(CGFloat(interpolatedProgress / state.duration), 0), 1)
     }
 
     private var displayedTime: Double {
         if isDragging {
             return Double(dragFraction) * state.duration
         }
-        return interpolatedProgress
+        return min(max(interpolatedProgress, 0), state.duration)
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -157,8 +165,8 @@ struct WaveText: View {
 
     @State private var startDate: Date?
 
-    init(_ text: String, font: Font = .caption2.weight(.bold), color: Color = .cyan,
-         cycleDuration: Double = 1.4) {
+    init(_ text: String, font: Font = .caption2.weight(.bold), color: Color = .white,
+         cycleDuration: Double = 2.8) {
         self.text = text
         self.font = font
         self.color = color
@@ -174,7 +182,7 @@ struct WaveText: View {
                 ForEach(Array(text.enumerated()), id: \.offset) { index, char in
                     let delay = Double(index) / Double(max(1, text.count))
                     let wave = sin((phase - delay) * 2.0 * .pi)
-                    let opacity = 0.3 + 0.7 * ((wave + 1.0) / 2.0)
+                    let opacity = 0.5 + 0.5 * ((wave + 1.0) / 2.0)
 
                     Text(String(char))
                         .font(font)
