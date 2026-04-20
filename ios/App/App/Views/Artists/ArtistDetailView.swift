@@ -11,7 +11,8 @@ final class ArtistDetailViewModel: ObservableObject {
     @Published var playlists: [NavidromePlaylist] = []
     @Published var info: ArtistInfo?
 
-    @Published var isLoading = true
+    @Published var isLoadingAlbums = true
+    @Published var isLoadingSongs = true
     @Published var isLoadingPlayback = false
     @Published var infoIsLoading = true
     @Published var playlistsAreLoading = true
@@ -29,25 +30,35 @@ final class ArtistDetailViewModel: ObservableObject {
         self.avatarImage = ArtistImageCache.shared.image(for: artist.id)
     }
 
-    /// Critical first pass: albums + avatar + top songs. Everything else loads
-    /// in `loadSecondary()` so the page paints ASAP.
+    /// Each section loads and publishes independently — no global spinner.
+    /// The hero (avatar + palette) loads first, then albums and songs arrive
+    /// in parallel. Each section appears as soon as its data is ready.
     func load() async {
         guard albums.isEmpty else { return }
-        isLoading = true
-        defer { isLoading = false }
 
-        async let albumsTask = api.getArtistDetail(artistId: artist.id)
-        async let avatarTask = fetchAvatar()
-        async let songsTask  = api.getArtistSongs(artistName: artist.name, count: 10)
+        // Fire all three in parallel — each publishes independently
+        async let avatarDone: Void = loadAvatar()
+        async let albumsDone: Void = loadAlbums()
+        async let songsDone: Void = loadSongs()
 
-        if let (ar, albums) = try? await albumsTask {
+        _ = await (avatarDone, albumsDone, songsDone)
+    }
+
+    private func loadAlbums() async {
+        if let (ar, albums) = try? await api.getArtistDetail(artistId: artist.id) {
             self.albums = albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
             if let ar { self.artist = ar }
         }
+        isLoadingAlbums = false
+    }
 
-        self.topSongs = await songsTask
+    private func loadSongs() async {
+        self.topSongs = await api.getArtistSongs(artistName: artist.name, count: 10)
+        isLoadingSongs = false
+    }
 
-        if let img = await avatarTask {
+    private func loadAvatar() async {
+        if let img = await fetchAvatar() {
             self.avatarImage = img
             let extracted = await Task.detached(priority: .userInitiated) {
                 ColorExtractor.extract(from: img)
@@ -129,6 +140,7 @@ struct ArtistDetailView: View {
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
+    private var skeletonColor: Color { isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10) }
 
     // Deterministic color from artist name (fallback when no avatar)
     private var nameColor: Color {
@@ -318,7 +330,7 @@ struct ArtistDetailView: View {
             .padding(.vertical, 10)
             .background(fillColor, in: Capsule())
         }
-        .disabled(vm.isLoading || vm.isLoadingPlayback || vm.albums.isEmpty)
+        .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
     }
 
     @ViewBuilder
@@ -343,31 +355,43 @@ struct ArtistDetailView: View {
 
     // MARK: - Content sections
 
-    @ViewBuilder
     private var contentSections: some View {
-        if vm.isLoading {
-            ProgressView()
-                .tint(isLight ? .secondary : .white)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 32)
-        } else {
-            VStack(alignment: .leading, spacing: 28) {
-                popularesSection
-                discographySection
-                collaborationsSection
-                playlistsSection
-                similarArtistsSection
-                biographySection
-            }
-            .padding(.top, 8)
+        VStack(alignment: .leading, spacing: 28) {
+            popularesSection
+            discographySection
+            collaborationsSection
+            playlistsSection
+            similarArtistsSection
+            biographySection
         }
+        .padding(.top, 8)
     }
 
     // MARK: Populares (top songs)
 
     @ViewBuilder
     private var popularesSection: some View {
-        if !vm.topSongs.isEmpty {
+        if vm.isLoadingSongs {
+            // Skeleton while loading
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Populares")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .padding(.horizontal, 16)
+
+                ForEach(0..<4, id: \.self) { _ in
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 6).fill(skeletonColor).frame(width: 48, height: 48)
+                        VStack(alignment: .leading, spacing: 6) {
+                            RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 140, height: 14)
+                            RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 90, height: 12)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+        } else if !vm.topSongs.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("Populares")
@@ -397,7 +421,17 @@ struct ArtistDetailView: View {
 
     @ViewBuilder
     private var discographySection: some View {
-        if !vm.albums.isEmpty {
+        if vm.isLoadingAlbums {
+            HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
+                ForEach(0..<4, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 10).fill(skeletonColor).frame(width: 150, height: 150)
+                        RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 100, height: 14)
+                        RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 60, height: 12)
+                    }
+                }
+            }
+        } else if !vm.albums.isEmpty {
             HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
                 ForEach(vm.albums) { album in
                     NavigationLink(value: album) {
