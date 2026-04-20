@@ -110,6 +110,9 @@ enum DJMixingService {
         let beatIntervalB: Double
         let downbeatTimesA: [Double]
         let downbeatTimesB: [Double]
+        /// DJ-grade filters: mid scoop (vocal anti-clash) and high-shelf (hi-hat cleanup).
+        let useMidScoop: Bool
+        let useHighShelfCut: Bool
     }
 
     // MARK: - Main Entry Point
@@ -178,6 +181,15 @@ enum DJMixingService {
             transitionType: transition.type
         )
 
+        // ── DJ-grade filter decisions ──
+        let djFilters = decideDJFilters(
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
+            fadeDuration: fade.duration,
+            entryPoint: entry.entryPoint,
+            bufferADuration: bufferADuration
+        )
+
         let eA = (safeCurrent?.hasError != true) ? (safeCurrent?.energy ?? 0.5) : 0.5
         let eB = (safeNext?.hasError != true) ? (safeNext?.energy ?? 0.5) : 0.5
 
@@ -211,7 +223,9 @@ enum DJMixingService {
             beatIntervalA: biA,
             beatIntervalB: biB,
             downbeatTimesA: dbA,
-            downbeatTimesB: dbB
+            downbeatTimesB: dbB,
+            useMidScoop: djFilters.useMidScoop,
+            useHighShelfCut: djFilters.useHighShelfCut
         )
     }
 
@@ -614,6 +628,81 @@ enum DJMixingService {
             useFilters: useFilters, useAggressiveFilters: useAggressive,
             energyDiff: energyDiff, bpmDiff: bpmDiff, reason: reason
         )
+    }
+
+    // MARK: - DJ-Grade Filters (Mid Scoop + High-Shelf)
+
+    struct DJFilterResult {
+        let useMidScoop: Bool
+        let useHighShelfCut: Bool
+        let reason: String
+    }
+
+    /// Decides whether to activate mid-range scoop and high-shelf cut on A.
+    /// - Mid scoop: activated when A has vocals in its outro AND B has vocals in its intro.
+    ///   This prevents the "vocal trainwreck" muddiness without cutting to a hard CUT transition.
+    /// - High-shelf: activated when A has moderate-to-high energy (>0.45), indicating
+    ///   hi-hats/cymbals that would clash with B's transients during overlap.
+    static func decideDJFilters(
+        currentAnalysis: SongAnalysis?,
+        nextAnalysis: SongAnalysis?,
+        fadeDuration: Double,
+        entryPoint: Double,
+        bufferADuration: Double
+    ) -> DJFilterResult {
+        let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError != true
+        let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
+        guard hasCurrent || hasNext else {
+            return DJFilterResult(useMidScoop: false, useHighShelfCut: false, reason: "Sin analisis")
+        }
+
+        var useMidScoop = false
+        var useHighShelf = false
+        var reasons: [String] = []
+
+        // ── Mid Scoop: vocal overlap detection ──
+        // Check if A has vocals in the crossfade zone AND B has vocals in its entry zone.
+        if let current = currentAnalysis, let next = nextAnalysis {
+            let crossfadeStartA = bufferADuration - fadeDuration
+            let aHasVocalsInOutro: Bool
+            if !current.speechSegments.isEmpty {
+                // Precise: any speech segment overlaps with the crossfade zone
+                aHasVocalsInOutro = current.speechSegments.contains { $0.end > crossfadeStartA }
+            } else {
+                // Fallback: vocalStartTime > 0 means song has vocals, and outro isn't pure instrumental
+                aHasVocalsInOutro = current.vocalStartTime > 0 &&
+                    (current.outroStartTime <= 0 || current.outroStartTime > crossfadeStartA)
+            }
+
+            let bVocalStart = next.vocalStartTime
+            let bHasVocalsInIntro: Bool
+            if !next.speechSegments.isEmpty {
+                // Precise: B has speech in the entry zone (entryPoint to entryPoint + fadeDuration)
+                let bOverlapEnd = entryPoint + fadeDuration
+                bHasVocalsInIntro = next.speechSegments.contains { $0.start < bOverlapEnd && $0.end > entryPoint }
+            } else {
+                // Fallback: vocals start within the fade window
+                bHasVocalsInIntro = bVocalStart > 0 && bVocalStart < entryPoint + fadeDuration
+            }
+
+            if aHasVocalsInOutro && bHasVocalsInIntro {
+                useMidScoop = true
+                reasons.append("mid scoop: voces solapadas")
+            }
+        }
+
+        // ── High-Shelf: energy-based hi-hat detection ──
+        // Songs with energy > 0.45 typically have prominent hi-hats/cymbals.
+        // Cut highs on A to let B's transients breathe.
+        let energyA = currentAnalysis?.energy ?? 0.5
+        let energyB = nextAnalysis?.energy ?? 0.5
+        if energyA > 0.45 && energyB > 0.35 {
+            useHighShelf = true
+            reasons.append("hi-shelf: energia A=\(String(format: "%.2f", energyA)) B=\(String(format: "%.2f", energyB))")
+        }
+
+        let reason = reasons.isEmpty ? "DJ filters OFF" : "DJ filters ON: \(reasons.joined(separator: ", "))"
+        return DJFilterResult(useMidScoop: useMidScoop, useHighShelfCut: useHighShelf, reason: reason)
     }
 
     // MARK: - Anticipation

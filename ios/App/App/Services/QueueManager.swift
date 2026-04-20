@@ -703,7 +703,9 @@ final class QueueManager: AudioEngineDelegate {
                     beatIntervalA: crossfadeResult.beatIntervalA,
                     beatIntervalB: crossfadeResult.beatIntervalB,
                     downbeatTimesA: crossfadeResult.downbeatTimesA,
-                    downbeatTimesB: crossfadeResult.downbeatTimesB
+                    downbeatTimesB: crossfadeResult.downbeatTimesB,
+                    useMidScoop: crossfadeResult.useMidScoop,
+                    useHighShelfCut: crossfadeResult.useHighShelfCut
                 )
 
                 // ── Trailing silence on A (analysis-based) ──
@@ -742,7 +744,9 @@ final class QueueManager: AudioEngineDelegate {
                         beatIntervalA: config.beatIntervalA,
                         beatIntervalB: config.beatIntervalB,
                         downbeatTimesA: config.downbeatTimesA,
-                        downbeatTimesB: config.downbeatTimesB
+                        downbeatTimesB: config.downbeatTimesB,
+                        useMidScoop: config.useMidScoop,
+                        useHighShelfCut: config.useHighShelfCut
                     )
                 } else {
                     finalConfig = config

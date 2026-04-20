@@ -53,6 +53,9 @@ class CrossfadeExecutor {
         let beatIntervalB: Double
         let downbeatTimesA: [Double]
         let downbeatTimesB: [Double]
+        // DJ-grade filters: activated by analysis
+        let useMidScoop: Bool       // Anti-clash vocal: dip mids on A when vocals overlap
+        let useHighShelfCut: Bool   // Hi-hat cleanup: attenuate highs on A
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -60,7 +63,8 @@ class CrossfadeExecutor {
              rateA: Float = 1.0, rateB: Float = 1.0,
              energyA: Double = 0.5, energyB: Double = 0.5,
              beatIntervalA: Double = 0, beatIntervalB: Double = 0,
-             downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = []) {
+             downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = [],
+             useMidScoop: Bool = false, useHighShelfCut: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -77,6 +81,8 @@ class CrossfadeExecutor {
             self.beatIntervalB = beatIntervalB
             self.downbeatTimesA = downbeatTimesA
             self.downbeatTimesB = downbeatTimesB
+            self.useMidScoop = useMidScoop
+            self.useHighShelfCut = useHighShelfCut
         }
     }
 
@@ -98,11 +104,17 @@ class CrossfadeExecutor {
         struct Highpass { let startFreq: Float; let midFreq: Float; let endFreq: Float; let q: Float }
         struct Lowpass { let startFreq: Float; let endFreq: Float; let q: Float }
         struct Lowshelf { let frequency: Float; let startGain: Float; let midGain: Float; let endGain: Float }
+        /// Parametric mid scoop: dips midrange on A to avoid vocal clashing with B.
+        struct MidScoop { let frequency: Float; let bandwidth: Float; let startGain: Float; let endGain: Float }
+        /// High-shelf cut: attenuates hi-hats/cymbals on A so B's highs come through clean.
+        struct HighShelfCut { let frequency: Float; let startGain: Float; let endGain: Float }
         let highpassA: Highpass
         let highpassB: Highpass
         let lowshelfA: Lowshelf?     // Bass swap: atenúa bajos de A coordinado con B
         let lowshelfB: Lowshelf
         let lowpassA: Lowpass?       // Lowpass sweep para energy-down transitions
+        let midScoopA: MidScoop?     // Anti-clash vocal: parametric dip ~1.5kHz on A
+        let highShelfA: HighShelfCut? // Hi-hat cleanup: shelf cut ~8kHz on A
     }
 
     // MARK: - Presets (port exacto de AudioEffectsChain.ts líneas 20-83)
@@ -112,7 +124,9 @@ class CrossfadeExecutor {
         highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -6, endGain: -14),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
-        lowpassA: nil
+        lowpassA: nil,
+        midScoopA: .init(frequency: 1500, bandwidth: 1.2, startGain: 0, endGain: -12),
+        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -8)
     )
 
     static let presetAggressive = FilterPreset(
@@ -120,7 +134,9 @@ class CrossfadeExecutor {
         highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.5),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -10, endGain: -18),
         lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
-        lowpassA: nil
+        lowpassA: nil,
+        midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -16),
+        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
     )
 
     static let presetAnticipation = FilterPreset(
@@ -128,7 +144,9 @@ class CrossfadeExecutor {
         highpassB: .init(startFreq: 1200, midFreq: 600, endFreq: 40, q: 0.5),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -16),
         lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0),
-        lowpassA: nil
+        lowpassA: nil,
+        midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -15),
+        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
     )
 
     /// Energy-down preset: uses lowpass sweep on A instead of highpass (song "fades away" darkly)
@@ -137,7 +155,10 @@ class CrossfadeExecutor {
         highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -10),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
-        lowpassA: .init(startFreq: 20000, endFreq: 800, q: 0.7)
+        lowpassA: .init(startFreq: 20000, endFreq: 800, q: 0.7),
+        // Energy-down: lighter mid scoop (lowpass already darkens), no hi-hat shelf (lowpass handles it)
+        midScoopA: .init(frequency: 1500, bandwidth: 1.0, startGain: 0, endGain: -8),
+        highShelfA: nil
     )
 
     // MARK: - Prototipos de EQ Global
@@ -251,12 +272,14 @@ class CrossfadeExecutor {
 
         // Log
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
+        let djDesc = [config.useMidScoop ? "midScoop" : nil, config.useHighShelfCut ? "hiShelf" : nil]
+            .compactMap { $0 }.joined(separator: "+")
         let anticDesc = config.needsAnticipation ? String(format: "%.1fs", config.anticipationTime) : "OFF"
         print("""
         [CrossfadeExecutor] ═══════════════════════════════════════
           \(config.transitionType.rawValue): "\(currentTitle)" → "\(nextTitle)"
           Entry: \(String(format: "%.2f", config.entryPoint))s | Fade: \(String(format: "%.2f", config.fadeDuration))s
-          Filters: \(filtersDesc) | Anticipation: \(anticDesc)
+          Filters: \(filtersDesc) | DJ: \(djDesc.isEmpty ? "OFF" : djDesc) | Anticipation: \(anticDesc)
           RG A: \(String(format: "%.3f", maxVolumeA)) | B: \(String(format: "%.3f", maxVolumeB)) | Vol: \(String(format: "%.2f", getMasterVolume()))
           Beat: A=\(String(format: "%.3f", config.beatIntervalA))s B=\(String(format: "%.3f", config.beatIntervalB))s | swap@\(String(format: "%.2f", bassSwapTime - timings.startTime))s | beats:\(hasBeatData ? "YES" : "NO")
           Timings:
@@ -392,7 +415,7 @@ class CrossfadeExecutor {
             print("[CrossfadeExecutor] ⚠️ Setup falló (sin frames en B) — restaurando A")
             mixerA.outputVolume = maxVolumeA
             // Reset EQ and time-stretch that setupInitialEQ/setupTimeStretch already applied
-            for i in 0..<min(eqA.bands.count, 2) {
+            for i in 0..<min(eqA.bands.count, 4) {
                 eqA.bands[i].bypass = true
                 eqB.bands[i].bypass = true
             }
@@ -424,7 +447,7 @@ class CrossfadeExecutor {
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
         // Reset EQ to bypass so cancelled crossfades don't leave filters active
-        for i in 0..<min(eqA.bands.count, 2) {
+        for i in 0..<min(eqA.bands.count, 4) {
             eqA.bands[i].bypass = true
             eqB.bands[i].bypass = true
         }
@@ -455,6 +478,10 @@ class CrossfadeExecutor {
     private var useBassManagement: Bool = false
     /// Whether lowpass sweep is active on A (energy-down transitions).
     private var useLowpassA: Bool = false
+    /// Whether mid-range parametric scoop is active on A (vocal anti-clash).
+    private var useMidScoop: Bool = false
+    /// Whether high-shelf cut is active on A (hi-hat/cymbal cleanup).
+    private var useHighShelfCut: Bool = false
 
     /// Beat-aligned bass swap: the wall-clock time at which bass should be fully swapped
     /// (nearest downbeat to ~40-50% of the crossfade). Computed once at init.
@@ -507,8 +534,27 @@ class CrossfadeExecutor {
         eqB.bands[1].frequency = preset.lowshelfB.frequency
         eqB.bands[1].gain = preset.lowshelfB.startGain
 
-        // Copy global EQ (bands 2-5) from A to B
-        for i in 2..<6 {
+        // ── Band 2: Mid scoop on A (vocal anti-clash, ~1.5kHz parametric dip) ──
+        useMidScoop = config.useMidScoop && preset.midScoopA != nil
+        if useMidScoop, let ms = preset.midScoopA {
+            eqA.bands[2].bypass = false
+            eqA.bands[2].filterType = .parametric
+            eqA.bands[2].frequency = ms.frequency
+            eqA.bands[2].bandwidth = ms.bandwidth
+            eqA.bands[2].gain = ms.startGain
+        }
+
+        // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup, ~8kHz) ──
+        useHighShelfCut = config.useHighShelfCut && preset.highShelfA != nil
+        if useHighShelfCut, let hs = preset.highShelfA {
+            eqA.bands[3].bypass = false
+            eqA.bands[3].filterType = .highShelf
+            eqA.bands[3].frequency = hs.frequency
+            eqA.bands[3].gain = hs.startGain
+        }
+
+        // Copy global EQ (bands 4-7) from A to B
+        for i in 4..<8 {
             eqB.bands[i].bypass = eqA.bands[i].bypass
             eqB.bands[i].filterType = eqA.bands[i].filterType
             eqB.bands[i].frequency = eqA.bands[i].frequency
@@ -747,6 +793,27 @@ class CrossfadeExecutor {
             }
         }
 
+        // ── Mid scoop on A: parametric dip ramps in during crossfade ──
+        // Gradually scoops ~1.5kHz on A so B's vocals can be heard clearly.
+        // Ramps from startGain (0dB) to endGain (-12 to -16dB) over the crossfade.
+        if useMidScoop, let ms = preset.midScoopA {
+            let dur = timings.transitionEndTime - timings.filterStartTime
+            if dur > 0 {
+                let p = Float(min(1, (t - timings.filterStartTime) / dur))
+                eqA.bands[2].gain = linInterp(ms.startGain, ms.endGain, p)
+            }
+        }
+
+        // ── High-shelf cut on A: attenuates hi-hats/cymbals ──
+        // Ramps from 0dB to -8/-10dB so B's transients aren't masked.
+        if useHighShelfCut, let hs = preset.highShelfA {
+            let dur = timings.transitionEndTime - timings.filterStartTime
+            if dur > 0 {
+                let p = Float(min(1, (t - timings.filterStartTime) / dur))
+                eqA.bands[3].gain = linInterp(hs.startGain, hs.endGain, p)
+            }
+        }
+
         // ── Bass swap: lowshelf on A — beat-aligned coordinated bass cut ──
         // Bass swaps on the nearest downbeat to ~45% of the crossfade (bassSwapTime)
         // instead of a linear midpoint, so the kick drum handoff happens on a beat.
@@ -833,7 +900,7 @@ class CrossfadeExecutor {
         mixerB.outputVolume = maxVolumeB
 
         // Reset crossfade EQ (bands 0-1) to bypass — B continues with clean audio
-        for i in 0..<min(eqA.bands.count, 2) {
+        for i in 0..<min(eqA.bands.count, 4) {
             eqA.bands[i].bypass = true
             eqB.bands[i].bypass = true
         }

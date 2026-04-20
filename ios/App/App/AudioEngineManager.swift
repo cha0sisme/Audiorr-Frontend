@@ -127,16 +127,24 @@ class AudioEngineManager {
         timePitchA = AVAudioUnitTimePitch()
         timePitchB = AVAudioUnitTimePitch()
 
-        // EQ con 6 bandas: 0-1 reserved for crossfade, 2-5 reserved for global EQ.
-        eqA = AVAudioUnitEQ(numberOfBands: 6)
+        // EQ con 8 bandas: 0-3 reserved for crossfade, 4-7 reserved for global EQ.
+        // Band 0: highPass/lowPass (frequency sweep)
+        // Band 1: lowShelf (bass management)
+        // Band 2: parametric mid scoop (vocal anti-clash, ~1.5kHz)
+        // Band 3: highShelf (hi-hat cleanup on A, ~8kHz)
+        eqA = AVAudioUnitEQ(numberOfBands: 8)
         eqA.bands[0].filterType = .highPass
         eqA.bands[1].filterType = .lowShelf
-        for i in 0..<6 { eqA.bands[i].bypass = true }
+        eqA.bands[2].filterType = .parametric
+        eqA.bands[3].filterType = .highShelf
+        for i in 0..<8 { eqA.bands[i].bypass = true }
 
-        eqB = AVAudioUnitEQ(numberOfBands: 6)
+        eqB = AVAudioUnitEQ(numberOfBands: 8)
         eqB.bands[0].filterType = .highPass
         eqB.bands[1].filterType = .lowShelf
-        for i in 0..<6 { eqB.bands[i].bypass = true }
+        eqB.bands[2].filterType = .parametric
+        eqB.bands[3].filterType = .highShelf
+        for i in 0..<8 { eqB.bands[i].bypass = true }
 
         setupAudioGraph()
         setupObservers()
