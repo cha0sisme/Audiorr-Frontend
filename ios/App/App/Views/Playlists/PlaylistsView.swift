@@ -72,8 +72,16 @@ final class PlaylistsViewModel: ObservableObject {
 
     // MARK: Filtered lists per section type
 
+    private var currentUsername: String? {
+        api.credentials?.username.lowercased()
+    }
+
     var dailyMixes: [NavidromePlaylist] {
-        playlists.filter { $0.name.lowercased().hasPrefix("mix diario") }
+        let user = currentUsername
+        return playlists.filter {
+            $0.name.lowercased().hasPrefix("mix diario")
+            && (user == nil || $0.owner?.lowercased() == user)
+        }
     }
 
     var smartPlaylists: [NavidromePlaylist] {
@@ -81,10 +89,12 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     var userPlaylists: [NavidromePlaylist] {
-        playlists.filter { pl in
+        let user = currentUsername
+        return playlists.filter { pl in
             !pl.name.lowercased().hasPrefix("mix diario")
             && pl.comment?.contains("Smart Playlist") != true
             && pl.comment?.contains("[Editorial]")    != true
+            && (user == nil || pl.owner?.lowercased() == user)
         }
     }
 

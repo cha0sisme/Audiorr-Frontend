@@ -14,6 +14,7 @@
 import AVFoundation
 import QuartzCore
 import Foundation
+import UIKit
 
 /// CrossfadeExecutor — real-time crossfade state machine.
 /// Part of the "Velvet Transition" v2.0 engine.
@@ -193,11 +194,18 @@ class CrossfadeExecutor {
     private let nextFile: AVAudioFile
 
     // DispatchSourceTimer en vez de CADisplayLink — funciona en background
+    // Uses a dedicated high-priority queue instead of .main to avoid iOS
+    // throttling/suspending the timer during background audio or CarPlay.
+    static let automationQueue = DispatchQueue(
+        label: "com.audiorr.crossfade.automation", qos: .userInteractive
+    )
     private var filterTimer: DispatchSourceTimer?
     private var safetyWatchdog: DispatchSourceTimer?
     private var secondaryWatchdog: DispatchSourceTimer?
     private var isCancelled = false
     private var lastLogTime: Double = 0
+    private var lastTickTime: Double = 0
+    private var foregroundObserver: Any?
 
     var onComplete: ((Double) -> Void)?
     /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
@@ -443,6 +451,10 @@ class CrossfadeExecutor {
         safetyWatchdog = nil
         secondaryWatchdog?.cancel()
         secondaryWatchdog = nil
+        if let obs = foregroundObserver {
+            NotificationCenter.default.removeObserver(obs)
+            foregroundObserver = nil
+        }
         playerB.stop()
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
@@ -684,13 +696,30 @@ class CrossfadeExecutor {
     // MARK: - Filter automation via DispatchSourceTimer (background-safe, ~60Hz)
 
     private func startFilterAutomation() {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
+        lastTickTime = CACurrentMediaTime()
+        let timer = DispatchSource.makeTimerSource(queue: Self.automationQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             self?.filterTick()
         }
         filterTimer = timer
         timer.resume()
+
+        // Safety net: when app returns to foreground after background suspension,
+        // check if the crossfade should have already completed and force it.
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.checkAndForceCompleteIfStale()
+        }
+    }
+
+    /// Called from foreground notification — if crossfade should have ended, force-complete.
+    private func checkAndForceCompleteIfStale() {
+        let t = CACurrentMediaTime()
+        guard !isCancelled, t >= timings.transitionEndTime else { return }
+        print("[CrossfadeExecutor] ⚠️ Foreground wake: crossfade overdue by \(String(format: "%.1f", t - timings.transitionEndTime))s — forcing completion")
+        completeCrossfade()
     }
 
     private func filterTick() {
@@ -701,6 +730,22 @@ class CrossfadeExecutor {
         }
 
         let t = CACurrentMediaTime()
+
+        // Detect timer suspension gaps (iOS background throttling / CarPlay).
+        // If we were suspended and have already passed the transition end, force-complete
+        // immediately so B doesn't keep playing with frozen crossfade filters.
+        let gap = t - lastTickTime
+        lastTickTime = t
+        if gap > 1.0 {
+            print("[CrossfadeExecutor] ⚠️ Timer gap detected: \(String(format: "%.1f", gap))s")
+            if t >= timings.transitionEndTime {
+                print("[CrossfadeExecutor] ⚠️ Past transition end — forcing completion after suspension")
+                completeCrossfade()
+                return
+            }
+            // Not past end yet — continue and let the interpolation snap to correct values
+            // (all filter math uses absolute time, so it self-corrects)
+        }
 
         if t >= timings.transitionEndTime + 0.5 {
             completeCrossfade()
@@ -895,6 +940,10 @@ class CrossfadeExecutor {
         safetyWatchdog = nil
         secondaryWatchdog?.cancel()
         secondaryWatchdog = nil
+        if let obs = foregroundObserver {
+            NotificationCenter.default.removeObserver(obs)
+            foregroundObserver = nil
+        }
 
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
@@ -922,7 +971,7 @@ class CrossfadeExecutor {
     // MARK: - Watchdog
 
     private func startSafetyWatchdog() {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timer = DispatchSource.makeTimerSource(queue: Self.automationQueue)
         let timeout = timings.totalTime + 2.0
         timer.schedule(deadline: .now() + timeout, leeway: .milliseconds(500))
         timer.setEventHandler { [weak self] in
@@ -937,7 +986,7 @@ class CrossfadeExecutor {
     /// Watchdog secundario: backstop para casos extremos donde el watchdog principal
     /// fue retrasado por suspensión agresiva de iOS. Dispara ~50% más tarde que el principal.
     private func startSecondaryWatchdog() {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timer = DispatchSource.makeTimerSource(queue: Self.automationQueue)
         let timeout = timings.totalTime + 2.0 + max(5.0, timings.totalTime * 0.5)
         timer.schedule(deadline: .now() + timeout, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in

@@ -10,7 +10,10 @@ actor AnalysisCacheService {
     // MARK: - Types
 
     /// Full analysis result from the backend — maps to AudioAnalysisResult in JS.
+    /// Top-level fields come from the JSON root. Fields like cuePoint, energyProfile,
+    /// fadeInDuration, fadeOutDuration live inside `diagnostics.fade_info` in the real JSON.
     struct AnalysisResult: Codable {
+        // Top-level fields (always present in backend JSON)
         let bpm: Double?
         let beats: [Double]?
         let beatInterval: Double?
@@ -20,22 +23,62 @@ actor AnalysisCacheService {
         let outroStartTime: Double?
         let introEndTime: Double?
         let vocalStartTime: Double?
-        let fadeInDuration: Double?
-        let fadeOutDuration: Double?
-        let cuePoint: Double?
-        let fadeOutLeadTime: Double?
-        let energyProfile: EnergyProfile?
         let speechSegments: [SpeechSegment]?
         let structure: [StructureSegment]?
+        // Diagnostics object — contains fade_info with cuePoint, energyProfile, etc.
+        let diagnostics: Diagnostics?
+
+        // Convenience accessors that pull from diagnostics.fade_info
+        var fadeInDuration: Double? { diagnostics?.fadeInfo?.fadeInDuration }
+        var fadeOutDuration: Double? { diagnostics?.fadeInfo?.fadeOutDuration }
+        var cuePoint: Double? { diagnostics?.fadeInfo?.cuePoint }
+        var fadeOutLeadTime: Double? { diagnostics?.fadeInfo?.fadeOutLeadTime }
+        var energyProfile: EnergyProfile? { diagnostics?.fadeInfo?.energyProfile }
+        /// Chorus structure from diagnostics — more complete than top-level `structure`
+        var chorusStructure: [StructureSegment]? { diagnostics?.analysisLog?.lastChorusEnd?.chorusStructure }
+
+        struct Diagnostics: Codable {
+            let fadeInfo: FadeInfo?
+            let analysisLog: AnalysisLog?
+
+            enum CodingKeys: String, CodingKey {
+                case fadeInfo = "fade_info"
+                case analysisLog = "analysis_log"
+            }
+        }
+
+        struct FadeInfo: Codable {
+            let fadeInDuration: Double?
+            let fadeOutDuration: Double?
+            let cuePoint: Double?
+            let fadeOutLeadTime: Double?
+            let energyProfile: EnergyProfile?
+        }
+
+        struct AnalysisLog: Codable {
+            let lastChorusEnd: LastChorusEnd?
+
+            enum CodingKeys: String, CodingKey {
+                case lastChorusEnd = "Last Chorus End"
+            }
+        }
+
+        struct LastChorusEnd: Codable {
+            let chorusStructure: [StructureSegment]?
+
+            enum CodingKeys: String, CodingKey {
+                case chorusStructure = "chorus_structure"
+            }
+        }
 
         struct EnergyProfile: Codable {
             let intro: Double?
             let main: Double?
             let outro: Double?
-            let outroSlope: Double?
             let introSlope: Double?
-            let outroVocals: Bool?
+            let outroSlope: Double?
             let introVocals: Bool?
+            let outroVocals: Bool?
         }
 
         struct SpeechSegment: Codable {
@@ -119,15 +162,31 @@ actor AnalysisCacheService {
             analysis.speechSegments = segments.map { (start: $0.start, end: $0.end) }
         }
 
-        // Extract chorus start from structure
-        if let structure = result.structure,
+        // Extract chorus — prefer diagnostics chorus_structure, fall back to top-level structure
+        let chorusSource = result.chorusStructure ?? result.structure
+        if let structure = chorusSource,
            let chorus = structure.first(where: { $0.label.lowercased().contains("chorus") }) {
             analysis.chorusStartTime = chorus.startTime
         }
 
         // Extract phrase boundaries from structure
-        if let structure = result.structure {
+        let structureSource = chorusSource ?? result.structure
+        if let structure = structureSource {
             analysis.phraseBoundaries = structure.map { $0.startTime }
+        }
+
+        // Backend-calculated cue point (from diagnostics.fade_info)
+        if let cue = result.cuePoint, cue > 0 && cue < duration {
+            analysis.cuePoint = cue
+            analysis.hasCuePoint = true
+        }
+
+        // Per-section energy profile (from diagnostics.fade_info)
+        if let ep = result.energyProfile {
+            analysis.energyIntro = ep.intro ?? analysis.energy
+            analysis.energyMain = ep.main ?? analysis.energy
+            analysis.energyOutro = ep.outro ?? analysis.energy
+            analysis.hasEnergyProfile = true
         }
 
         return analysis

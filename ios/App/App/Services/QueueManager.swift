@@ -646,6 +646,18 @@ final class QueueManager: AudioEngineDelegate {
                     if let segs = curAn.speechSegments {
                         currentSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
                     }
+                    // Backend-calculated cue point (from diagnostics.fade_info)
+                    if let cue = curAn.cuePoint, cue > 0, cue < currentDuration {
+                        currentSongAnalysis.cuePoint = cue
+                        currentSongAnalysis.hasCuePoint = true
+                    }
+                    // Per-section energy (from diagnostics.fade_info.energyProfile)
+                    if let ep = curAn.energyProfile {
+                        currentSongAnalysis.energyIntro = ep.intro ?? currentSongAnalysis.energy
+                        currentSongAnalysis.energyMain = ep.main ?? currentSongAnalysis.energy
+                        currentSongAnalysis.energyOutro = ep.outro ?? currentSongAnalysis.energy
+                        currentSongAnalysis.hasEnergyProfile = true
+                    }
                 }
 
                 if let nxtAn {
@@ -662,6 +674,13 @@ final class QueueManager: AudioEngineDelegate {
                     if let beats = nxtAn.beats { nextSongAnalysis.downbeatTimes = beats }
                     if let segs = nxtAn.speechSegments {
                         nextSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
+                    }
+                    // Per-section energy for next song
+                    if let ep = nxtAn.energyProfile {
+                        nextSongAnalysis.energyIntro = ep.intro ?? nextSongAnalysis.energy
+                        nextSongAnalysis.energyMain = ep.main ?? nextSongAnalysis.energy
+                        nextSongAnalysis.energyOutro = ep.outro ?? nextSongAnalysis.energy
+                        nextSongAnalysis.hasEnergyProfile = true
                     }
                 }
 
@@ -755,10 +774,16 @@ final class QueueManager: AudioEngineDelegate {
                 // Set automix trigger on engine.
                 // triggerTime = when in song A the crossfade should START.
                 // entryPoint = where in song B to begin playing (NOT the trigger).
-                // Use outroStartTime of song A, falling back to (effectiveDuration - fadeDuration).
+                //
+                // Priority: cuePoint (backend-calculated) > outroStartTime > heuristic fallback.
+                // The backend's cuePoint already accounts for chorus structure, energy drops,
+                // and optimal transition timing — it's the most precise trigger available.
                 let outroStart = currentSongAnalysis.outroStartTime
                 var triggerTime: Double
-                if outroStart > 0 && outroStart < effectiveDuration - 5 {
+                if currentSongAnalysis.hasCuePoint {
+                    triggerTime = currentSongAnalysis.cuePoint
+                    print("[QueueManager] Using backend cuePoint as trigger: \(String(format: "%.1f", triggerTime))s")
+                } else if outroStart > 0 && outroStart < effectiveDuration - 5 {
                     // Use analysis-based outro start
                     triggerTime = outroStart
                 } else {
@@ -871,7 +896,11 @@ final class QueueManager: AudioEngineDelegate {
         }
 
         isPlaying = true
-        self.duration = duration
+        // Prefer engine-resolved duration (from file frames) over metadata.
+        // TopWeekly songs have duration=0 in metadata — the engine resolves
+        // the real duration from the cached file immediately in play(fileURL:).
+        let engineDuration = AudioEngineManager.shared?.currentSongDuration ?? 0
+        self.duration = engineDuration > 0 ? engineDuration : duration
         self.currentTime = 0
         syncNowPlayingState()
 

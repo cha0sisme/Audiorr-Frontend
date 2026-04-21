@@ -1141,7 +1141,8 @@ class AudioEngineManager {
         let capturedMaxB = replayGainMultiplierB
 
         // Watchdog: force-complete if fade takes too long (iOS suspension, etc.)
-        let watchdog = DispatchSource.makeTimerSource(queue: .main)
+        // Uses a dedicated queue to avoid .main throttling in background/CarPlay.
+        let watchdog = DispatchSource.makeTimerSource(queue: CrossfadeExecutor.automationQueue)
         let watchdogTimeout = fadeDuration + 5.0
         watchdog.schedule(deadline: .now() + watchdogTimeout, leeway: .milliseconds(500))
         watchdog.setEventHandler { [weak self] in
@@ -1180,7 +1181,7 @@ class AudioEngineManager {
         streamFadeWatchdog = watchdog
         watchdog.resume()
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let timer = DispatchSource.makeTimerSource(queue: CrossfadeExecutor.automationQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             guard let self = self, self.isCrossfading else {

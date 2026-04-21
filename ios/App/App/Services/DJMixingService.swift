@@ -43,8 +43,6 @@ enum DJMixingService {
     }
 
     struct MixModeConfig {
-        let introLeadTime: Double
-        let vocalLeadTime: Double
         let minFadeDuration: Double
         let maxFadeDuration: Double
         let baseFadeDuration: Double
@@ -54,12 +52,10 @@ enum DJMixingService {
 
     static let configs: [MixMode: MixModeConfig] = [
         .dj: MixModeConfig(
-            introLeadTime: 2.5, vocalLeadTime: 0,
             minFadeDuration: 5, maxFadeDuration: 10, baseFadeDuration: 6,
             fallbackPercent: 0.02, fallbackMaxSeconds: 3
         ),
         .normal: MixModeConfig(
-            introLeadTime: 4.5, vocalLeadTime: 3,
             minFadeDuration: 6, maxFadeDuration: 12, baseFadeDuration: 8,
             fallbackPercent: 0.01, fallbackMaxSeconds: 2
         ),
@@ -83,6 +79,15 @@ enum DJMixingService {
         var hasOutroData: Bool = false
         /// True when introEndTime comes from real analysis data (not a default).
         var hasIntroData: Bool = false
+        /// Backend-calculated cue point — ideal time to start crossfade on this song.
+        /// When present, overrides the heuristic trigger calculation in QueueManager.
+        var cuePoint: Double = 0
+        var hasCuePoint: Bool = false
+        /// Per-section energy from backend (more useful than global `energy`).
+        var energyIntro: Double = 0
+        var energyMain: Double = 0
+        var energyOutro: Double = 0
+        var hasEnergyProfile: Bool = false
     }
 
     /// Complete crossfade configuration output.
@@ -190,8 +195,20 @@ enum DJMixingService {
             bufferADuration: bufferADuration
         )
 
-        let eA = (safeCurrent?.hasError != true) ? (safeCurrent?.energy ?? 0.5) : 0.5
-        let eB = (safeNext?.hasError != true) ? (safeNext?.energy ?? 0.5) : 0.5
+        // Use per-section energy when available: A's outro energy and B's intro energy
+        // are what actually overlap during the crossfade — much more accurate than global average.
+        let eA: Double
+        if let cur = safeCurrent, cur.hasEnergyProfile {
+            eA = cur.energyOutro
+        } else {
+            eA = (safeCurrent?.hasError != true) ? (safeCurrent?.energy ?? 0.5) : 0.5
+        }
+        let eB: Double
+        if let nxt = safeNext, nxt.hasEnergyProfile {
+            eB = nxt.energyIntro
+        } else {
+            eB = (safeNext?.hasError != true) ? (safeNext?.energy ?? 0.5) : 0.5
+        }
 
         let biA = (safeCurrent?.hasError != true) ? (safeCurrent?.beatInterval ?? 0) : 0
         let rawBiB = (safeNext?.hasError != true) ? (safeNext?.beatInterval ?? 0) : 0
@@ -247,6 +264,7 @@ enum DJMixingService {
         a.outroStartTime = min(max(0, a.outroStartTime), maxT)
         a.vocalStartTime = min(max(0, a.vocalStartTime), maxT)
         a.chorusStartTime = min(max(0, a.chorusStartTime), maxT)
+        if a.hasCuePoint { a.cuePoint = min(max(0, a.cuePoint), maxT) }
         a.phraseBoundaries = a.phraseBoundaries.filter { $0 >= 0 && $0 <= maxT }
         a.downbeatTimes = a.downbeatTimes.filter { $0 >= 0 && $0 <= maxT }
         a.speechSegments = a.speechSegments.compactMap { seg in
@@ -286,24 +304,28 @@ enum DJMixingService {
         let vocalStartTime = next.vocalStartTime
         let chorusStartTime = next.chorusStartTime
 
+        // Entry point = the energy moment itself (intro end, vocal start, chorus).
+        // The fade duration provides the natural lead-in before the punch.
+        // Previously we subtracted introLeadTime/vocalLeadTime, which left a
+        // "dead zone" where both songs were at full volume with no energy transition.
         if mode == .dj {
             if introEndTime > 3 {
-                entryPoint = max(0, introEndTime - config.introLeadTime)
+                entryPoint = introEndTime
             } else if chorusStartTime > 4 {
-                entryPoint = chorusStartTime - 4
+                entryPoint = chorusStartTime
             } else if vocalStartTime > 2 {
-                entryPoint = vocalStartTime - config.vocalLeadTime
+                entryPoint = vocalStartTime
             } else {
                 entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
                 usedFallback = true
             }
         } else {
             if introEndTime > 2.5 {
-                entryPoint = max(0, introEndTime - config.introLeadTime)
+                entryPoint = introEndTime
             } else if vocalStartTime > 1 {
-                entryPoint = max(0, vocalStartTime - config.vocalLeadTime)
+                entryPoint = vocalStartTime
             } else if chorusStartTime > 4 {
-                entryPoint = max(0, chorusStartTime - 4)
+                entryPoint = chorusStartTime
             } else {
                 entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
                 usedFallback = true
@@ -316,7 +338,7 @@ enum DJMixingService {
 
         if energyB > energyA + 0.25 {
             if chorusStartTime > entryPoint && chorusStartTime < entryPoint + 30 {
-                entryPoint = max(0, chorusStartTime - (mode == .dj ? 4 : 8))
+                entryPoint = chorusStartTime
             }
         }
 
@@ -377,33 +399,38 @@ enum DJMixingService {
         let beatIntervalB = nextAnalysis.beatInterval
         let targetBeats = nextAnalysis.downbeatTimes
 
-        // Search range: ±2 beats for better downbeat candidates
-        let searchRange = beatIntervalB * 2.0
+        // Search range: ±1 beat — tight snap to preserve the punch/energy moment.
+        // The entry point now targets the exact energy moment (introEnd, vocalStart, etc.),
+        // so we only allow minimal displacement to land on a beat.
+        let searchRange = beatIntervalB * 1.0
 
         var adjustedEntryPoint = entryPoint
         var info = ""
 
-        // Phase 1: Align B to its own downbeat/measure grid
+        // Phase 1: Align B to its nearest downbeat (tight snap)
         if !targetBeats.isEmpty {
-            // Find best downbeat within ±2 beats of the desired entry point
             let candidates = targetBeats.filter { abs($0 - entryPoint) <= searchRange }
             if let best = candidates.min(by: { abs($0 - entryPoint) < abs($1 - entryPoint) }) {
                 let adj = best - entryPoint
                 adjustedEntryPoint = best
                 info = "Downbeat real: \(adj >= 0 ? "+" : "")\(String(format: "%.3f", adj))s"
             } else {
-                // All downbeats too far — snap to nearest measure grid
-                let measureB = beatIntervalB * 4
-                let gridSnap = snapToMeasureGrid(entryPoint, measureLength: measureB, beatInterval: beatIntervalB)
+                // No downbeat within ±1 beat — snap to nearest beat grid position
+                let gridSnap = snapToMeasureGrid(entryPoint, measureLength: beatIntervalB * 4, beatInterval: beatIntervalB)
+                // Only apply if the snap is small (within half a beat)
+                if abs(gridSnap) <= beatIntervalB * 0.5 {
+                    adjustedEntryPoint = entryPoint + gridSnap
+                    info = "Grid snap: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
+                }
+                // Otherwise keep the exact punch position
+            }
+        } else {
+            // No downbeat data — snap to beat grid only if very close
+            let gridSnap = snapToMeasureGrid(entryPoint, measureLength: beatIntervalB * 4, beatInterval: beatIntervalB)
+            if abs(gridSnap) <= beatIntervalB * 0.5 {
                 adjustedEntryPoint = entryPoint + gridSnap
                 info = "Grid snap: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
             }
-        } else {
-            // No downbeat data — estimate measure grid
-            let measureB = beatIntervalB * 4
-            let gridSnap = snapToMeasureGrid(entryPoint, measureLength: measureB, beatInterval: beatIntervalB)
-            adjustedEntryPoint = entryPoint + gridSnap
-            info = "Estimacion 4-beats: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
         }
 
         // Phase 2: Cross-phase alignment A↔B (DJ mode only — too aggressive for normal)
@@ -415,15 +442,16 @@ enum DJMixingService {
             if phaseError > beatIntervalB / 2 { phaseError -= beatIntervalB }
             if phaseError < -beatIntervalB / 2 { phaseError += beatIntervalB }
 
-            // Only correct if the phase error is significant (>10% of a beat)
-            if abs(phaseError) > beatIntervalB * 0.10 {
+            // Only correct if the phase error is significant (>15% of a beat)
+            // and only apply small corrections to preserve the punch alignment
+            if abs(phaseError) > beatIntervalB * 0.15 {
                 // Search nearby downbeats for one that also satisfies phase alignment
                 if !targetBeats.isEmpty {
-                    // Try all downbeats within ±2 beats and pick the one with smallest phase error
+                    // Only consider downbeats within ±1 beat (tight range to preserve punch)
                     let candidates = targetBeats.filter {
                         abs($0 - adjustedEntryPoint) <= searchRange && $0 >= 0
                     }
-                    var bestCandidate = adjustedEntryPoint + max(-searchRange, min(searchRange, phaseError))
+                    var bestCandidate = adjustedEntryPoint
                     var bestError = abs(phaseError)
                     for candidate in candidates {
                         let candPhase = candidate.truncatingRemainder(dividingBy: beatIntervalB)
@@ -436,12 +464,18 @@ enum DJMixingService {
                         }
                     }
                     let phaseAdj = bestCandidate - adjustedEntryPoint
-                    adjustedEntryPoint = bestCandidate
-                    info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                    // Only apply if the adjustment is small (within half a beat)
+                    if abs(phaseAdj) <= beatIntervalB * 0.5 {
+                        adjustedEntryPoint = bestCandidate
+                        info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                    }
                 } else {
+                    // No downbeats — only apply phase correction if small
                     let phaseAdj = max(-searchRange, min(searchRange, phaseError))
-                    adjustedEntryPoint += phaseAdj
-                    info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                    if abs(phaseAdj) <= beatIntervalB * 0.5 {
+                        adjustedEntryPoint += phaseAdj
+                        info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
+                    }
                 }
             }
         }
@@ -502,8 +536,9 @@ enum DJMixingService {
         if hasCurrent, hasNext, let current = currentAnalysis, let next = nextAnalysis {
             let introB = next.introEndTime
             let vocalB = next.vocalStartTime
-            let energyA = current.energy
-            let energyB = next.energy
+            // Use per-section energy when available
+            let energyA = current.hasEnergyProfile ? current.energyOutro : current.energy
+            let energyB = next.hasEnergyProfile ? next.energyIntro : next.energy
 
             let outroAStart = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
             let outroADuration = bufferADuration - outroAStart
@@ -593,8 +628,19 @@ enum DJMixingService {
         let hasVocalsOutro = currentAnalysis?.vocalStartTime ?? 0 > 0 && currentAnalysis?.hasError != true
         let hasVocalsIntro = nextAnalysis?.vocalStartTime ?? 0 > 0 && nextAnalysis?.hasError != true
 
-        let energyA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
-        let energyB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
+        // Use per-section energy: outro of A and intro of B are what overlap
+        let energyA: Double
+        if let cur = currentAnalysis, cur.hasEnergyProfile {
+            energyA = cur.energyOutro
+        } else {
+            energyA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
+        }
+        let energyB: Double
+        if let nxt = nextAnalysis, nxt.hasEnergyProfile {
+            energyB = nxt.energyIntro
+        } else {
+            energyB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
+        }
         let bpmA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.bpm ?? 120) : 120
         let bpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 120) : 120
 
@@ -694,8 +740,19 @@ enum DJMixingService {
         // ── High-Shelf: energy-based hi-hat detection ──
         // Songs with energy > 0.45 typically have prominent hi-hats/cymbals.
         // Cut highs on A to let B's transients breathe.
-        let energyA = currentAnalysis?.energy ?? 0.5
-        let energyB = nextAnalysis?.energy ?? 0.5
+        // Use per-section energy: outro of A, intro of B (the overlapping sections).
+        let energyA: Double
+        if let cur = currentAnalysis, cur.hasEnergyProfile {
+            energyA = cur.energyOutro
+        } else {
+            energyA = currentAnalysis?.energy ?? 0.5
+        }
+        let energyB: Double
+        if let nxt = nextAnalysis, nxt.hasEnergyProfile {
+            energyB = nxt.energyIntro
+        } else {
+            energyB = nextAnalysis?.energy ?? 0.5
+        }
         if energyA > 0.45 && energyB > 0.35 {
             useHighShelf = true
             reasons.append("hi-shelf: energia A=\(String(format: "%.2f", energyA)) B=\(String(format: "%.2f", energyB))")
@@ -907,10 +964,12 @@ enum DJMixingService {
     // MARK: - Harmonic BPM Normalization (double/half tempo detection)
 
     /// Normalizes BPM of B to the harmonically closest ratio with A.
-    /// Detects half-time (70 vs 140) and double-time (170 vs 85) relationships.
+    /// Detects half-time (70 vs 140), double-time (170 vs 85), and triplet/swing
+    /// relationships (e.g. 93 vs 140 ≈ 2/3 ratio).
+    /// Ratios: 1/3, 1/2, 2/3, 1, 3/2, 2, 3 — covers all common tempo relationships.
     static func harmonicBPM(_ bpmA: Double, _ bpmB: Double) -> Double {
         guard bpmA > 0 && bpmB > 0 else { return bpmB }
-        let ratios: [Double] = [0.5, 1.0, 2.0]
+        let ratios: [Double] = [1.0/3, 0.5, 2.0/3, 1.0, 3.0/2, 2.0, 3.0]
         let bestRatio = ratios.min(by: {
             abs(bpmB * $0 - bpmA) < abs(bpmB * $1 - bpmA)
         }) ?? 1.0

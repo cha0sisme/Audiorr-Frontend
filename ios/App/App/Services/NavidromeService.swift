@@ -103,11 +103,10 @@ final class NavidromeService: ObservableObject {
     }
 
     /// URL de la cover generada por el backend para una playlist.
-    /// Se refresca automáticamente cada 5 minutos (mismo _t que el frontend).
+    /// URL estable — URLSession cache + ETag del backend se encargan del refresco.
     func playlistBackendCoverURL(playlistId: String) -> URL? {
         guard let base = backendURL() else { return nil }
-        let t = Int(Date().timeIntervalSince1970 / 300)
-        return URL(string: "\(base)/api/playlists/\(playlistId)/cover.png?_t=\(t)")
+        return URL(string: "\(base)/api/playlists/\(playlistId)/cover.png")
     }
 
     /// Check if the Audiorr backend is reachable (HEAD /api/health, 5s timeout).

@@ -54,6 +54,10 @@ final class ConnectService {
     private var knownDevices: [String: String] = [:]
     /// The device ID whose playback we're currently showing in remote mode
     private var remoteSourceDeviceId: String?
+    /// Last time we received a playback_state_update from the remote source
+    private var lastRemoteUpdateTime: Date?
+    /// Timer to detect stale remote connections (device went offline without clean disconnect)
+    private var staleRemoteTimer: Timer?
 
     private init() {}
 
@@ -467,6 +471,13 @@ final class ConnectService {
         // Ignore our own broadcasts
         guard remoteDeviceId != deviceId else { return }
 
+        // Ignore updates from devices not in the current devices list.
+        // Prevents stale state from ghost devices (crashed desktop, hub lag, etc.)
+        guard connectedDevices.contains(where: { $0.id == remoteDeviceId }) else {
+            print("[Connect] Ignoring playback update from unknown device \(remoteDeviceId)")
+            return
+        }
+
         let playing = dict["playing"] as? Bool ?? false
         let trackId = dict["trackId"] as? String
         let position = dict["position"] as? Double ?? 0
@@ -503,6 +514,8 @@ final class ConnectService {
         state.contextUri = dict["contextUri"] as? String ?? ""
         state.isRemote = true
         remoteSourceDeviceId = remoteDeviceId
+        lastRemoteUpdateTime = Date()
+        resetStaleRemoteTimer()
         let deviceName = knownDevices[remoteDeviceId] ?? remoteDeviceId
         state.remoteDeviceName = deviceName
         state.subtitle = "Reproduciendo en \(deviceName)"
@@ -617,6 +630,10 @@ final class ConnectService {
     // MARK: - Restore after remote disconnect
 
     private func restoreAfterRemoteDisconnect() {
+        staleRemoteTimer?.invalidate()
+        staleRemoteTimer = nil
+        lastRemoteUpdateTime = nil
+
         let state = NowPlayingState.shared
         state.isRemote = false
         state.remoteDeviceName = nil
@@ -631,6 +648,20 @@ final class ConnectService {
         // Restore last playback from backend so mini player shows something useful
         Task {
             QueueManager.shared.restoreLastPlayback()
+        }
+    }
+
+    /// Reset the stale-remote watchdog. If we don't receive a playback update
+    /// from the remote source within 30s, assume the device is gone and restore local.
+    private func resetStaleRemoteTimer() {
+        staleRemoteTimer?.invalidate()
+        staleRemoteTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, NowPlayingState.shared.isRemote else { return }
+                print("[Connect] Stale remote: no update for 30s — restoring local")
+                self.remoteSourceDeviceId = nil
+                self.restoreAfterRemoteDisconnect()
+            }
         }
     }
 
@@ -740,6 +771,9 @@ final class ConnectService {
     private func tearDown() {
         pingTimer?.invalidate()
         pingTimer = nil
+        staleRemoteTimer?.invalidate()
+        staleRemoteTimer = nil
+        lastRemoteUpdateTime = nil
         networkWaitTimer?.invalidate()
         networkWaitTimer = nil
         webSocket?.cancel(with: .normalClosure, reason: nil)
