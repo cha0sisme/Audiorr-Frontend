@@ -15,11 +15,11 @@ struct QueuePanelView: View {
                     queueList
                 }
             }
-            .navigationTitle("Cola")
+            .navigationTitle(L.queue)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cerrar") { dismiss() }
+                    Button(L.close) { dismiss() }
                 }
             }
         }
@@ -31,9 +31,9 @@ struct QueuePanelView: View {
 
     private var emptyState: some View {
         ContentUnavailableView(
-            "Cola vacía",
+            L.emptyQueue,
             systemImage: "music.note.list",
-            description: Text("No hay canciones en cola.")
+            description: Text(L.noSongsInQueue)
         )
     }
 
@@ -51,9 +51,9 @@ struct QueuePanelView: View {
                             .fill(.green)
                             .frame(width: 8, height: 8)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Cola remota")
+                            Text(L.remoteQueue)
                                 .font(.subheadline.weight(.semibold))
-                            Text("Reproduciendo en \(deviceName)")
+                            Text(L.playingOn(deviceName))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -69,7 +69,7 @@ struct QueuePanelView: View {
                 Section {
                     queueRow(song: state.queue[idx], isCurrent: true)
                 } header: {
-                    Text("Reproduciendo")
+                    Text(L.nowPlaying)
                 }
 
                 // Upcoming songs
@@ -89,10 +89,10 @@ struct QueuePanelView: View {
                         }
                     } header: {
                         HStack {
-                            Text("A continuación")
+                            Text(L.upNext)
                             Spacer()
                             if !state.isRemote {
-                                Button("Limpiar") {
+                                Button(L.clear) {
                                     clearUpcoming(currentIndex: idx)
                                 }
                                 .font(.caption)

@@ -69,14 +69,14 @@ struct DownloadButton: View {
                     togglePin()
                 } label: {
                     Label(
-                        downloadState == .pinned ? "Desfijar" : "Fijar (no eliminar automáticamente)",
+                        downloadState == .pinned ? L.unpin : L.pin,
                         systemImage: downloadState == .pinned ? "pin.slash" : "pin"
                     )
                 }
                 Button(role: .destructive) {
                     removeDownload()
                 } label: {
-                    Label("Eliminar descarga", systemImage: "trash")
+                    Label(L.deleteDownload, systemImage: "trash")
                 }
             }
         }

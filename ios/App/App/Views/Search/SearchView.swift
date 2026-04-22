@@ -164,7 +164,7 @@ struct SearchView: View {
             .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Buscar")
+                    Text(L.search)
                         .font(.headline)
                         .lineLimit(1)
                         .opacity(stickyOpacity)
@@ -195,7 +195,7 @@ struct SearchView: View {
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Buscar")
+            Text(L.search)
                 .font(.system(size: 34, weight: .bold))
             Spacer()
         }
@@ -215,7 +215,7 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
                 .font(.system(size: 15))
 
-            TextField("Artistas, álbumes, canciones...", text: $vm.query)
+            TextField(L.searchPlaceholder, text: $vm.query)
                 .focused($searchFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
@@ -244,7 +244,7 @@ struct SearchView: View {
             Image(systemName: "wifi.slash")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.orange)
-            Text("Sin conexión — buscando solo en descargas")
+            Text(L.offlineSearchOnly)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
@@ -261,13 +261,13 @@ struct SearchView: View {
     private var historySection: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Recientes")
+                Text(L.recents)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
                 Spacer()
                 if vm.history.count > 1 {
-                    Button("Borrar") {
+                    Button(L.clearHistory) {
                         withAnimation(Anim.small) { vm.clearHistory() }
                     }
                     .font(.subheadline)
@@ -313,7 +313,7 @@ struct SearchView: View {
     private var resultsContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             if !vm.results.artists.isEmpty {
-                resultSection(title: "Artistas") {
+                resultSection(title: L.artists) {
                     ForEach(vm.results.artists) { artist in
                         NavigationLink(value: artist) {
                             ArtistSearchRow(artist: artist)
@@ -331,7 +331,7 @@ struct SearchView: View {
             }
 
             if !vm.results.albums.isEmpty {
-                resultSection(title: "Álbumes") {
+                resultSection(title: L.albumsSearch) {
                     ForEach(vm.results.albums) { album in
                         NavigationLink(value: album) {
                             AlbumSearchRow(album: album)
@@ -349,7 +349,7 @@ struct SearchView: View {
             }
 
             if !vm.results.songs.isEmpty {
-                resultSection(title: "Canciones") {
+                resultSection(title: L.songsLabel) {
                     ForEach(vm.results.songs) { song in
                         Button {
                             vm.saveToHistory(vm.query)
@@ -399,10 +399,10 @@ struct SearchView: View {
                 Image(systemName: "wifi.slash")
                     .font(.system(size: 40))
                     .foregroundStyle(.tertiary)
-                Text("Sin conexión")
+                Text(L.noConnection)
                     .foregroundStyle(.secondary)
                     .font(.subheadline.bold())
-                Text("Solo se busca en canciones descargadas. Sin resultados para «\(vm.query)».")
+                Text(L.offlineNoResults(vm.query))
                     .foregroundStyle(.tertiary)
                     .font(.caption)
                     .multilineTextAlignment(.center)
@@ -410,7 +410,7 @@ struct SearchView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 40))
                     .foregroundStyle(.tertiary)
-                Text("Sin resultados para «\(vm.query)»")
+                Text(L.noResultsFor(vm.query))
                     .foregroundStyle(.secondary)
                     .font(.subheadline)
             }
@@ -460,7 +460,7 @@ private struct ArtistSearchRow: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("Artista")
+                Text(L.artist)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }

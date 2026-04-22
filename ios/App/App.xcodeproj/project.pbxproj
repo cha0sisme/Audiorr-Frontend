@@ -25,6 +25,7 @@
 		3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE112FA7000000000010 /* DevicePickerView.swift */; };
 		3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE132FA7000000000012 /* AddToPlaylistView.swift */; };
 		3400FF012FA8000000000001 /* BackendService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF002FA8000000000001 /* BackendService.swift */; };
+		29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */; };
 		3400FF032FA8000000000003 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF022FA8000000000002 /* PersistenceService.swift */; };
 		3400FF052FA8000000000005 /* DJMixingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF042FA8000000000004 /* DJMixingService.swift */; };
 		3400FF072FA8000000000007 /* QueueManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF062FA8000000000006 /* QueueManager.swift */; };
@@ -88,6 +89,7 @@
 		3400EE112FA7000000000010 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		3400EE132FA7000000000012 /* AddToPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToPlaylistView.swift; sourceTree = "<group>"; };
 		3400FF002FA8000000000001 /* BackendService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendService.swift; sourceTree = "<group>"; };
+		B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationManager.swift; sourceTree = "<group>"; };
 		3400FF022FA8000000000002 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		3400FF042FA8000000000004 /* DJMixingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJMixingService.swift; sourceTree = "<group>"; };
 		3400FF062FA8000000000006 /* QueueManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueManager.swift; sourceTree = "<group>"; };
@@ -206,6 +208,7 @@
 				3400EE092FA7000000000009 /* CanvasService.swift */,
 				3400EE0D2FA700000000000D /* LyricsService.swift */,
 				3400FF002FA8000000000001 /* BackendService.swift */,
+				B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */,
 				3400FF022FA8000000000002 /* PersistenceService.swift */,
 				3400FF062FA8000000000006 /* QueueManager.swift */,
 				3400FF082FA8000000000008 /* ScrobbleService.swift */,
@@ -426,6 +429,7 @@
 				3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */,
 				3400DD072FA6000000000007 /* ContentView.swift in Sources */,
 				3400FF012FA8000000000001 /* BackendService.swift in Sources */,
+				29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */,
 				3400FF032FA8000000000003 /* PersistenceService.swift in Sources */,
 				3400FF052FA8000000000005 /* DJMixingService.swift in Sources */,
 				3400FF072FA8000000000007 /* QueueManager.swift in Sources */,

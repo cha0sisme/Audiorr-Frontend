@@ -75,12 +75,12 @@ struct SongListView: View {
         return InstantMenuButton(tint: tint) {
             // — Playback section
             let playNext = UIAction(
-                title: "Reproducir a continuación",
+                title: L.playNext,
                 image: UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
             ) { _ in PlayerService.shared.insertNext(song) }
 
             let addQueue = UIAction(
-                title: "Añadir a la cola",
+                title: L.addToQueue,
                 image: UIImage(systemName: "text.badge.plus")
             ) { _ in PlayerService.shared.addToQueue(song) }
 
@@ -91,7 +91,7 @@ struct SongListView: View {
 
             if showAlbumInMenu, let albumId = song.albumId, !albumId.isEmpty {
                 let goAlbum = UIAction(
-                    title: "Ir al álbum",
+                    title: L.goToAlbum,
                     image: UIImage(systemName: "music.note")
                 ) { _ in
                     navAlbum = NavidromeAlbum(
@@ -106,7 +106,7 @@ struct SongListView: View {
             // — Artist section
             if showArtistInMenu, let artistId = song.artistId, !artistId.isEmpty {
                 let goArtist = UIAction(
-                    title: "Ir al artista",
+                    title: L.goToArtist,
                     image: UIImage(systemName: "person.crop.circle")
                 ) { _ in
                     navArtist = NavidromeArtist(id: artistId, name: song.artist, albumCount: nil)

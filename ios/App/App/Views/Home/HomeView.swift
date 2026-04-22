@@ -190,7 +190,7 @@ struct HomeView: View {
             .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Inicio")
+                    Text(L.home)
                         .font(.headline)
                         .lineLimit(1)
                         .opacity(stickyOpacity)
@@ -248,7 +248,7 @@ struct HomeView: View {
     private var topWeeklySection: some View {
         if BackendState.shared.isAvailable && network.isConnected && !vm.topWeekly.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Lo más escuchado")
+                Text(L.mostPlayed)
                     .font(.system(size: 22, weight: .bold))
                     .padding(.horizontal, 16)
 
@@ -336,7 +336,7 @@ struct HomeView: View {
                 )
             }
             if let idx = allSongs.firstIndex(where: { $0.id == song.songId }) {
-                PlayerService.shared.playPlaylist(allSongs, startingAt: idx, contextUri: "top-weekly", contextName: "Top semanal")
+                PlayerService.shared.playPlaylist(allSongs, startingAt: idx, contextUri: "top-weekly", contextName: L.topWeekly)
             }
         }
         .contextMenu {
@@ -348,14 +348,14 @@ struct HomeView: View {
                 )
                 navigationPath.append(album)
             } label: {
-                Label("Ir al álbum", systemImage: "square.stack")
+                Label(L.goToAlbum, systemImage: "square.stack")
             }
 
             if let artistId = song.artistId {
                 Button {
                     navigateToArtist(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
                 } label: {
-                    Label("Ir al artista", systemImage: "person")
+                    Label(L.goToArtist, systemImage: "person")
                 }
             }
         }
@@ -385,7 +385,7 @@ struct HomeView: View {
             }
             .foregroundStyle(.red)
         case "new":
-            Text("Nuevo")
+            Text(L.new)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.cyan)
                 .padding(.horizontal, 5)
@@ -403,7 +403,7 @@ struct HomeView: View {
     @ViewBuilder
     private var jumpBackInSection: some View {
         if BackendState.shared.isAvailable && network.isConnected && !vm.recentContexts.isEmpty {
-            HorizontalScrollSection(title: "Volver a escuchar") {
+            HorizontalScrollSection(title: L.listenAgain) {
                 ForEach(vm.recentContexts) { ctx in
                     let isAlbum = ctx.type == "album"
                     let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
@@ -450,7 +450,7 @@ struct HomeView: View {
             let visible = Array(vm.recentReleases.prefix(releasesVisibleLimit))
             let overflow = vm.recentReleases.count - releasesVisibleLimit
 
-            HorizontalScrollSection(title: "Lanzamientos recientes") {
+            HorizontalScrollSection(title: L.recentReleases) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
@@ -459,7 +459,7 @@ struct HomeView: View {
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(
-                        title: "Lanzamientos recientes", items: vm.recentReleases
+                        title: L.recentReleases, items: vm.recentReleases
                     )) {
                         SeeAllCard(remaining: overflow)
                     }
@@ -477,12 +477,12 @@ struct HomeView: View {
             if vm.isGeneratingMixes {
                 // Generating state
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Tus mixes diarios")
+                    Text(L.yourDailyMixes)
                         .font(.system(size: 22, weight: .bold))
                         .padding(.horizontal, 16)
                     HStack(spacing: 12) {
                         ProgressView()
-                        Text("Generando mixes...")
+                        Text(L.generatingMixes)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -494,7 +494,7 @@ struct HomeView: View {
             } else if vm.dailyMixPlaylists.isEmpty {
                 // No mixes at all — show generate button
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Tus mixes diarios")
+                    Text(L.yourDailyMixes)
                         .font(.system(size: 22, weight: .bold))
                         .padding(.horizontal, 16)
 
@@ -503,7 +503,7 @@ struct HomeView: View {
                     } label: {
                         HStack {
                             Image(systemName: "sparkles")
-                            Text("Generar mixes por primera vez")
+                            Text(L.generateMixesFirstTime)
                         }
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.cyan)
@@ -515,7 +515,7 @@ struct HomeView: View {
                 }
             } else {
                 // Show mixes
-                HorizontalScrollSection(title: "Tus mixes diarios") {
+                HorizontalScrollSection(title: L.yourDailyMixes) {
                     ForEach(vm.dailyMixPlaylists) { playlist in
                         NavigationLink(value: playlist) {
                             PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
@@ -537,7 +537,7 @@ struct HomeView: View {
             let visible = Array(vm.latestAlbums.prefix(latestVisibleLimit))
             let overflow = vm.latestAlbums.count - latestVisibleLimit
 
-            HorizontalScrollSection(title: "Últimos álbumes añadidos") {
+            HorizontalScrollSection(title: L.latestAlbums) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
@@ -546,7 +546,7 @@ struct HomeView: View {
                 }
                 if overflow > 0 {
                     NavigationLink(value: SeeAllDestination.albums(
-                        title: "Últimos álbumes añadidos", items: vm.latestAlbums
+                        title: L.latestAlbums, items: vm.latestAlbums
                     )) {
                         SeeAllCard(remaining: overflow)
                     }
@@ -595,7 +595,7 @@ struct HomeView: View {
     @ViewBuilder
     private var offlineContentSection: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Descargado")
+            Text(L.downloaded)
                 .font(.system(size: 22, weight: .bold))
                 .padding(.horizontal, 16)
 
@@ -604,9 +604,9 @@ struct HomeView: View {
                     Image(systemName: "wifi.slash")
                         .font(.system(size: 36))
                         .foregroundStyle(.secondary)
-                    Text("Sin conexión")
+                    Text(L.noConnection)
                         .font(.headline)
-                    Text("Descarga álbumes y playlists para escuchar sin conexión.")
+                    Text(L.downloadAlbumsForOffline)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

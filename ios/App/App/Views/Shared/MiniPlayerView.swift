@@ -105,7 +105,7 @@ struct MiniPlayerView: View {
             }
             .frame(width: 42, height: 42)
 
-            Text("Sin reproducción")
+            Text(L.nothingPlaying)
                 .font(.system(size: 13.5, weight: .medium))
                 .foregroundStyle(.tertiary)
 

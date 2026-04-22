@@ -164,7 +164,7 @@ struct PlaylistsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Playlists")
+                    Text(L.playlists)
                         .font(.headline)
                         .lineLimit(1)
                         .opacity(stickyOpacity)
@@ -180,9 +180,9 @@ struct PlaylistsView: View {
                     }
                 }
             }
-            .alert("Nueva playlist", isPresented: $showCreateSheet) {
-                TextField("Nombre", text: $newPlaylistName)
-                Button("Crear") {
+            .alert(L.newPlaylist, isPresented: $showCreateSheet) {
+                TextField(L.name, text: $newPlaylistName)
+                Button(L.createPlaylist) {
                     let name = newPlaylistName
                     newPlaylistName = ""
                     Task {
@@ -191,9 +191,9 @@ struct PlaylistsView: View {
                         }
                     }
                 }
-                Button("Cancelar", role: .cancel) { newPlaylistName = "" }
+                Button(L.cancel, role: .cancel) { newPlaylistName = "" }
             } message: {
-                Text("Introduce el nombre de la nueva playlist.")
+                Text(L.newPlaylistPrompt)
             }
         }
     }
@@ -202,7 +202,7 @@ struct PlaylistsView: View {
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Playlists")
+            Text(L.playlists)
                 .font(.system(size: 34, weight: .bold))
             Spacer()
         }
@@ -226,16 +226,16 @@ struct PlaylistsView: View {
             downloadsCard
             if !NetworkMonitor.shared.isConnected {
                 ContentUnavailableView(
-                    "Sin conexión",
+                    L.noConnection,
                     systemImage: "wifi.slash",
-                    description: Text("Conecta a internet para ver tus playlists. Las canciones descargadas siguen disponibles.")
+                    description: Text(L.connectOfflinePlaylists)
                 )
                 .padding(.top, 40)
             } else {
                 ContentUnavailableView(
-                    "Sin playlists",
+                    L.noPlaylists,
                     systemImage: "music.note.list",
-                    description: Text("Crea una playlist en Navidrome para verla aquí.")
+                    description: Text(L.createPlaylistHint)
                 )
                 .padding(.top, 40)
             }
@@ -257,14 +257,14 @@ struct PlaylistsView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.tertiary)
             VStack(spacing: 6) {
-                Text("Sin servidor configurado")
+                Text(L.noServerConfigured)
                     .font(.title3.bold())
-                Text("Conecta tu servidor de Navidrome para ver tus playlists.")
+                Text(L.connectNavidromePlaylists)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Button("Conectar a Navidrome") {
+            Button(L.connectToNavidrome) {
                 showSettings = true
             }
             .buttonStyle(.borderedProminent)
@@ -297,10 +297,10 @@ struct PlaylistsView: View {
                     .frame(width: 56, height: 56)
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Descargas")
+                        Text(L.downloads)
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(.primary)
-                        Text("\(cachedSongCount) canciones")
+                        Text(L.songCount(cachedSongCount))
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
@@ -412,7 +412,7 @@ struct DownloadsPlaylistView: View {
         .tint(.white)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Descargas")
+                Text(L.downloads)
                     .font(.headline)
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -489,11 +489,11 @@ struct DownloadsPlaylistView: View {
 
                 // Title + metadata
                 VStack(alignment: .center, spacing: 5) {
-                    Text("Descargas")
+                    Text(L.downloads)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.white)
 
-                    Text("\(songs.count) canciones")
+                    Text(L.songCount(songs.count))
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.white.opacity(0.75))
                 }
@@ -523,7 +523,7 @@ struct DownloadsPlaylistView: View {
         return HStack(spacing: 12) {
             Button {
                 PlayerService.shared.playPlaylist(songs, startingAt: 0,
-                    contextUri: "downloads:all", contextName: "Descargas")
+                    contextUri: "downloads:all", contextName: L.downloads)
             } label: {
                 Image(systemName: "play.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -534,7 +534,7 @@ struct DownloadsPlaylistView: View {
 
             Button {
                 PlayerService.shared.playPlaylist(songs.shuffled(), startingAt: 0,
-                    contextUri: "downloads:all", contextName: "Descargas")
+                    contextUri: "downloads:all", contextName: L.downloads)
             } label: {
                 Image(systemName: "shuffle")
                     .font(.system(size: 15, weight: .semibold))
@@ -558,10 +558,10 @@ struct DownloadsPlaylistView: View {
                 Image(systemName: "arrow.down.circle")
                     .font(.system(size: 40))
                     .foregroundStyle(.white.opacity(0.3))
-                Text("No hay canciones descargadas")
+                Text(L.noDownloadedSongs)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.5))
-                Text("Las canciones que reproduzcas se guardarán automáticamente.")
+                Text(L.songsAutoSaved)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.35))
                     .multilineTextAlignment(.center)
@@ -573,7 +573,7 @@ struct DownloadsPlaylistView: View {
                 songs: songs,
                 palette: palette,
                 contextUri: "downloads:all",
-                contextName: "Descargas"
+                contextName: L.downloads
             )
         }
     }

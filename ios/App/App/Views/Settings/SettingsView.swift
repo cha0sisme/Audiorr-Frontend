@@ -210,6 +210,7 @@ final class SettingsViewModel: ObservableObject {
 struct SettingsView: View {
     @StateObject private var vm = SettingsViewModel()
     @ObservedObject private var theme = AppTheme.shared
+    @ObservedObject private var localization = LocalizationManager.shared
     @State private var showLogoutConfirm = false
     @State private var showSaveAlert = false
     @State private var showProfile = false
@@ -240,22 +241,22 @@ struct SettingsView: View {
         .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("Configuración")
+                Text(L.settings)
                     .font(.headline)
                     .lineLimit(1)
                     .opacity(stickyOpacity)
             }
-            if !username.isEmpty {
+            if !username.isEmpty && BackendState.shared.isAvailable {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showProfile = true } label: {
                         ZStack {
                             Circle()
                                 .fill(avatarColor(for: username))
                             Text(avatarInitial(for: username))
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
                         }
-                        .frame(width: 28, height: 28)
+                        .frame(width: 30, height: 30)
                     }
                     .opacity(stickyOpacity)
                 }
@@ -271,13 +272,13 @@ struct SettingsView: View {
         } message: {
             Text(alertMessage)
         }
-        .confirmationDialog("Cerrar sesión", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("Cerrar sesión", role: .destructive) {
+        .confirmationDialog(L.logout, isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button(L.logout, role: .destructive) {
                 vm.logout()
             }
-            Button("Cancelar", role: .cancel) {}
+            Button(L.cancel, role: .cancel) {}
         } message: {
-            Text("Se borrará la configuración del servidor.")
+            Text(L.logoutConfirm)
         }
     }
 
@@ -289,20 +290,19 @@ struct SettingsView: View {
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Configuración")
+            Text(L.settings)
                 .font(.system(size: 34, weight: .bold))
             Spacer()
-            if !username.isEmpty {
+            if !username.isEmpty && BackendState.shared.isAvailable {
                 Button { showProfile = true } label: {
                     ZStack {
                         Circle()
                             .fill(avatarColor(for: username))
                         Text(avatarInitial(for: username))
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                     }
-                    .frame(width: 38, height: 38)
-                    .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                    .frame(width: 36, height: 36)
                 }
             }
         }
@@ -319,9 +319,9 @@ struct SettingsView: View {
     private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 24) {
             // ── Apariencia ──
-            settingsSection(header: "Apariencia") {
+            settingsSection(header: L.appearance) {
                 settingsRow {
-                    Label("Modo oscuro", systemImage: "moon.fill")
+                    Label(L.darkMode, systemImage: "moon.fill")
                     Spacer()
                     Toggle("", isOn: $theme.isDark)
                     .labelsHidden()
@@ -330,13 +330,13 @@ struct SettingsView: View {
 
             // ── Reproducción ──
             settingsSection(
-                header: "Reproducción",
+                header: L.playback,
                 footer: crossfadeFooter
             ) {
                 if BackendState.shared.isAvailable {
                     // Backend connected → DJ Mode toggle only (crossfade is always on)
                     settingsRow {
-                        Label("Modo DJ", systemImage: "dial.medium.fill")
+                        Label(L.djMode, systemImage: "dial.medium.fill")
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { vm.isDjMode },
@@ -347,7 +347,7 @@ struct SettingsView: View {
                 } else {
                     // No backend → standard crossfade toggle + duration
                     settingsRow {
-                        Label("Crossfade", systemImage: "arrow.trianglehead.swap")
+                        Label(L.crossfade, systemImage: "arrow.trianglehead.swap")
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { vm.crossfadeEnabled },
@@ -361,7 +361,7 @@ struct SettingsView: View {
                         settingsRow {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    Label("Duración", systemImage: "timer")
+                                    Label(L.duration, systemImage: "timer")
                                     Spacer()
                                     Text("\(Int(vm.crossfadeDuration))s")
                                         .foregroundStyle(.secondary)
@@ -386,7 +386,7 @@ struct SettingsView: View {
 
                 Divider().padding(.leading, 16)
                 settingsRow {
-                    Label("ReplayGain", systemImage: "speaker.wave.2.fill")
+                    Label(L.replayGain, systemImage: "speaker.wave.2.fill")
                     Spacer()
                     Toggle("", isOn: Binding(
                         get: { vm.useReplayGain },
@@ -401,34 +401,34 @@ struct SettingsView: View {
                 settingsSection(
                     header: "Last.fm",
                     footer: vm.scrobbleEnabled
-                        ? "Las escuchas se registraran automaticamente tras reproducir al menos el 50% o 4 minutos."
+                        ? L.scrobbleFooter
                         : nil
                 ) {
                     settingsRow {
                         VStack(alignment: .leading, spacing: 10) {
-                            Label("Clave de API", systemImage: "key.fill")
+                            Label(L.apiKey, systemImage: "key.fill")
                                 .font(.subheadline.weight(.medium))
-                            TextField("Introduce tu clave de API", text: $vm.lastfmApiKey)
+                            TextField(L.enterApiKey, text: $vm.lastfmApiKey)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.subheadline)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
 
                             HStack(spacing: 12) {
-                                Button("Guardar") {
+                                Button(L.save) {
                                     Task {
                                         let ok = await vm.saveLastFmApiKey()
-                                        alertMessage = ok ? "Clave guardada." : "Error al guardar."
+                                        alertMessage = ok ? L.keySaved : L.keySaveError
                                         showSaveAlert = true
                                     }
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
 
-                                Button("Eliminar", role: .destructive) {
+                                Button(L.delete, role: .destructive) {
                                     Task {
                                         let ok = await vm.deleteLastFmApiKey()
-                                        alertMessage = ok ? "Clave eliminada." : "Error al eliminar."
+                                        alertMessage = ok ? L.keyDeleted : L.keyDeleteError
                                         showSaveAlert = true
                                     }
                                 }
@@ -436,7 +436,7 @@ struct SettingsView: View {
                             }
 
                             if vm.lastfmHasSecret && vm.lastfmApiKey.isEmpty {
-                                Text("Hay un secreto guardado en el backend.")
+                                Text(L.secretStoredOnBackend)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -444,7 +444,7 @@ struct SettingsView: View {
                     }
                     Divider().padding(.leading, 16)
                     settingsRow {
-                        Label("Scrobbling", systemImage: "arrow.up.right.circle.fill")
+                        Label(L.scrobbling, systemImage: "arrow.up.right.circle.fill")
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { vm.scrobbleEnabled },
@@ -457,7 +457,7 @@ struct SettingsView: View {
                         settingsRow {
                             scrobbleStatusBadge
                             Spacer()
-                            Button("Probar") { vm.testScrobble() }
+                            Button(L.test) { vm.testScrobble() }
                                 .font(.subheadline)
                                 .disabled(vm.scrobbleStatus == .testing)
                         }
@@ -465,13 +465,24 @@ struct SettingsView: View {
                 }
             }
 
+            // ── Idioma ──
+            settingsSection(header: L.language) {
+                settingsRow {
+                    Picker(L.language, selection: $localization.language) {
+                        ForEach(AppLanguage.allCases) { lang in
+                            Text(lang.displayName).tag(lang)
+                        }
+                    }
+                }
+            }
+
             // ── Almacenamiento offline ──
-            settingsSection(header: "Almacenamiento") {
+            settingsSection(header: L.storage) {
                 NavigationLink {
                     StorageManagementView()
                 } label: {
                     settingsRow {
-                        Label("Gestionar almacenamiento", systemImage: "externaldrive")
+                        Label(L.manageStorage, systemImage: "externaldrive")
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
@@ -481,10 +492,10 @@ struct SettingsView: View {
             }
 
             // ── Servidor ──
-            settingsSection(header: "Servidor") {
+            settingsSection(header: L.server) {
                 if let creds = NavidromeService.shared.credentials {
                     settingsRow {
-                        Text("Servidor")
+                        Text(L.server)
                             .foregroundStyle(.primary)
                         Spacer()
                         Text(creds.serverUrl)
@@ -493,7 +504,7 @@ struct SettingsView: View {
                     .font(.subheadline)
                     Divider().padding(.leading, 16)
                     settingsRow {
-                        Text("Usuario")
+                        Text(L.user)
                             .foregroundStyle(.primary)
                         Spacer()
                         Text(creds.username)
@@ -506,7 +517,7 @@ struct SettingsView: View {
                     Button(role: .destructive) {
                         showLogoutConfirm = true
                     } label: {
-                        Label("Cerrar sesión", systemImage: "rectangle.portrait.and.arrow.right")
+                        Label(L.logout, systemImage: "rectangle.portrait.and.arrow.right")
                     }
                 }
             }
@@ -520,14 +531,14 @@ struct SettingsView: View {
     private var crossfadeFooter: String {
         if BackendState.shared.isAvailable {
             if vm.isDjMode {
-                return "Modo DJ analiza las canciones para crear mezclas dinámicas inteligentes. La duración se ajusta automáticamente según el análisis. ReplayGain normaliza el volumen."
+                return L.crossfadeFooterDjOn()
             }
-            return "Las transiciones se optimizan automáticamente con el análisis del backend. Activa Modo DJ para mezclas dinámicas inteligentes. ReplayGain normaliza el volumen."
+            return L.crossfadeFooterBackend()
         }
         if !vm.crossfadeEnabled {
-            return "Las canciones cambiarán sin transición. ReplayGain normaliza el volumen entre canciones."
+            return L.crossfadeFooterOff()
         }
-        return "Crossfade mezcla las canciones con una transición de \(Int(vm.crossfadeDuration))s. ReplayGain normaliza el volumen entre canciones."
+        return L.crossfadeFooterOn(Int(vm.crossfadeDuration))
     }
 
     // MARK: - Section / row helpers
@@ -572,22 +583,22 @@ struct SettingsView: View {
     private var scrobbleStatusBadge: some View {
         switch vm.scrobbleStatus {
         case .idle:
-            Label("Activo", systemImage: "checkmark.circle.fill")
+            Label(L.active, systemImage: "checkmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(.green)
         case .testing:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
-                Text("Probando...")
+                Text(L.testing)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         case .success:
-            Label("Correcto", systemImage: "checkmark.circle.fill")
+            Label(L.correct, systemImage: "checkmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(.green)
         case .error:
-            Label("Error", systemImage: "xmark.circle.fill")
+            Label(L.error, systemImage: "xmark.circle.fill")
                 .font(.caption)
                 .foregroundStyle(.red)
         }
@@ -698,272 +709,210 @@ struct UserProfileSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    profileHero
-                    if vm.isLoading {
-                        ProgressView()
-                            .padding(.top, 40)
-                    } else if BackendState.shared.isAvailable {
-                        statsContent
-                            .padding(.horizontal, 16)
-                            .padding(.top, 24)
-                            .padding(.bottom, 40)
-                    }
-                }
-            }
-            .background(Color(.systemGroupedBackground))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Cerrar") { dismiss() }
-                }
-            }
-            .onAppear { vm.load() }
-        }
-    }
-
-    // MARK: - Hero
-
-    private var profileHero: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(color.gradient)
-                    .shadow(color: color.opacity(0.4), radius: 20, y: 8)
-                Text(initial)
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 100, height: 100)
-
-            Text(username)
-                .font(.title.bold())
-
-            // Last connection + server
-            VStack(spacing: 4) {
-                if let date = vm.lastConnection {
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock")
-                            .font(.caption2)
-                        Text("Última conexión \(date, format: .dateTime.day().month(.abbreviated))")
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                }
-                let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
-                if !serverUrl.isEmpty {
-                    Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
-        .background(color.opacity(0.08).ignoresSafeArea())
-    }
-
-    // MARK: - Stats
-
-    private var statsContent: some View {
-        VStack(spacing: 20) {
-            // Period picker
-            HStack {
-                Text("Estadísticas")
-                    .font(.title3.bold())
-                Spacer()
-                Picker("Período", selection: Binding(
-                    get: { vm.period },
-                    set: { vm.setPeriod($0) }
-                )) {
-                    Text("Semanal").tag("week")
-                    Text("Mensual").tag("month")
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
-            }
-
-            // Summary cards
-            HStack(spacing: 12) {
-                statCard(title: "Reproducciones", value: "\(vm.totalPlays)")
-                if let genre = vm.topGenre {
-                    statCard(title: "Género favorito", value: genre)
-                }
-            }
-
-            // Last scrobble
-            if let scrobble = vm.lastScrobble {
-                profileCard {
-                    HStack(spacing: 12) {
-                        Image(systemName: "music.note")
-                            .font(.title3)
-                            .foregroundStyle(color)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Último scrobble")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(scrobble.title)
-                                .font(.subheadline.bold())
-                                .lineLimit(1)
-                            Text(scrobble.artist)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+            List {
+                // Account header
+                Section {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(color.gradient)
+                            Text(initial)
+                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
                         }
-                        Spacer()
-                        Text(scrobble.playedAt, format: .dateTime.day().month(.abbreviated).hour().minute())
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                }
-            }
+                        .frame(width: 60, height: 60)
 
-            // Top Songs
-            if !vm.topSongs.isEmpty {
-                profileCard {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Top Canciones")
-                            .font(.subheadline.bold())
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
-
-                        ForEach(Array(vm.topSongs.enumerated()), id: \.offset) { index, song in
-                            if index > 0 { Divider().padding(.leading, 60) }
-                            HStack(spacing: 10) {
-                                Text("\(index + 1)")
-                                    .font(.subheadline.bold())
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(username)
+                                .font(.title3.bold())
+                            if let date = vm.lastConnection {
+                                Text("Activo \(date, format: .relative(presentation: .named))")
+                                    .font(.subheadline)
                                     .foregroundStyle(.secondary)
-                                    .frame(width: 20)
+                            }
+                            let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
+                            if !serverUrl.isEmpty {
+                                Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .listRowBackground(Color(.secondarySystemGroupedBackground))
+                }
 
-                                if let coverArt = song.coverArt,
-                                   let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
-                                    AsyncImage(url: url) { image in
-                                        image.resizable().aspectRatio(contentMode: .fill)
-                                    } placeholder: {
-                                        Color(.tertiarySystemFill)
-                                    }
-                                    .frame(width: 40, height: 40)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                } else {
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(Color(.tertiarySystemFill))
-                                        .frame(width: 40, height: 40)
-                                        .overlay {
-                                            Image(systemName: "music.note")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                }
+                if vm.isLoading {
+                    Section {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                            Spacer()
+                        }
+                        .listRowBackground(Color(.secondarySystemGroupedBackground))
+                    }
+                } else if vm.totalPlays == 0 && vm.topSongs.isEmpty {
+                    Section {
+                        ContentUnavailableView(
+                            L.noActivity,
+                            systemImage: "music.note.list",
+                            description: Text(L.listensWillAppear)
+                        )
+                        .listRowBackground(Color(.systemGroupedBackground))
+                    }
+                } else {
+                    // Period picker + summary
+                    Section {
+                        Picker(L.period, selection: Binding(
+                            get: { vm.period },
+                            set: { vm.setPeriod($0) }
+                        )) {
+                            Text(L.weekly).tag("week")
+                            Text(L.monthly).tag("month")
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(Color(.systemGroupedBackground))
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
 
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(song.title)
-                                        .font(.subheadline)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L.plays)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("\(vm.totalPlays)")
+                                    .font(.title.bold())
+                            }
+                            Spacer()
+                            if let genre = vm.topGenre {
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(L.topGenre)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text(genre)
+                                        .font(.title3.bold())
                                         .lineLimit(1)
-                                    Text(song.artist)
+                                }
+                            }
+                        }
+                        .listRowBackground(Color(.secondarySystemGroupedBackground))
+                    }
+
+                    // Last scrobble
+                    if let scrobble = vm.lastScrobble {
+                        Section(L.lastScrobble) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "music.note")
+                                    .font(.title3)
+                                    .foregroundStyle(color)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(scrobble.title)
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                    Text(scrobble.artist)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
                                 Spacer()
-                                Text("\(song.plays)")
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.secondary)
+                                Text(scrobble.playedAt, format: .relative(presentation: .named))
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
+                            .listRowBackground(Color(.secondarySystemGroupedBackground))
                         }
                     }
-                    .padding(.bottom, 8)
-                }
-            }
 
-            // Top Artists
-            if !vm.topArtists.isEmpty {
-                profileCard {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Top Artistas")
-                            .font(.subheadline.bold())
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            .padding(.bottom, 8)
+                    // Top Songs
+                    if !vm.topSongs.isEmpty {
+                        Section(L.topSongs) {
+                            ForEach(Array(vm.topSongs.enumerated()), id: \.offset) { index, song in
+                                HStack(spacing: 10) {
+                                    Text("\(index + 1)")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 20)
 
-                        ForEach(Array(vm.topArtists.enumerated()), id: \.offset) { index, artist in
-                            if index > 0 { Divider().padding(.leading, 60) }
-                            HStack(spacing: 10) {
-                                Text("\(index + 1)")
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 20)
-                                // Artist avatar circle with initial
-                                ZStack {
-                                    Circle()
-                                        .fill(avatarColor(for: artist.artist).opacity(0.8))
-                                    Text(avatarInitial(for: artist.artist))
-                                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                                        .foregroundStyle(.white)
+                                    if let coverArt = song.coverArt,
+                                       let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
+                                        AsyncImage(url: url) { image in
+                                            image.resizable().aspectRatio(contentMode: .fill)
+                                        } placeholder: {
+                                            Color(.tertiarySystemFill)
+                                        }
+                                        .frame(width: 44, height: 44)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color(.tertiarySystemFill))
+                                            .frame(width: 44, height: 44)
+                                            .overlay {
+                                                Image(systemName: "music.note")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                    }
+
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(song.title)
+                                            .font(.subheadline)
+                                            .lineLimit(1)
+                                        Text(song.artist)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Text(L.playsCount(song.plays))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
-                                .frame(width: 40, height: 40)
-
-                                Text(artist.artist)
-                                    .font(.subheadline)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text("\(artist.plays)")
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.secondary)
+                                .listRowBackground(Color(.secondarySystemGroupedBackground))
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 6)
                         }
                     }
-                    .padding(.bottom, 8)
+
+                    // Top Artists
+                    if !vm.topArtists.isEmpty {
+                        Section(L.topArtists) {
+                            ForEach(Array(vm.topArtists.enumerated()), id: \.offset) { index, artist in
+                                HStack(spacing: 10) {
+                                    Text("\(index + 1)")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 20)
+                                    ZStack {
+                                        Circle()
+                                            .fill(avatarColor(for: artist.artist))
+                                        Text(avatarInitial(for: artist.artist))
+                                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                                            .foregroundStyle(.white)
+                                    }
+                                    .frame(width: 44, height: 44)
+
+                                    Text(artist.artist)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(L.playsCount(artist.plays))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .listRowBackground(Color(.secondarySystemGroupedBackground))
+                            }
+                        }
+                    }
                 }
             }
-
-            // Empty state
-            if vm.totalPlays == 0 && vm.topSongs.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.tertiary)
-                    Text("No hay reproducciones registradas")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+            .listStyle(.insetGrouped)
+            .navigationTitle(L.profile)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L.close) { dismiss() }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
             }
+            .onAppear { vm.load() }
         }
-    }
-
-    // MARK: - Helpers
-
-    private func statCard(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title.uppercased())
-                .font(.caption2.bold())
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title2.bold())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func profileCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            content()
-        }
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

@@ -56,7 +56,7 @@ struct SeeAllCard: View {
             }
             .frame(width: size, height: size)
 
-            Text("Ver todo")
+            Text(L.seeAll)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(fg)
                 .frame(width: size, alignment: .center)
@@ -96,7 +96,7 @@ struct SeeAllArtistCard: View {
             }
             .frame(width: size, height: size)
 
-            Text("Ver todo")
+            Text(L.seeAll)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(fg)
                 .frame(width: size)

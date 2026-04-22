@@ -29,18 +29,18 @@ struct DevicePickerView: View {
                         HStack(spacing: 10) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Conectando al hub...")
+                            Text(L.connectingToHub)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
             }
-            .navigationTitle("Reproducir en")
+            .navigationTitle(L.playOn)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cerrar") { dismiss() }
+                    Button(L.close) { dismiss() }
                 }
             }
         }
@@ -73,7 +73,7 @@ struct DevicePickerView: View {
                             Circle()
                                 .fill(.green)
                                 .frame(width: 5, height: 5)
-                            Text("Reproduciendo")
+                            Text(L.playing)
                                 .font(.caption)
                                 .foregroundStyle(.green)
                         }
@@ -96,26 +96,33 @@ struct DevicePickerView: View {
             }
 
             // System route picker (AirPlay, AirPods switch, etc.)
-            HStack(spacing: 14) {
-                Image(systemName: "airplayaudio")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.primary)
-                    .frame(width: 32)
+            ZStack {
+                // Visual row content
+                HStack(spacing: 14) {
+                    Image(systemName: "airplayaudio")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32)
 
-                Text("AirPlay y Bluetooth")
-                    .font(.body)
+                    Text(L.airplayBluetooth)
+                        .font(.body)
 
-                Spacer()
+                    Spacer()
 
-                // Invisible AVRoutePickerView overlay
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                // AVRoutePickerView covers entire row — transparent but tappable
                 SystemRoutePickerButton()
-                    .frame(width: 32, height: 32)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(0.015) // nearly invisible but receives touches
             }
         } header: {
-            Text("Salida de audio")
+            Text(L.audioOutput)
         } footer: {
             if state.audioRouteIcon != "iphone" {
-                Text("Conectado a \(state.audioRouteName)")
+                Text(L.connectedTo(state.audioRouteName))
             }
         }
     }
@@ -133,7 +140,7 @@ struct DevicePickerView: View {
                 deviceRow(
                     icon: device.type.icon,
                     name: device.name,
-                    subtitle: isActive ? "Reproduciendo" : nil,
+                    subtitle: isActive ? L.playing : nil,
                     isActive: isActive
                 ) {
                     // Request sync to get this device's playback state
@@ -146,13 +153,13 @@ struct DevicePickerView: View {
     // MARK: - LAN devices
 
     private var lanDevicesSection: some View {
-        Section("Dispositivos en la red") {
+        Section(L.devicesOnNetwork) {
             ForEach(connect.lanDevices) { device in
                 let isActive = connect.activeDeviceId == device.id
                 deviceRow(
                     icon: "tv",
                     name: device.name,
-                    subtitle: isActive ? "Transmitiendo" : nil,
+                    subtitle: isActive ? L.streaming : nil,
                     isActive: isActive
                 ) {
                     if isActive {
@@ -215,13 +222,37 @@ struct DevicePickerView: View {
 // MARK: - System Route Picker (AVRoutePickerView wrapped for SwiftUI)
 
 struct SystemRoutePickerButton: UIViewRepresentable {
-    func makeUIView(context: Context) -> AVRoutePickerView {
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .clear
+
         let picker = AVRoutePickerView()
-        picker.tintColor = .label
-        picker.activeTintColor = .systemGreen
+        picker.tintColor = .clear          // hide default icon
+        picker.activeTintColor = .clear
         picker.prioritizesVideoDevices = false
-        return picker
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(picker)
+
+        NSLayoutConstraint.activate([
+            picker.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            picker.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            picker.topAnchor.constraint(equalTo: container.topAnchor),
+            picker.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        // Expand the internal route-picker button to fill the entire area
+        if let button = picker.subviews.first(where: { $0 is UIButton }) as? UIButton {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(equalTo: picker.leadingAnchor),
+                button.trailingAnchor.constraint(equalTo: picker.trailingAnchor),
+                button.topAnchor.constraint(equalTo: picker.topAnchor),
+                button.bottomAnchor.constraint(equalTo: picker.bottomAnchor),
+            ])
+        }
+
+        return container
     }
 
-    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }

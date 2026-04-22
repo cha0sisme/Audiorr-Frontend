@@ -19,7 +19,7 @@ final class StorageManagementViewModel: ObservableObject {
         ("2 GB", 2_147_483_648),
         ("5 GB", 5_368_709_120),
         ("10 GB", 10_737_418_240),
-        ("Sin límite", 0),
+        (L.noLimit, 0),
     ]
 
     func load() async {
@@ -69,30 +69,30 @@ struct StorageManagementView: View {
             Section {
                 storageBar
                 HStack {
-                    Label("Canciones en caché", systemImage: "music.note")
+                    Label(L.cachedSongs, systemImage: "music.note")
                     Spacer()
                     Text("\(vm.cachedSongCount)")
                         .foregroundStyle(.secondary)
                 }
                 HStack {
-                    Label("Tamaño total", systemImage: "externaldrive")
+                    Label(L.totalSize, systemImage: "externaldrive")
                     Spacer()
                     Text(formatBytes(vm.totalCacheSize))
                         .foregroundStyle(.secondary)
                 }
                 HStack {
-                    Label("Fijado (protegido)", systemImage: "pin.fill")
+                    Label(L.pinned, systemImage: "pin.fill")
                     Spacer()
                     Text(formatBytes(vm.pinnedSize))
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Uso de almacenamiento")
+                Text(L.storageUsage)
             }
 
             // Cache limit
             Section {
-                Picker("Límite de caché", selection: $vm.maxCacheBytes) {
+                Picker(L.limit, selection: $vm.maxCacheBytes) {
                     ForEach(StorageManagementViewModel.cacheLimitOptions, id: \.bytes) { option in
                         Text(option.label).tag(option.bytes)
                     }
@@ -101,9 +101,9 @@ struct StorageManagementView: View {
                     vm.setMaxCache(newValue)
                 }
             } header: {
-                Text("Límite")
+                Text(L.limit)
             } footer: {
-                Text("Las canciones más antiguas sin fijar se eliminan automáticamente al superar el límite.")
+                Text(L.cacheLimitFooter)
             }
 
             // Auto-cache settings
@@ -112,18 +112,18 @@ struct StorageManagementView: View {
                     get: { vm.autoCacheEnabled },
                     set: { vm.toggleAutoCache($0) }
                 )) {
-                    Label("Auto-caché al reproducir", systemImage: "arrow.down.circle")
+                    Label(L.autoCacheOnPlay, systemImage: "arrow.down.circle")
                 }
                 Toggle(isOn: Binding(
                     get: { vm.wifiOnly },
                     set: { vm.toggleWifiOnly($0) }
                 )) {
-                    Label("Solo descargar con Wi-Fi", systemImage: "wifi")
+                    Label(L.wifiOnlyDownload, systemImage: "wifi")
                 }
             } header: {
-                Text("Descargas automáticas")
+                Text(L.autoDownloads)
             } footer: {
-                Text("Con auto-caché activado, cada canción que reproduzcas se guarda para escuchar sin conexión.")
+                Text(L.autoCacheFooter)
             }
 
             // Downloaded groups
@@ -134,7 +134,7 @@ struct StorageManagementView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.title)
                                     .font(.subheadline.weight(.medium))
-                                Text("\(group.completedSongs)/\(group.totalSongs) canciones · \(group.groupType == "album" ? "Álbum" : "Playlist")")
+                                Text("\(group.completedSongs)/\(group.totalSongs) \(L.songsLabel.lowercased()) · \(group.groupType == "album" ? L.album : L.playlist)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -154,7 +154,7 @@ struct StorageManagementView: View {
                         }
                     }
                 } header: {
-                    Text("Descargas")
+                    Text(L.downloads)
                 }
             }
 
@@ -186,51 +186,51 @@ struct StorageManagementView: View {
                         }
                     }
                     if DownloadManager.shared.failedCount > 0 {
-                        Button("Reintentar fallidas") {
+                        Button(L.retryFailed) {
                             DownloadManager.shared.retryFailed()
                         }
                     }
                 } header: {
-                    Text("Descargas activas")
+                    Text(L.activeDownloads)
                 }
             }
 
             // Danger zone
             Section {
-                Button("Borrar caché no fijado") {
+                Button(L.clearUnpinnedCache) {
                     showClearUnpinnedConfirm = true
                 }
                 .foregroundStyle(.orange)
 
-                Button("Borrar todo el caché") {
+                Button(L.clearAllCache) {
                     showClearAllConfirm = true
                 }
                 .foregroundStyle(.red)
             } header: {
-                Text("Gestión")
+                Text(L.management)
             } footer: {
-                Text("\"Borrar caché no fijado\" elimina todo excepto el contenido fijado. \"Borrar todo\" elimina absolutamente todo.")
+                Text(L.managementFooter)
             }
         }
-        .navigationTitle("Almacenamiento")
+        .navigationTitle(L.storage)
         .navigationBarTitleDisplayMode(.inline)
         .task { await vm.load() }
         .refreshable { await vm.load() }
-        .confirmationDialog("Borrar caché no fijado", isPresented: $showClearUnpinnedConfirm, titleVisibility: .visible) {
-            Button("Borrar", role: .destructive) {
+        .confirmationDialog(L.clearUnpinnedCache, isPresented: $showClearUnpinnedConfirm, titleVisibility: .visible) {
+            Button(L.delete, role: .destructive) {
                 Task { await vm.clearUnpinned() }
             }
-            Button("Cancelar", role: .cancel) {}
+            Button(L.cancel, role: .cancel) {}
         } message: {
-            Text("Se eliminarán \(formatBytes(vm.totalCacheSize - vm.pinnedSize)) de canciones en caché.")
+            Text(L.clearUnpinnedConfirm(formatBytes(vm.totalCacheSize - vm.pinnedSize)))
         }
-        .confirmationDialog("Borrar todo el caché", isPresented: $showClearAllConfirm, titleVisibility: .visible) {
-            Button("Borrar todo", role: .destructive) {
+        .confirmationDialog(L.clearAllCache, isPresented: $showClearAllConfirm, titleVisibility: .visible) {
+            Button(L.deleteAll, role: .destructive) {
                 Task { await vm.clearAll() }
             }
-            Button("Cancelar", role: .cancel) {}
+            Button(L.cancel, role: .cancel) {}
         } message: {
-            Text("Se eliminarán todas las canciones descargadas, incluyendo las fijadas.")
+            Text(L.clearAllConfirm)
         }
     }
 
@@ -260,15 +260,15 @@ struct StorageManagementView: View {
             .frame(height: 8)
 
             HStack(spacing: 16) {
-                Label("Fijado", systemImage: "circle.fill")
+                Label(L.pinnedLegend, systemImage: "circle.fill")
                     .font(.caption2)
                     .foregroundStyle(.green)
-                Label("Caché", systemImage: "circle.fill")
+                Label(L.cacheLegend, systemImage: "circle.fill")
                     .font(.caption2)
                     .foregroundStyle(.blue.opacity(0.4))
                 Spacer()
                 if vm.maxCacheBytes > 0 {
-                    Text("Límite: \(formatBytes(vm.maxCacheBytes))")
+                    Text(L.cacheLimit(formatBytes(vm.maxCacheBytes)))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

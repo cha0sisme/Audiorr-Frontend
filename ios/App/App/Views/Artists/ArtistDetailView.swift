@@ -294,7 +294,7 @@ struct ArtistDetailView: View {
                     .minimumScaleFactor(0.75)
 
                 if let count = vm.artist.albumCount, count > 0 {
-                    Text("\(count) álbumes")
+                    Text(L.albumCount(count))
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
                 }
@@ -320,7 +320,7 @@ struct ArtistDetailView: View {
                 } else {
                     HStack(spacing: 7) {
                         Image(systemName: "play.fill")
-                        Text("Reproducir").fontWeight(.semibold)
+                        Text(L.play).fontWeight(.semibold)
                     }
                     .font(.system(size: 15))
                 }
@@ -374,7 +374,7 @@ struct ArtistDetailView: View {
         if vm.isLoadingSongs {
             // Skeleton while loading
             VStack(alignment: .leading, spacing: 12) {
-                Text("Populares")
+                Text(L.popular)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(isLight ? Color.black : .white)
                     .padding(.horizontal, 16)
@@ -394,7 +394,7 @@ struct ArtistDetailView: View {
         } else if !vm.topSongs.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Populares")
+                    Text(L.popular)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(isLight ? Color.black : .white)
                     Spacer()
@@ -402,7 +402,7 @@ struct ArtistDetailView: View {
                         Button {
                             withAnimation(Anim.small) { vm.showAllSongs.toggle() }
                         } label: {
-                            Text(vm.showAllSongs ? "Ver menos" : "Ver más")
+                            Text(vm.showAllSongs ? L.showLess : L.showMore)
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.60))
                         }
@@ -422,7 +422,7 @@ struct ArtistDetailView: View {
     @ViewBuilder
     private var discographySection: some View {
         if vm.isLoadingAlbums {
-            HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
+            HorizontalScrollSection(title: L.albums, isLight: isLight) {
                 ForEach(0..<4, id: \.self) { _ in
                     VStack(alignment: .leading, spacing: 6) {
                         RoundedRectangle(cornerRadius: 10).fill(skeletonColor).frame(width: 150, height: 150)
@@ -432,7 +432,7 @@ struct ArtistDetailView: View {
                 }
             }
         } else if !vm.albums.isEmpty {
-            HorizontalScrollSection(title: "Álbumes", isLight: isLight) {
+            HorizontalScrollSection(title: L.albums, isLight: isLight) {
                 ForEach(vm.albums) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: heroNS)
@@ -448,7 +448,7 @@ struct ArtistDetailView: View {
     @ViewBuilder
     private var collaborationsSection: some View {
         if !vm.collaborations.isEmpty {
-            HorizontalScrollSection(title: "Aparece en", isLight: isLight) {
+            HorizontalScrollSection(title: L.appearsIn, isLight: isLight) {
                 ForEach(vm.collaborations) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: heroNS)
@@ -465,7 +465,7 @@ struct ArtistDetailView: View {
     private var playlistsSection: some View {
         if !vm.playlistsAreLoading && !vm.playlists.isEmpty {
             HorizontalScrollSection(
-                title: "Playlists con \(vm.artist.name)",
+                title: L.playlistsWith(vm.artist.name),
                 isLight: isLight
             ) {
                 ForEach(vm.playlists) { playlist in
@@ -483,7 +483,7 @@ struct ArtistDetailView: View {
     @ViewBuilder
     private var similarArtistsSection: some View {
         if vm.infoIsLoading {
-            HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
+            HorizontalScrollSection(title: L.fansAlsoListen, isLight: isLight) {
                 ForEach(0..<6, id: \.self) { _ in
                     SimilarArtistPlaceholder(isLight: isLight)
                 }
@@ -493,7 +493,7 @@ struct ArtistDetailView: View {
                 NavidromeArtist(id: $0.id, name: $0.name, albumCount: nil)
             }
 
-            HorizontalScrollSection(title: "Fans también escuchan", isLight: isLight) {
+            HorizontalScrollSection(title: L.fansAlsoListen, isLight: isLight) {
                 ForEach(artists) { artist in
                     NavigationLink(value: artist) {
                         ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
@@ -536,7 +536,7 @@ struct ArtistDetailView: View {
             .padding(.horizontal, 16)
         } else if let bio = vm.info?.biography, !bio.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Acerca de \(vm.artist.name)")
+                Text(L.aboutArtist(vm.artist.name))
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(isLight ? Color.black : .white)
 

@@ -76,7 +76,7 @@ struct ArtistCardView: View {
                 .frame(width: size)
 
             if showStats, let count = artist.albumCount, count > 0 {
-                Text("\(count) \(count == 1 ? "álbum" : "álbumes")")
+                Text(L.albumCount(count))
                     .font(.system(size: 12))
                     .foregroundStyle(subtitleColor)
                     .lineLimit(1)

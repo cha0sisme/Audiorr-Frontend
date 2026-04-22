@@ -19,9 +19,9 @@ struct AddToPlaylistView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if playlists.isEmpty {
                     ContentUnavailableView(
-                        "Sin playlists",
+                        L.noPlaylistsAvailable,
                         systemImage: "music.note.list",
-                        description: Text("No tienes playlists privadas.")
+                        description: Text(L.noPrivatePlaylists)
                     )
                 } else {
                     List(playlists) { playlist in
@@ -37,7 +37,7 @@ struct AddToPlaylistView: View {
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
 
-                                    Text("\(playlist.songCount) canciones")
+                                    Text(L.songCount(playlist.songCount))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -55,11 +55,11 @@ struct AddToPlaylistView: View {
                     }
                 }
             }
-            .navigationTitle("Añadir a playlist")
+            .navigationTitle(L.addToPlaylist)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cerrar") { dismiss() }
+                    Button(L.close) { dismiss() }
                 }
             }
             .overlay(alignment: .bottom) {
@@ -105,7 +105,7 @@ struct AddToPlaylistView: View {
                 try? await Task.sleep(for: .seconds(1))
                 dismiss()
             } catch {
-                errorMessage = "Error al añadir"
+                errorMessage = L.addToPlaylistError
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 try? await Task.sleep(for: .seconds(2))
                 errorMessage = nil

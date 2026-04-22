@@ -18,11 +18,11 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             TabView {
-                Tab("Inicio", systemImage: "house.fill") {
+                Tab(L.home, systemImage: "house.fill") {
                     HomeView()
                 }
 
-                Tab("Artistas", systemImage: "person.2.fill") {
+                Tab(L.artists, systemImage: "person.2.fill") {
                     ArtistsView()
                 }
 
@@ -36,7 +36,7 @@ struct ContentView: View {
                     }
                 }
 
-                Tab("Buscar", systemImage: "magnifyingglass", role: .search) {
+                Tab(L.search, systemImage: "magnifyingglass", role: .search) {
                     searchView
                 }
             }
@@ -127,7 +127,7 @@ struct ContentView: View {
         HStack(spacing: 8) {
             Image(systemName: "wifi.slash")
                 .font(.system(size: 12, weight: .semibold))
-            Text("Sin conexión — contenido descargado disponible")
+            Text(L.offlineDownloadsAvailable)
                 .font(.system(size: 12, weight: .medium))
         }
         .foregroundStyle(.white)

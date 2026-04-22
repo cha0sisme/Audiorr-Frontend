@@ -235,11 +235,11 @@ struct PlaylistDetailView: View {
             }
         }
         .confirmationDialog(
-            "Eliminar «\(vm.displayPlaylist.name)»",
+            L.deleteConfirm(vm.displayPlaylist.name),
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Eliminar playlist", role: .destructive) {
+            Button(L.deletePlaylist, role: .destructive) {
                 Task {
                     if await vm.deletePlaylist() {
                         if let onDismiss {
@@ -249,9 +249,9 @@ struct PlaylistDetailView: View {
                     }
                 }
             }
-            Button("Cancelar", role: .cancel) {}
+            Button(L.cancel, role: .cancel) {}
         } message: {
-            Text("Esta acción no se puede deshacer.")
+            Text(L.irreversibleAction)
         }
     }
 
@@ -360,7 +360,7 @@ struct PlaylistDetailView: View {
         let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
         let pl = vm.displayPlaylist
         var parts: [String] = []
-        if pl.songCount > 0 { parts.append("\(pl.songCount) canciones") }
+        if pl.songCount > 0 { parts.append(L.songCount(pl.songCount)) }
         if pl.duration > 0  { parts.append(formatDuration(pl.duration)) }
         if let owner = pl.owner, !owner.isEmpty { parts.append(owner) }
 
@@ -389,7 +389,7 @@ struct PlaylistDetailView: View {
                 } else {
                     HStack(spacing: 7) {
                         Image(systemName: "play.fill")
-                        Text("Reproducir")
+                        Text(L.play)
                             .fontWeight(.semibold)
                     }
                     .font(.system(size: 15))
@@ -414,7 +414,7 @@ struct PlaylistDetailView: View {
                 } else {
                     HStack(spacing: 7) {
                         Image(systemName: "shuffle")
-                        Text("Aleatorio")
+                        Text(L.shuffle)
                             .fontWeight(.semibold)
                     }
                     .font(.system(size: 15))
@@ -460,7 +460,7 @@ struct PlaylistDetailView: View {
                         Button(role: .destructive) {
                             showDeleteConfirm = true
                         } label: {
-                            Label("Eliminar playlist", systemImage: "trash")
+                            Label(L.deletePlaylist, systemImage: "trash")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -517,9 +517,9 @@ struct PlaylistDetailView: View {
     private func smartMixLabel(for status: SmartMixStatus) -> String {
         switch status {
         case .idle:      return "SmartMix"
-        case .analyzing: return "Analizando…"
+        case .analyzing: return L.analyzing
         case .ready:     return "SmartMix"
-        case .error:     return "Reintentar"
+        case .error:     return L.retry
         }
     }
 

@@ -51,7 +51,7 @@ struct LoginView: View {
                     }
                     .padding(.bottom, 6)
 
-                    Text("Conecta con tu servidor Navidrome\npara acceder a tu biblioteca de música.")
+                    Text(L.loginSubtitle)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -62,7 +62,7 @@ struct LoginView: View {
                     VStack(spacing: 0) {
                         loginField(
                             icon: "globe",
-                            label: "URL del servidor",
+                            label: L.serverUrl,
                             placeholder: "http://192.168.1.10:4533",
                             text: $serverUrl,
                             field: .server,
@@ -71,7 +71,7 @@ struct LoginView: View {
                         divider
                         loginField(
                             icon: "person",
-                            label: "Usuario",
+                            label: L.username,
                             placeholder: "admin",
                             text: $username,
                             field: .user,
@@ -80,7 +80,7 @@ struct LoginView: View {
                         divider
                         loginField(
                             icon: "lock",
-                            label: "Contraseña",
+                            label: L.password,
                             placeholder: "••••••••",
                             text: $password,
                             field: .password,
@@ -100,7 +100,7 @@ struct LoginView: View {
                             .padding(.horizontal, 24)
                     }
                     if case .success = status {
-                        Label("Conectado", systemImage: "checkmark.circle.fill")
+                        Label(L.connected, systemImage: "checkmark.circle.fill")
                             .font(.subheadline)
                             .foregroundStyle(.green)
                             .padding(.top, 14)
@@ -113,7 +113,7 @@ struct LoginView: View {
                                 ProgressView()
                                     .tint(.white)
                             } else {
-                                Text("Iniciar sesión")
+                                Text(L.signIn)
                                     .fontWeight(.semibold)
                             }
                         }
@@ -218,7 +218,7 @@ struct LoginView: View {
             let pingURLStr = "\(rawUrl)/rest/ping.view?u=\(u)&p=\(p)&v=1.16.0&c=audiorr&f=json"
 
             guard let url = URL(string: pingURLStr) else {
-                await MainActor.run { status = .error("URL invalida") }
+                await MainActor.run { status = .error(L.invalidUrl) }
                 return
             }
 
@@ -231,7 +231,7 @@ struct LoginView: View {
 
                 let ping = try JSONDecoder().decode(PingOuter.self, from: data)
                 guard ping.subsonicResponse.status == "ok" else {
-                    await MainActor.run { status = .error("Credenciales incorrectas") }
+                    await MainActor.run { status = .error(L.invalidCredentials) }
                     return
                 }
 
@@ -252,7 +252,7 @@ struct LoginView: View {
                 }
             } catch {
                 await MainActor.run {
-                    status = .error("No se pudo conectar: \(error.localizedDescription)")
+                    status = .error(L.connectionFailed(error.localizedDescription))
                 }
             }
         }

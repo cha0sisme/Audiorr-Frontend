@@ -333,7 +333,7 @@ struct AlbumDetailView: View {
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "play.fill")
-                    Text("Reproducir")
+                    Text(L.play)
                         .fontWeight(.semibold)
                 }
                 .font(.system(size: 15))

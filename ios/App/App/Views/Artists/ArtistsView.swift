@@ -220,7 +220,7 @@ struct ArtistsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Artistas")
+                    Text(L.artists)
                         .font(.headline)
                         .lineLimit(1)
                         .opacity(stickyOpacity)
@@ -233,7 +233,7 @@ struct ArtistsView: View {
 
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
-            Text("Artistas")
+            Text(L.artists)
                 .font(.system(size: 34, weight: .bold))
             Spacer()
         }
@@ -256,16 +256,16 @@ struct ArtistsView: View {
         } else if vm.allArtists.isEmpty {
             if !NetworkMonitor.shared.isConnected {
                 ContentUnavailableView(
-                    "Sin conexión",
+                    L.noConnection,
                     systemImage: "wifi.slash",
-                    description: Text("Conecta a internet para ver tus artistas. Las canciones descargadas siguen disponibles.")
+                    description: Text(L.connectOfflineArtists)
                 )
                 .padding(.top, 40)
             } else {
                 ContentUnavailableView(
-                    "Sin artistas",
+                    L.noArtistsFound,
                     systemImage: "person.2",
-                    description: Text("No se encontraron artistas en tu servidor.")
+                    description: Text(L.noArtistsFound)
                 )
                 .padding(.top, 40)
             }
@@ -289,14 +289,14 @@ struct ArtistsView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.tertiary)
             VStack(spacing: 6) {
-                Text("Sin servidor configurado")
+                Text(L.noServerConfigured)
                     .font(.title3.bold())
-                Text("Conecta tu servidor de Navidrome para ver tus artistas.")
+                Text(L.connectNavidromeArtists)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            Button("Conectar a Navidrome") { showSettings = true }
+            Button(L.connectToNavidrome) { showSettings = true }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             Spacer()
@@ -310,7 +310,7 @@ struct ArtistsView: View {
     private var featuredSection: some View {
         if !vm.featuredArtists.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                sectionHeader("Más escuchados")
+                sectionHeader(L.mostListened)
                     .padding(.bottom, 14)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -335,7 +335,7 @@ struct ArtistsView: View {
     private var recentSection: some View {
         if !vm.recentArtists.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                sectionHeader("Novedades")
+                sectionHeader(L.recent)
                     .padding(.bottom, 14)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -408,7 +408,7 @@ struct ArtistsView: View {
                 }
             } label: {
                 HStack(spacing: 0) {
-                    Text("Todos los artistas")
+                    Text(L.allArtists)
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(Color.primary)
                     Text("  \(vm.allArtists.count)")
