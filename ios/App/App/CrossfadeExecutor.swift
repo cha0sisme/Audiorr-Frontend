@@ -562,24 +562,26 @@ class CrossfadeExecutor {
     /// Static version — callable from closures that capture the EQ ref without `self`.
     /// Used by cancel()'s automationQueue dispatches to serialize after in-flight filterTicks.
     /// Internal access: AudioEngineManager.cancelCrossfade() also needs this for its backstop reset.
+    /// Reset crossfade bands to transparent state — NO BYPASS.
+    /// CoreAudio bypass=true is unreliable: the DSP may keep processing with
+    /// stale parameters, or ignore parameter changes while bypassed. Instead,
+    /// we keep bands always active (bypass=false) with neutral parameters:
+    /// highPass at 20Hz passes everything, gain=0 shelves are flat.
     static func resetBandsStatic(_ eq: AVAudioUnitEQ) {
-        // Default filter types per band — must match AudioEngineManager init.
-        // Restoring filterType ensures no exotic type (e.g. lowPass from energy-down)
-        // lingers with audible parameters if CoreAudio bypass is unreliable.
         let defaults: [(AVAudioUnitEQFilterType, Float)] = [
             (.highPass, 20),       // band 0: highpass at 20Hz = transparent
-            (.lowShelf, 80),       // band 1: lowshelf at 80Hz, gain 0 = transparent
-            (.parametric, 1500),   // band 2: parametric at 1.5kHz, gain 0 = transparent
-            (.highShelf, 8000),    // band 3: highshelf at 8kHz, gain 0 = transparent
+            (.lowShelf, 80),       // band 1: lowshelf at 80Hz, gain 0 = flat
+            (.parametric, 1500),   // band 2: parametric at 1.5kHz, gain 0 = flat
+            (.highShelf, 8000),    // band 3: highshelf at 8kHz, gain 0 = flat
         ]
         let count = min(eq.bands.count, defaults.count)
         for i in 0..<count {
             let band = eq.bands[i]
-            band.bypass = true
             band.filterType = defaults[i].0
             band.frequency = defaults[i].1
             band.gain = 0
             band.bandwidth = 2.0
+            band.bypass = false  // always active — rely on neutral params, not bypass
         }
     }
 

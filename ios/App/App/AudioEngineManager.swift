@@ -134,18 +134,15 @@ class AudioEngineManager {
         // Band 2: parametric mid scoop (vocal anti-clash, ~1.5kHz)
         // Band 3: highShelf (hi-hat cleanup on A, ~8kHz)
         eqA = AVAudioUnitEQ(numberOfBands: 8)
-        eqA.bands[0].filterType = .highPass
-        eqA.bands[1].filterType = .lowShelf
-        eqA.bands[2].filterType = .parametric
-        eqA.bands[3].filterType = .highShelf
-        for i in 0..<8 { eqA.bands[i].bypass = true }
-
         eqB = AVAudioUnitEQ(numberOfBands: 8)
-        eqB.bands[0].filterType = .highPass
-        eqB.bands[1].filterType = .lowShelf
-        eqB.bands[2].filterType = .parametric
-        eqB.bands[3].filterType = .highShelf
-        for i in 0..<8 { eqB.bands[i].bypass = true }
+        // Bands 0-3: crossfade EQ — always active (bypass=false) with neutral params.
+        // We never use bypass because CoreAudio bypass is unreliable.
+        // Neutral params (highPass 20Hz, gain=0 shelves) are sonically transparent.
+        CrossfadeExecutor.resetBandsStatic(eqA)
+        CrossfadeExecutor.resetBandsStatic(eqB)
+        // Bands 4-7: reserved for future global EQ — bypassed for now
+        for i in 4..<8 { eqA.bands[i].bypass = true }
+        for i in 4..<8 { eqB.bands[i].bypass = true }
 
         // PeakLimiter: prevents clipping when A+B overlap during crossfade.
         // Transparent when signal is below 0dBFS — only catches peaks.
