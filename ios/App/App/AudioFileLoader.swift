@@ -340,16 +340,25 @@ class AudioFileLoader: @unchecked Sendable {
             writer.startWriting()
             writer.startSession(atSourceTime: .zero)
 
-            let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
-            writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
-                autoreleasepool {
-                while writerInput.isReadyForMoreMediaData {
-                    guard reader.status == .reading,
-                          let buffer = readerOutput.copyNextSampleBuffer() else {
-                        writerInput.markAsFinished()
+            // Wrap AV types in Sendable box — they are used single-threaded on writeQueue
+            struct AVContext: @unchecked Sendable {
+                let reader: AVAssetReader
+                let readerOutput: AVAssetReaderTrackOutput
+                let writer: AVAssetWriter
+                let writerInput: AVAssetWriterInput
+            }
+            let av = AVContext(reader: reader, readerOutput: readerOutput, writer: writer, writerInput: writerInput)
 
-                        if reader.status == .completed {
-                            writer.finishWriting { [weak self] in
+            let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
+            av.writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
+                autoreleasepool {
+                while av.writerInput.isReadyForMoreMediaData {
+                    guard av.reader.status == .reading,
+                          let buffer = av.readerOutput.copyNextSampleBuffer() else {
+                        av.writerInput.markAsFinished()
+
+                        if av.reader.status == .completed {
+                            av.writer.finishWriting { [weak self] in
                                 guard let self = self else { return }
                                 self.queue.async(flags: []) {
                                     // Replace the MP3 with the CAF
@@ -364,8 +373,8 @@ class AudioFileLoader: @unchecked Sendable {
                                 }
                             }
                         } else {
-                            print("[AudioFileLoader] Transcode read failed: \(songId) — \(reader.error?.localizedDescription ?? "unknown")")
-                            writer.cancelWriting()
+                            print("[AudioFileLoader] Transcode read failed: \(songId) — \(av.reader.error?.localizedDescription ?? "unknown")")
+                            av.writer.cancelWriting()
                             try? FileManager.default.removeItem(at: cafURL)
                             self?.queue.async(flags: []) {
                                 self?.resolveContinuations(songId: songId, result: .success(sourceURL))
@@ -374,7 +383,7 @@ class AudioFileLoader: @unchecked Sendable {
                         return
                     }
 
-                    writerInput.append(buffer)
+                    av.writerInput.append(buffer)
                 }
                 } // autoreleasepool
             }

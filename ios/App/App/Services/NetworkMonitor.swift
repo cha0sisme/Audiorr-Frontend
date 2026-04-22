@@ -19,7 +19,7 @@ final class NetworkMonitor {
 
     private let monitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "com.audiorr.networkmonitor", qos: .utility)
-    private nonisolated(unsafe) var debounceWork: DispatchWorkItem?
+    @ObservationIgnored private nonisolated(unsafe) var debounceWork: DispatchWorkItem?
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
