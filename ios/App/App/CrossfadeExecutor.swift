@@ -233,6 +233,18 @@ class CrossfadeExecutor {
     /// Permite que AudioEngineManager notifique onTrackEnd como safety net.
     var onPlayerBEndedNaturally: (() -> Void)?
 
+    deinit {
+        filterTimer?.cancel()
+        filterTimer = nil
+        safetyWatchdog?.cancel()
+        safetyWatchdog = nil
+        secondaryWatchdog?.cancel()
+        secondaryWatchdog = nil
+        if let obs = foregroundObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
     // MARK: - Init
 
     init(
@@ -551,17 +563,23 @@ class CrossfadeExecutor {
     /// Used by cancel()'s automationQueue dispatches to serialize after in-flight filterTicks.
     /// Internal access: AudioEngineManager.cancelCrossfade() also needs this for its backstop reset.
     static func resetBandsStatic(_ eq: AVAudioUnitEQ) {
-        let count = min(eq.bands.count, 4)
+        // Default filter types per band — must match AudioEngineManager init.
+        // Restoring filterType ensures no exotic type (e.g. lowPass from energy-down)
+        // lingers with audible parameters if CoreAudio bypass is unreliable.
+        let defaults: [(AVAudioUnitEQFilterType, Float)] = [
+            (.highPass, 20),       // band 0: highpass at 20Hz = transparent
+            (.lowShelf, 80),       // band 1: lowshelf at 80Hz, gain 0 = transparent
+            (.parametric, 1500),   // band 2: parametric at 1.5kHz, gain 0 = transparent
+            (.highShelf, 8000),    // band 3: highshelf at 8kHz, gain 0 = transparent
+        ]
+        let count = min(eq.bands.count, defaults.count)
         for i in 0..<count {
             let band = eq.bands[i]
             band.bypass = true
-            band.gain = 0           // neutral for lowshelf/parametric/highshelf
-            band.bandwidth = 2.0    // wide/flat — no resonance peak even if bypass fails
-            if band.filterType == .highPass {
-                band.frequency = 20  // below audible — no effect
-            } else if band.filterType == .lowPass {
-                band.frequency = 20000  // above audible — no effect
-            }
+            band.filterType = defaults[i].0
+            band.frequency = defaults[i].1
+            band.gain = 0
+            band.bandwidth = 2.0
         }
     }
 

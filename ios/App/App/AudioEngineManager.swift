@@ -969,9 +969,22 @@ class AudioEngineManager {
             // Resetear mixer volumes
             self.mixerA.outputVolume = self.replayGainMultiplierA
             self.mixerB.outputVolume = 0
-            
+
             // Asegurar que el master mixer tiene el volumen correcto post-crossfade
             self.engine.mainMixerNode.outputVolume = self.volume
+
+            // Backstop: serialize a final EQ reset on automationQueue after any
+            // stale filterTick that was in-flight when completeCrossfade ran.
+            // This catches the race between completeCrossfade (automationQueue)
+            // dispatching onComplete (main) and a ghost filterTick re-applying values.
+            let bsEqA = self.eqA, bsEqB = self.eqB
+            let bsMixA = self.mixerA, bsMixB = self.mixerB
+            CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.2) {
+                CrossfadeExecutor.resetBandsStatic(bsEqA)
+                CrossfadeExecutor.resetBandsStatic(bsEqB)
+                bsMixA.pan = 0
+                bsMixB.pan = 0
+            }
 
             self.isCrossfading = false
             self.crossfadeExecutor = nil
@@ -1007,6 +1020,8 @@ class AudioEngineManager {
         executor.onPlayerBEndedNaturally = { [weak self] in
             guard let self = self, self.isCrossfading else { return }
             print("[AudioEngineManager] ⚠️ PlayerB terminó sin crossfade completado — disparando onTrackEnd")
+            // Cancel executor timers BEFORE releasing it — prevents ghost filterTicks
+            self.crossfadeExecutor?.cancel()
             self.isCrossfading = false
             self.crossfadeExecutor = nil
             // Promover B→A manualmente para que el estado quede consistente
@@ -1023,6 +1038,15 @@ class AudioEngineManager {
             self.resetCrossfadeBands(self.eqB)
             self.mixerA.pan = 0
             self.mixerB.pan = 0
+            // Backstop on automationQueue
+            let bsEqA = self.eqA, bsEqB = self.eqB
+            let bsMixA = self.mixerA, bsMixB = self.mixerB
+            CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.2) {
+                CrossfadeExecutor.resetBandsStatic(bsEqA)
+                CrossfadeExecutor.resetBandsStatic(bsEqB)
+                bsMixA.pan = 0
+                bsMixB.pan = 0
+            }
             self.currentFile = self.nextFile
             self.nextFile = nil
             self.replayGainMultiplierA = self.replayGainMultiplierB
@@ -1883,18 +1907,7 @@ class AudioEngineManager {
     /// processing even with bypass=true. Setting gain=0 and freq to inaudible
     /// values guarantees no residual filtering.
     private func resetCrossfadeBands(_ eq: AVAudioUnitEQ) {
-        let count = min(eq.bands.count, 4)
-        for i in 0..<count {
-            let band = eq.bands[i]
-            band.bypass = true
-            band.gain = 0
-            band.bandwidth = 2.0    // wide/flat — no resonance peak even if bypass fails
-            if band.filterType == .highPass {
-                band.frequency = 20
-            } else if band.filterType == .lowPass {
-                band.frequency = 20000
-            }
-        }
+        CrossfadeExecutor.resetBandsStatic(eq)
     }
 
     // MARK: - Acceso a nodos (para CrossfadeExecutor)
