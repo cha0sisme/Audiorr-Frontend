@@ -414,7 +414,18 @@ class AudioEngineManager {
         // Siempre actualizar el lock screen al salir, incluso si el guard corta el flujo.
         // Esto cubre el caso donde isPlaying ya es false (p.ej. interrupción previa) pero
         // MPNowPlayingInfoCenter quedó desincronizado.
-        defer { updateNowPlayingPlaybackState() }
+        defer {
+            updateNowPlayingPlaybackState()
+            // Safety net: re-asertar estado pausado tras 500ms para atrapar cualquier
+            // callback async (artwork download, 300ms re-broadcast, crossfade completion)
+            // que pueda reescribir nowPlayingInfo y desincronizar playbackState.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self, !self.isPlaying else { return }
+                MPNowPlayingInfoCenter.default().playbackState = .paused
+                self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+                self.publishNowPlayingInfo()
+            }
+        }
 
         guard isPlaying else { return }
 
@@ -1671,8 +1682,12 @@ class AudioEngineManager {
         // dejando el lock screen/Dynamic Island desincronizado.
         let update = { [weak self] in
             guard let self = self else { return }
-            MPNowPlayingInfoCenter.default().playbackState = self.isPlaying ? .playing : .paused
+            // Apple requiere que nowPlayingInfo se publique ANTES de playbackState.
+            // Si se hace al revés, iOS puede ignorar el cambio de playbackState
+            // y el lock screen / Dynamic Island queda desincronizado.
             self.updateNowPlayingProgress()
+            let state: MPNowPlayingPlaybackState = self.isPlaying ? .playing : .paused
+            MPNowPlayingInfoCenter.default().playbackState = state
         }
         if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
     }
@@ -1684,8 +1699,11 @@ class AudioEngineManager {
 
     /// Publica el diccionario local como una escritura atómica al singleton.
     /// Usar siempre en lugar de escribir directamente a MPNowPlayingInfoCenter.
+    /// Re-aserta playbackState tras cada escritura para evitar que iOS lo resetee
+    /// al procesar cambios en nowPlayingInfo (bug observado en iOS 17/18).
     private func publishNowPlayingInfo() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = localNowPlayingInfo
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
     }
 
     // MARK: - Remote Command Center
@@ -1810,32 +1828,38 @@ class AudioEngineManager {
               let type = AVAudioSession.InterruptionType(rawValue: typeValue)
         else { return }
 
-        switch type {
-        case .began:
-            wasPlayingBeforeInterruption = isPlaying
-            if isPlaying {
-                pause()
-                notifyPlaybackStateChanged(reason: "interruption")
-            }
-            print("[AudioEngineManager] Interrupción comenzada")
-
-        case .ended:
-            guard let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
-            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-            if options.contains(.shouldResume) && wasPlayingBeforeInterruption {
-                ensureAudioSessionActive()
-                // Pequeño delay para que iOS termine de restaurar la sesión
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    self?.resume()
+        // Despachar a main thread: las notificaciones de AVAudioSession pueden llegar
+        // desde hilos del sistema. Acceder a isPlaying/wasPlayingBeforeInterruption
+        // desde un hilo distinto a main causa data races.
+        let handle = { [weak self] in
+            guard let self = self else { return }
+            switch type {
+            case .began:
+                self.wasPlayingBeforeInterruption = self.isPlaying
+                if self.isPlaying {
+                    self.pause()
+                    self.notifyPlaybackStateChanged(reason: "interruption")
                 }
-                print("[AudioEngineManager] Interrupción terminada — reanudando")
-            } else {
-                print("[AudioEngineManager] Interrupción terminada — sin reanudar (shouldResume: \(options.contains(.shouldResume)))")
-            }
+                print("[AudioEngineManager] Interrupción comenzada")
 
-        @unknown default:
-            break
+            case .ended:
+                guard let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) && self.wasPlayingBeforeInterruption {
+                    self.ensureAudioSessionActive()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        self?.resume()
+                    }
+                    print("[AudioEngineManager] Interrupción terminada — reanudando")
+                } else {
+                    print("[AudioEngineManager] Interrupción terminada — sin reanudar (shouldResume: \(options.contains(.shouldResume)))")
+                }
+
+            @unknown default:
+                break
+            }
         }
+        if Thread.isMainThread { handle() } else { DispatchQueue.main.async(execute: handle) }
     }
 
     @objc private func handleRouteChange(_ notification: Notification) {
@@ -1847,20 +1871,26 @@ class AudioEngineManager {
         switch reason {
         case .oldDeviceUnavailable:
             // Bluetooth/auriculares desconectados → pausar
-            if isPlaying {
-                pause()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if self.isPlaying {
+                    self.pause()
+                }
                 // Prevenir que handleInterruption(.ended) reanude tras route change:
                 // en algunos dispositivos iOS envía interruption + routeChange juntos.
-                wasPlayingBeforeInterruption = false
-                notifyPlaybackStateChanged(reason: "routeLost")
-            }
-            // Safety net: asegurar que el lock screen muestre estado pausado.
-            // En algunos edge cases (BT disconnect + reconfigure de audio route),
-            // iOS puede resetear el playbackState brevemente. Re-setear tras un tick.
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self, !self.isPlaying else { return }
+                self.wasPlayingBeforeInterruption = false
+                self.notifyPlaybackStateChanged(reason: "routeLost")
+
+                // Safety net: re-asertar paused inmediatamente
+                guard !self.isPlaying else { return }
                 MPNowPlayingInfoCenter.default().playbackState = .paused
                 self.updateNowPlayingProgress()
+            }
+            // Segunda safety net a 500ms: atrapa resets de iOS tras reconfigure de audio route
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self, !self.isPlaying else { return }
+                self.localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+                self.publishNowPlayingInfo()
             }
             print("[AudioEngineManager] Ruta perdida — pausado")
 

@@ -211,6 +211,7 @@ struct SettingsView: View {
     @StateObject private var vm = SettingsViewModel()
     @ObservedObject private var theme = AppTheme.shared
     @ObservedObject private var localization = LocalizationManager.shared
+    @Environment(\.dismiss) private var dismiss
     @State private var showLogoutConfirm = false
     @State private var showSaveAlert = false
     @State private var showProfile = false
@@ -238,30 +239,10 @@ struct SettingsView: View {
             scrollY = y
         }
         .background(Color(.systemBackground))
-        .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(L.settings)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .opacity(stickyOpacity)
-            }
-            if !username.isEmpty && BackendState.shared.isAvailable {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showProfile = true } label: {
-                        ZStack {
-                            Circle()
-                                .fill(avatarColor(for: username))
-                            Text(avatarInitial(for: username))
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: 30, height: 30)
-                    }
-                    .opacity(stickyOpacity)
-                }
-            }
+        .overlay(alignment: .top) {
+            stickyTitleBar
         }
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showProfile) {
             UserProfileSheet(username: username)
         }
@@ -280,6 +261,50 @@ struct SettingsView: View {
         } message: {
             Text(L.logoutConfirm)
         }
+    }
+
+    // MARK: - Sticky title bar (replaces toolbar to avoid touch interception)
+
+    private var stickyTitleBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+
+            Spacer()
+
+            Text(L.settings)
+                .font(.headline)
+                .lineLimit(1)
+                .opacity(stickyOpacity)
+
+            Spacer()
+
+            if !username.isEmpty && BackendState.shared.isAvailable {
+                Button { showProfile = true } label: {
+                    ZStack {
+                        Circle()
+                            .fill(avatarColor(for: username))
+                        Text(avatarInitial(for: username))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 30, height: 30)
+                }
+                .opacity(stickyOpacity)
+            } else {
+                Color.clear.frame(width: 30, height: 30)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first?.safeAreaInsets.top ?? 59)
+        .padding(.bottom, 10)
+        .background(.bar.opacity(stickyOpacity))
     }
 
     // MARK: - Large header

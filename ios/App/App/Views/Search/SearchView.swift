@@ -161,15 +161,10 @@ struct SearchView: View {
                 scrollY = y
             }
             .background(Color(.systemBackground))
-            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(L.search)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .opacity(stickyOpacity)
-                }
+            .overlay(alignment: .top) {
+                stickyTitleBar
             }
+            .toolbar(.hidden, for: .navigationBar)
             .onChange(of: vm.query) { _, newValue in
                 vm.onQueryChange(newValue)
             }
@@ -189,6 +184,22 @@ struct SearchView: View {
                     .navigationTransition(.zoom(sourceID: playlist.id, in: heroNS))
             }
         }
+    }
+
+    // MARK: - Sticky title bar (replaces toolbar to avoid touch interception)
+
+    private var stickyTitleBar: some View {
+        Text(L.search)
+            .font(.headline)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.top, UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first?.windows.first?.safeAreaInsets.top ?? 59)
+            .padding(.bottom, 10)
+            .background(.bar.opacity(stickyOpacity))
+            .opacity(stickyOpacity)
+            .allowsHitTesting(false)
     }
 
     // MARK: - Large title header

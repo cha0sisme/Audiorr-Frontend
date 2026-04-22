@@ -289,6 +289,19 @@ final class NavidromeService: ObservableObject {
         return (artist, d.album ?? [])
     }
 
+    // MARK: - Song
+
+    func getSong(id: String) async -> NavidromeSong? {
+        guard let base = baseURL() else { return nil }
+        let urlStr = "\(base)/rest/getSong.view?\(authQuery())&id=\(id)"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(GetSongResponse.self, from: data),
+              response.status == "ok"
+        else { return nil }
+        return response.song
+    }
+
     // MARK: - Album
 
     func getAlbumDetail(albumId: String) async throws -> (album: NavidromeAlbum?, songs: [NavidromeSong], recordLabels: [RecordLabel]) {

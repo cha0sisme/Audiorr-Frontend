@@ -7,6 +7,7 @@ final class HomeViewModel: ObservableObject {
     static let shared = HomeViewModel()
 
     @Published var topWeekly: [TopWeeklySong] = []
+    @Published var topWeeklySongs: [NavidromeSong] = []
     @Published var recentContexts: [RecentContext] = []
     @Published var recentReleases: [NavidromeAlbum] = []
     @Published var dailyMixes: [DailyMix] = []
@@ -65,6 +66,34 @@ final class HomeViewModel: ObservableObject {
     private func loadTopWeekly() async {
         guard BackendState.shared.isAvailable else { return }
         topWeekly = await api.getTopWeekly()
+
+        // Resolve full NavidromeSong metadata (duration, replayGain, etc.) in parallel
+        let entries = topWeekly
+        let resolved = await withTaskGroup(of: (Int, NavidromeSong?).self) { group in
+            for (idx, entry) in entries.enumerated() {
+                group.addTask {
+                    let song = await self.api.getSong(id: entry.songId)
+                    return (idx, song)
+                }
+            }
+            var results = Array<NavidromeSong?>(repeating: nil, count: entries.count)
+            for await (idx, song) in group {
+                results[idx] = song
+            }
+            return results
+        }
+
+        // Build final array — use resolved song if available, fallback to basic conversion
+        topWeeklySongs = zip(entries, resolved).map { entry, song in
+            song ?? NavidromeSong(
+                id: entry.songId, title: entry.title, artist: entry.artist,
+                artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
+                coverArt: entry.coverArt, duration: 0, track: nil,
+                year: nil, genre: nil, explicitStatus: nil,
+                replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+            )
+        }
     }
 
     private func loadRecentContexts() async {
@@ -218,12 +247,6 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Programmatic navigation
-
-    private func navigateToArtist(_ artist: NavidromeArtist) {
-        navigationPath.append(artist)
-    }
-
     // MARK: - Large header (Audiorr logo)
 
     private var largeHeader: some View {
@@ -325,16 +348,19 @@ struct HomeView: View {
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture {
-            let allSongs = vm.topWeekly.map { entry in
-                NavidromeSong(
-                    id: entry.songId, title: entry.title, artist: entry.artist,
-                    artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
-                    coverArt: entry.coverArt, duration: 0, track: nil,
-                    year: nil, genre: nil, explicitStatus: nil,
-                    replayGainTrackGain: nil, replayGainTrackPeak: nil,
-                    replayGainAlbumGain: nil, replayGainAlbumPeak: nil
-                )
-            }
+            // Use resolved songs (with duration, replayGain, etc.) for playback
+            let allSongs = vm.topWeeklySongs.isEmpty
+                ? vm.topWeekly.map { entry in
+                    NavidromeSong(
+                        id: entry.songId, title: entry.title, artist: entry.artist,
+                        artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
+                        coverArt: entry.coverArt, duration: 0, track: nil,
+                        year: nil, genre: nil, explicitStatus: nil,
+                        replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                        replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+                    )
+                }
+                : vm.topWeeklySongs
             if let idx = allSongs.firstIndex(where: { $0.id == song.songId }) {
                 PlayerService.shared.playPlaylist(allSongs, startingAt: idx, contextUri: "top-weekly", contextName: L.topWeekly)
             }
@@ -353,7 +379,7 @@ struct HomeView: View {
 
             if let artistId = song.artistId {
                 Button {
-                    navigateToArtist(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
+                    navigationPath.append(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
                 } label: {
                     Label(L.goToArtist, systemImage: "person")
                 }

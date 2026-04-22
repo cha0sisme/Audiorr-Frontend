@@ -305,6 +305,13 @@ struct ArtistInfo: Hashable {
     let similarArtists: [SimilarArtist]
 }
 
+// MARK: - getSong response
+
+struct GetSongResponse: Decodable {
+    let status: String
+    let song: NavidromeSong?
+}
+
 // MARK: - getTopSongs response
 
 struct TopSongsResponse: Decodable {
