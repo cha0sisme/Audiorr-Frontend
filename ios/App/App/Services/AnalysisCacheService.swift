@@ -25,6 +25,12 @@ actor AnalysisCacheService {
         let vocalStartTime: Double?
         let speechSegments: [SpeechSegment]?
         let structure: [StructureSegment]?
+        // New fields from backend v2 — null until backend deploys
+        let bpmEssentia: Double?
+        let bpmConfidence: Double?
+        let introEndTimeHeuristic: Double?
+        let outroStartTimeHeuristic: Double?
+        let modelUsed: Bool?
         // Diagnostics object — contains fade_info with cuePoint, energyProfile, etc.
         let diagnostics: Diagnostics?
 
@@ -38,14 +44,27 @@ actor AnalysisCacheService {
         var chorusStructure: [StructureSegment]? { diagnostics?.analysisLog?.lastChorusEnd?.chorusStructure }
         /// Last vocal time — where vocals actually end in the song (more precise than outroStartTime)
         var lastVocalTime: Double? { diagnostics?.analysisLog?.instrumentalOutro?.lastVocalTimeCandidate }
+        /// Vocal start time — prefer top-level (once backend persists it), fallback to diagnostics
+        var vocalStartFromDiagnostics: Double? { diagnostics?.analysisLog?.introDecision?.candidates?.vocal }
+        /// Heuristic intro end — prefer top-level field, fallback to diagnostics
+        var introEndHeuristic: Double? { introEndTimeHeuristic ?? diagnostics?.introEndTime }
+        /// Heuristic outro start — prefer top-level field, fallback to diagnostics
+        var outroStartHeuristic: Double? { outroStartTimeHeuristic ?? diagnostics?.finalOutroStartTime }
 
         struct Diagnostics: Codable {
             let fadeInfo: FadeInfo?
             let analysisLog: AnalysisLog?
+            /// The diagnostics-level intro end time (from percussive/vocal/energy detection).
+            /// Often more accurate than the top-level introEndTime.
+            let introEndTime: Double?
+            /// The final outro start time after hierarchy checks.
+            let finalOutroStartTime: Double?
 
             enum CodingKeys: String, CodingKey {
                 case fadeInfo = "fade_info"
                 case analysisLog = "analysis_log"
+                case introEndTime = "intro_end_time"
+                case finalOutroStartTime = "final_outro_start_time"
             }
         }
 
@@ -60,11 +79,36 @@ actor AnalysisCacheService {
         struct AnalysisLog: Codable {
             let lastChorusEnd: LastChorusEnd?
             let instrumentalOutro: InstrumentalOutro?
+            let introDecision: IntroDecision?
+            let speechSegmentLog: SpeechSegmentLog?
 
             enum CodingKeys: String, CodingKey {
                 case lastChorusEnd = "Last Chorus End"
                 case instrumentalOutro = "Instrumental Outro"
+                case introDecision = "Intro Decision"
+                case speechSegmentLog = "Speech Segment"
             }
+        }
+
+        struct IntroDecision: Codable {
+            let candidates: IntroCandidates?
+
+            struct IntroCandidates: Codable {
+                let vocal: Double?
+                let percussive: Double?
+                let energyBeat: Double?
+
+                enum CodingKeys: String, CodingKey {
+                    case vocal
+                    case percussive
+                    case energyBeat = "energy_beat"
+                }
+            }
+        }
+
+        struct SpeechSegmentLog: Codable {
+            let decision: String?
+            let segments: [SpeechSegment]?
         }
 
         struct InstrumentalOutro: Codable {

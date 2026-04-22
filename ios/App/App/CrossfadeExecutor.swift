@@ -1,13 +1,23 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║                                                                      ║
-// ║   CrossfadeExecutor — Part of "Velvet Transition" v2.0               ║
+// ║   CrossfadeExecutor — Part of "Velvet Transition" v3.0               ║
+// ║   Codename: "Phantom Cut"                                            ║
 // ║                                                                      ║
 // ║   Audiorr — Audiophile-grade music player                            ║
 // ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
 // ║                                                                      ║
 // ║   Real-time crossfade execution engine. Drives volume curves,        ║
 // ║   EQ automation, beat-aligned bass swap, time-stretch rate ramp,    ║
-// ║   and energy compensation at ~60Hz via DispatchSourceTimer.           ║
+// ║   energy compensation, and stereo micro-separation at ~60Hz          ║
+// ║   via DispatchSourceTimer.                                           ║
+// ║                                                                      ║
+// ║   v2.0 — Velvet Transition: equal-power curves, bass swap,           ║
+// ║          beat-aligned automation, filter presets                      ║
+// ║   v3.0 — Phantom Cut: hold→drop volume curves, complementary B      ║
+// ║          curve, hold→drop-aligned filter pivot (60%), punch           ║
+// ║          alignment (startOffset = entryPoint - totalTime),            ║
+// ║          bass-first mixing (25%), stereo micro-separation (±0.08),   ║
+// ║          PeakLimiter on mainMixer, skipBFilters for short fades      ║
 // ║                                                                      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -17,7 +27,7 @@ import Foundation
 import UIKit
 
 /// CrossfadeExecutor — real-time crossfade state machine.
-/// Part of the "Velvet Transition" v2.0 engine.
+/// Part of the "Phantom Cut" v3.0 engine.
 /// Drives volume curves (equal-power, beat-match, EQ mix), filter automation,
 /// beat-aligned bass swap, time-stretch rate ramp, and energy compensation.
 class CrossfadeExecutor {
@@ -61,6 +71,7 @@ class CrossfadeExecutor {
         let isOutroInstrumental: Bool   // A's outro is instrumental — lighter filters
         let isIntroInstrumental: Bool   // B's intro is instrumental — skip mid-scoop
         let danceability: Double        // High = preserve bass/groove (less aggressive HPF/lowshelf)
+        let skipBFilters: Bool          // Short outro/fade — B enters clean (no highpass/lowshelf)
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -71,7 +82,7 @@ class CrossfadeExecutor {
              downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = [],
              useMidScoop: Bool = false, useHighShelfCut: Bool = false,
              isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
-             danceability: Double = 0.5) {
+             danceability: Double = 0.5, skipBFilters: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -93,6 +104,7 @@ class CrossfadeExecutor {
             self.isOutroInstrumental = isOutroInstrumental
             self.isIntroInstrumental = isIntroInstrumental
             self.danceability = danceability
+            self.skipBFilters = skipBFilters
         }
     }
 
@@ -130,8 +142,8 @@ class CrossfadeExecutor {
     // MARK: - Presets (port exacto de AudioEffectsChain.ts líneas 20-83)
 
     static let presetNormal = FilterPreset(
-        highpassA: .init(startFreq: 400, midFreq: 4000, endFreq: 8000, q: 0.7),
-        highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
+        highpassA: .init(startFreq: 400, midFreq: 4000, endFreq: 8000, q: 1.1),
+        highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.6),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -6, endGain: -14),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
         lowpassA: nil,
@@ -140,8 +152,8 @@ class CrossfadeExecutor {
     )
 
     static let presetAggressive = FilterPreset(
-        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 0.7),
-        highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.5),
+        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 1.2),
+        highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.6),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -10, endGain: -18),
         lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
         lowpassA: nil,
@@ -150,8 +162,8 @@ class CrossfadeExecutor {
     )
 
     static let presetAnticipation = FilterPreset(
-        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 0.7),
-        highpassB: .init(startFreq: 1200, midFreq: 600, endFreq: 40, q: 0.5),
+        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 1.2),
+        highpassB: .init(startFreq: 1200, midFreq: 600, endFreq: 40, q: 0.6),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -16),
         lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0),
         lowpassA: nil,
@@ -162,10 +174,10 @@ class CrossfadeExecutor {
     /// Energy-down preset: uses lowpass sweep on A instead of highpass (song "fades away" darkly)
     static let presetEnergyDown = FilterPreset(
         highpassA: .init(startFreq: 40, midFreq: 40, endFreq: 40, q: 0.7),  // bypassed effectively
-        highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.5),
+        highpassB: .init(startFreq: 400, midFreq: 200, endFreq: 60, q: 0.6),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -10),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
-        lowpassA: .init(startFreq: 20000, endFreq: 800, q: 0.7),
+        lowpassA: .init(startFreq: 20000, endFreq: 800, q: 1.0),
         // Energy-down: lighter mid scoop (lowpass already darkens), no hi-hat shelf (lowpass handles it)
         midScoopA: .init(frequency: 1500, bandwidth: 1.0, startGain: 0, endGain: -8),
         highShelfA: nil
@@ -305,7 +317,7 @@ class CrossfadeExecutor {
         [CrossfadeExecutor] ═══════════════════════════════════════
           \(config.transitionType.rawValue): "\(currentTitle)" → "\(nextTitle)"
           Entry: \(String(format: "%.2f", config.entryPoint))s | Fade: \(String(format: "%.2f", config.fadeDuration))s
-          Filters: \(filtersDesc) | DJ: \(djDesc.isEmpty ? "OFF" : djDesc) | Anticipation: \(anticDesc) | Analysis: \(analysisDesc.isEmpty ? "—" : analysisDesc)
+          Filters: \(filtersDesc) | DJ: \(djDesc.isEmpty ? "OFF" : djDesc) | B-filters: \(config.skipBFilters ? "SKIP" : "ON") | Anticipation: \(anticDesc) | Analysis: \(analysisDesc.isEmpty ? "—" : analysisDesc)
           RG A: \(String(format: "%.3f", maxVolumeA)) | B: \(String(format: "%.3f", maxVolumeB)) | Vol: \(String(format: "%.2f", getMasterVolume()))
           Beat: A=\(String(format: "%.3f", config.beatIntervalA))s B=\(String(format: "%.3f", config.beatIntervalB))s | swap@\(String(format: "%.2f", bassSwapTime - timings.startTime))s | beats:\(hasBeatData ? "YES" : "NO")
           Timings:
@@ -326,17 +338,10 @@ class CrossfadeExecutor {
 
         let filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
 
-        // FadeOut multiplier varies by transition type:
-        // - naturalBlend/crossfade: 1.3x (ambient tail of A adds depth)
-        // - eqMix/beatMatchBlend: 1.1x (less tail — cleaner cut of beats)
-        // - cut types: 1.0x (no extra tail)
-        let fadeOutMultiplier: Double
-        switch config.transitionType {
-        case .naturalBlend, .crossfade, .fadeOutACutB: fadeOutMultiplier = 1.3
-        case .eqMix, .beatMatchBlend:                  fadeOutMultiplier = 1.1
-        case .cut, .cutAFadeInB:                       fadeOutMultiplier = 1.0
-        }
-        let fadeOutDuration = config.fadeDuration * fadeOutMultiplier
+        // FadeOut = fadeDuration (1:1). No multiplier — A disappears cleanly
+        // within the fade window so B arrives at its punch with A already gone.
+        // The old 1.3x tail created muddiness from overlapping at partial volumes.
+        let fadeOutDuration = config.fadeDuration
         let totalTransition = fadeOutDuration + filterLead
 
         let anticipationStartTime = now
@@ -345,16 +350,14 @@ class CrossfadeExecutor {
         let transitionEndTime = filterStartTime + totalTransition
         let totalTime = config.anticipationTime + totalTransition
 
-        let fadeInDelay = fadeOutDuration * 0.1
-        let fadeInStartTime = volumeFadeStartTime + fadeInDelay
+        // B's fade-in starts when A's volume fade starts — no delay.
+        // B should reach full volume at or slightly before transitionEnd (punch).
+        let fadeInStartTime = volumeFadeStartTime
         let fadeInEndTime = fadeInStartTime + config.fadeDuration
 
-        let startOffset: Double
-        if config.needsAnticipation {
-            startOffset = max(0, config.entryPoint - config.fadeDuration - config.anticipationTime)
-        } else {
-            startOffset = max(0, config.entryPoint - config.fadeDuration)
-        }
+        // totalTime includes anticipation + filterLead + fadeOutDuration.
+        // This ensures B reaches exactly entryPoint when the transition ends.
+        let startOffset = max(0, config.entryPoint - totalTime)
 
         return Timings(
             startTime: now,
@@ -382,13 +385,16 @@ class CrossfadeExecutor {
         let fadeDur = fadeEnd - fadeStart
         guard fadeDur > 0 else { return fadeStart }
 
-        // Target: 40-50% of crossfade (bass swap slightly early sounds more natural)
-        let targetTime = fadeStart + fadeDur * 0.45
+        // Bass-first mixing: a DJ cuts A's bass BEFORE dropping volume.
+        // Bass swap early in the fade (25%) so B's bass enters while A still has mids/highs.
+        // Instrumental outro: even earlier (15%) since A has no bass to clash with.
+        let targetPercent = config.isOutroInstrumental ? 0.15 : 0.25
+        let targetTime = fadeStart + fadeDur * targetPercent
         let beatInterval = config.beatIntervalB > 0 ? config.beatIntervalB : config.beatIntervalA
 
         guard beatInterval > 0 else {
-            // No beat data — use linear 50%
-            return fadeStart + fadeDur * 0.5
+            // No beat data — bass swap at target percent
+            return fadeStart + fadeDur * targetPercent
         }
 
         // If we have downbeat times for B, find the nearest one to our target
@@ -403,9 +409,9 @@ class CrossfadeExecutor {
             for db in config.downbeatTimesB {
                 // Convert file-time to wall-clock
                 let wallTime = fadeStart + (db - bFileStart)
-                // Only consider downbeats within the crossfade window (20%-70% range)
-                let minT = fadeStart + fadeDur * 0.2
-                let maxT = fadeStart + fadeDur * 0.7
+                // Only consider downbeats within the early crossfade window (bass-first)
+                let minT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
+                let maxT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
                 guard wallTime >= minT && wallTime <= maxT else { continue }
                 let dist = abs(wallTime - targetTime)
                 if dist < bestDist {
@@ -417,9 +423,11 @@ class CrossfadeExecutor {
         }
 
         // No downbeat array — snap to nearest beat grid of B
-        let offsetInFade = fadeDur * 0.45
+        let offsetInFade = fadeDur * targetPercent
         let nearestBeat = round(offsetInFade / beatInterval) * beatInterval
-        let clampedBeat = max(fadeDur * 0.2, min(fadeDur * 0.7, nearestBeat))
+        let minClamp = fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
+        let maxClamp = fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
+        let clampedBeat = max(minClamp, min(maxClamp, nearestBeat))
         return fadeStart + clampedBeat
     }
 
@@ -441,10 +449,10 @@ class CrossfadeExecutor {
             print("[CrossfadeExecutor] ⚠️ Setup falló (sin frames en B) — restaurando A")
             mixerA.outputVolume = maxVolumeA
             // Reset EQ and time-stretch that setupInitialEQ/setupTimeStretch already applied
-            for i in 0..<min(eqA.bands.count, 4) {
-                eqA.bands[i].bypass = true
-                eqB.bands[i].bypass = true
-            }
+            resetCrossfadeBands(eqA)
+            resetCrossfadeBands(eqB)
+            mixerA.pan = 0
+            mixerB.pan = 0
             resetTimeStretch()
             isCancelled = true
             DispatchQueue.main.async { [weak self] in
@@ -476,19 +484,49 @@ class CrossfadeExecutor {
         playerB.stop()
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
-        // Reset EQ to bypass so cancelled crossfades don't leave filters active
-        for i in 0..<min(eqA.bands.count, 4) {
-            eqA.bands[i].bypass = true
-            eqB.bands[i].bypass = true
-        }
-        // Reset time-stretch rates
+
+        // Immediate reset on calling thread (best-effort)
+        resetCrossfadeBands(eqA)
+        resetCrossfadeBands(eqB)
+        mixerA.pan = 0
+        mixerB.pan = 0
         resetTimeStretch()
+
+        // Dispatch a second reset to automationQueue — this serializes AFTER any
+        // in-flight filterTick() that may have already passed the isCancelled guard
+        // and is about to write EQ values. DispatchSource.cancel() does NOT stop
+        // an already-executing handler, so without this the filterTick can overwrite
+        // the reset above. This is the root cause of the "stuck filter on playerB" bug.
+        let eqA = self.eqA, eqB = self.eqB
+        let mA = self.mixerA, mB = self.mixerB
+        let tpA = self.timePitchA, tpB = self.timePitchB
+        Self.automationQueue.async {
+            Self.resetBandsStatic(eqA)
+            Self.resetBandsStatic(eqB)
+            mA.pan = 0
+            mB.pan = 0
+            tpA?.rate = 1.0
+            tpB?.rate = 1.0
+        }
+        // Delayed backstop: 150ms later, reset again in case a stale timer event
+        // was queued before cancel() invalidated the source.
+        Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
+            Self.resetBandsStatic(eqA)
+            Self.resetBandsStatic(eqB)
+            mA.pan = 0
+            mB.pan = 0
+            tpA?.rate = 1.0
+            tpB?.rate = 1.0
+        }
     }
 
     // MARK: - Time-Stretch Setup
 
     private func setupTimeStretch() {
-        guard config.useTimeStretch else { return }
+        guard config.useTimeStretch else {
+            print("[CrossfadeExecutor] Time-stretch OFF")
+            return
+        }
         // Set initial rates — B starts at target rate immediately,
         // A ramps gradually during the crossfade (handled in filterTick).
         timePitchA?.rate = 1.0  // A starts at normal rate, ramps toward config.rateA
@@ -499,6 +537,32 @@ class CrossfadeExecutor {
     private func resetTimeStretch() {
         timePitchA?.rate = 1.0
         timePitchB?.rate = 1.0
+    }
+
+    /// Resets crossfade bands (0-3) to neutral: bypass + neutral parameters.
+    /// AVAudioUnitEQ bypass can be unreliable in CoreAudio — the DSP may keep
+    /// processing even with bypass=true. Setting gain=0 and freq to inaudible
+    /// values guarantees no residual filtering even if bypass fails.
+    private func resetCrossfadeBands(_ eq: AVAudioUnitEQ) {
+        Self.resetBandsStatic(eq)
+    }
+
+    /// Static version — callable from closures that capture the EQ ref without `self`.
+    /// Used by cancel()'s automationQueue dispatches to serialize after in-flight filterTicks.
+    /// Internal access: AudioEngineManager.cancelCrossfade() also needs this for its backstop reset.
+    static func resetBandsStatic(_ eq: AVAudioUnitEQ) {
+        let count = min(eq.bands.count, 4)
+        for i in 0..<count {
+            let band = eq.bands[i]
+            band.bypass = true
+            band.gain = 0           // neutral for lowshelf/parametric/highshelf
+            band.bandwidth = 2.0    // wide/flat — no resonance peak even if bypass fails
+            if band.filterType == .highPass {
+                band.frequency = 20  // below audible — no effect
+            } else if band.filterType == .lowPass {
+                band.frequency = 20000  // above audible — no effect
+            }
+        }
     }
 
     // MARK: - Setup
@@ -564,15 +628,18 @@ class CrossfadeExecutor {
         }
 
         // ── Player B: highpass sweep (bass gradually enters) + lowshelf ──
-        eqB.bands[0].bypass = false
-        eqB.bands[0].filterType = .highPass
-        eqB.bands[0].frequency = preset.highpassB.startFreq
-        eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
+        // Skip when A's outro is short — B enters clean, no filtered sound
+        if !config.skipBFilters {
+            eqB.bands[0].bypass = false
+            eqB.bands[0].filterType = .highPass
+            eqB.bands[0].frequency = preset.highpassB.startFreq
+            eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
 
-        eqB.bands[1].bypass = false
-        eqB.bands[1].filterType = .lowShelf
-        eqB.bands[1].frequency = preset.lowshelfB.frequency
-        eqB.bands[1].gain = preset.lowshelfB.startGain
+            eqB.bands[1].bypass = false
+            eqB.bands[1].filterType = .lowShelf
+            eqB.bands[1].frequency = preset.lowshelfB.frequency
+            eqB.bands[1].gain = preset.lowshelfB.startGain
+        }
 
         // ── Band 2: Mid scoop on A (vocal anti-clash, ~1.5kHz parametric dip) ──
         // Skip mid-scoop when B's intro is instrumental — no vocal clash risk
@@ -645,38 +712,76 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut, .cutAFadeInB:
+            // Hard cut: A stays full until the last 0.2s, then drops instantly
             let cutStart = max(0, 1.0 - 0.2 / duration)
             if progress < cutStart { return maxVolumeA }
             let cutP = Float((progress - cutStart) / (1.0 - cutStart))
             return maxVolumeA * powf(0.0001 / maxVolumeA, cutP)
 
-        case .eqMix:
-            if progress < 0.5 {
-                let p = Float(progress * 2)
-                return maxVolumeA * powf(maxVolumeA * 0.7 / maxVolumeA, p)
+        case .eqMix, .beatMatchBlend:
+            // "Hold → drop": A stays at ~85% until 65% of the fade,
+            // then drops exponentially to 0 at the punch.
+            // Mimics a DJ holding A while EQ/bass does the work, then pulling the fader.
+            let holdLevel: Float = 0.85
+            let holdEnd = 0.65
+            if progress < holdEnd {
+                // Gentle ease from 100% to holdLevel
+                let p = Float(progress / holdEnd)
+                let eased = p * p  // quadratic ease-in
+                return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
             }
-            let remaining = Float((progress - 0.5) / 0.5)
-            return maxVolumeA * 0.7 * powf(0.0001 / (maxVolumeA * 0.7), remaining)
-
-        case .beatMatchBlend:
-            if progress < 0.8 {
-                let p = Float(progress / 0.8)
-                return maxVolumeA * powf(maxVolumeA * 0.8 / maxVolumeA, p)
-            }
-            let drop = Float((progress - 0.8) / 0.2)
-            return maxVolumeA * 0.8 * powf(0.0001 / (maxVolumeA * 0.8), drop)
+            // Fast exponential drop from holdLevel to 0
+            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
+            return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
 
         case .naturalBlend:
-            // Equal-power crossfade: cos²(π/2 * t) — constant perceived energy
-            let angle = Float(progress) * .pi / 2.0
-            return maxVolumeA * cosf(angle) * cosf(angle)
+            // "Hold → drop" with equal-power character.
+            // A holds at ~85% until 60%, then cos² drop to 0.
+            let holdLevel: Float = 0.85
+            let holdEnd = 0.60
+            if progress < holdEnd {
+                let p = Float(progress / holdEnd)
+                let eased = p * p
+                return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
+            }
+            // Remap remaining 40% to cos² drop
+            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
+            let angle = dropP * .pi / 2.0
+            return maxVolumeA * holdLevel * cosf(angle) * cosf(angle)
 
-        case .crossfade, .fadeOutACutB:
-            return maxVolumeA * powf(0.0001 / maxVolumeA, Float(progress))
+        case .fadeOutACutB:
+            // A fades out ahead of B's firm entry at ~55%.
+            // Shorter hold, earlier drop so A is low when B enters.
+            let holdLevel: Float = 0.85
+            let holdEnd = 0.45
+            if progress < holdEnd {
+                let p = Float(progress / holdEnd)
+                let eased = p * p
+                return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
+            }
+            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
+            return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
+
+        case .crossfade:
+            // Standard crossfade with "hold → drop" character.
+            // A eases to 80% over first 60%, then exponential drop.
+            let holdLevel: Float = 0.80
+            let holdEnd = 0.60
+            if progress < holdEnd {
+                let p = Float(progress / holdEnd)
+                let eased = p * p
+                return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
+            }
+            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
+            return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
         }
     }
 
-    // MARK: - Volume curves for B (port exacto de AudioEffectsChain.ts líneas 308-394)
+    // MARK: - Volume curves for B (complementary to A's "hold → drop")
+    //
+    // B stays low while A holds, then ramps up as A drops.
+    // This prevents both songs from being loud simultaneously (muddiness)
+    // and creates the energy handoff that sounds like a DJ.
 
     func gainForPlayerB(at t: Double) -> Float {
         if config.needsAnticipation {
@@ -686,19 +791,14 @@ class CrossfadeExecutor {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return 0 }
                 let p = Float((t - timings.anticipationStartTime) / dur)
-                return maxVolumeB * 0.30 * max(0, p)
+                return maxVolumeB * 0.25 * max(0, p)
             } else if t < timings.fadeInStartTime {
                 let dur = timings.fadeInStartTime - timings.filterStartTime
-                guard dur > 0 else { return maxVolumeB * 0.30 }
+                guard dur > 0 else { return maxVolumeB * 0.25 }
                 let p = Float((t - timings.filterStartTime) / dur)
-                return maxVolumeB * (0.30 + 0.20 * p)
-            } else if t < timings.fadeInEndTime {
-                let dur = timings.fadeInEndTime - timings.fadeInStartTime
-                guard dur > 0 else { return maxVolumeB * 0.50 }
-                let p = Float((t - timings.fadeInStartTime) / dur)
-                return maxVolumeB * (0.50 + 0.50 * p)
+                return maxVolumeB * (0.25 + 0.10 * p)
             }
-            return maxVolumeB
+            // Falls through to main curve from fadeInStartTime onward
         }
 
         guard t >= timings.fadeInStartTime else { return 0 }
@@ -706,20 +806,83 @@ class CrossfadeExecutor {
         guard fadeInDuration > 0 else { return maxVolumeB }
         let progress = min(1.0, (t - timings.fadeInStartTime) / fadeInDuration)
 
+        // Anticipation base: if B was already playing at ~35%, continue from there
+        let baseLevel: Float = config.needsAnticipation ? 0.35 : 0.0
+
         switch config.transitionType {
-        case .fadeOutACutB, .cut:
+        case .cut:
+            // Pure cut: B comes in fast (0.1s)
             return maxVolumeB * Float(min(1.0, (t - timings.fadeInStartTime) / 0.1))
 
+        case .fadeOutACutB:
+            // A fades out gradually → B should wait until A is low enough (~60% of fade),
+            // then enter firmly. This prevents both songs being loud simultaneously.
+            let waitUntil = 0.55  // A is at ~holdLevel dropping at this point
+            if progress < waitUntil {
+                // B stays very low during A's hold phase
+                let p = Float(progress / waitUntil)
+                return maxVolumeB * 0.15 * p
+            }
+            // Quick ramp to full once A is dropping
+            let rampP = Float((progress - waitUntil) / (1.0 - waitUntil))
+            let eased = rampP * rampP * (3.0 - 2.0 * rampP)
+            return maxVolumeB * (0.15 + 0.85 * eased)
+
         case .eqMix, .beatMatchBlend:
-            return maxVolumeB * Float(min(1.0, progress / 0.3))
+            // Complementary to A's hold→drop (holdEnd=0.65):
+            // B eases to ~35% during A's hold, then ramps to 100% during A's drop.
+            let rampStart = 0.60  // slightly before A drops at 0.65
+            if progress < rampStart {
+                let p = Float(progress / rampStart)
+                let target: Float = 0.35
+                let eased = p * p * (3.0 - 2.0 * p)  // smooth S-curve
+                return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+            }
+            // Ramp: push from 35% to 100%
+            let rampP = Float((progress - rampStart) / (1.0 - rampStart))
+            let eased = rampP * rampP * (3.0 - 2.0 * rampP)
+            return maxVolumeB * (0.35 + 0.65 * eased)
 
         case .naturalBlend:
-            // Equal-power crossfade: sin²(π/2 * t) — mirrors A's cos²
-            let angle = Float(progress) * .pi / 2.0
-            return maxVolumeB * sinf(angle) * sinf(angle)
+            // Complementary to A's hold→drop (holdEnd=0.60):
+            // B stays low during hold, then sin² ramp during drop.
+            let rampStart = 0.55
+            if progress < rampStart {
+                let p = Float(progress / rampStart)
+                let target: Float = 0.35
+                let eased = p * p * (3.0 - 2.0 * p)
+                return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+            }
+            let rampP = Float((progress - rampStart) / (1.0 - rampStart))
+            let angle = rampP * .pi / 2.0
+            let sinSq = sinf(angle) * sinf(angle)
+            return maxVolumeB * (0.35 + 0.65 * sinSq)
 
-        case .crossfade, .cutAFadeInB:
-            return maxVolumeB * Float(progress)
+        case .cutAFadeInB:
+            // A stays full then hard-cuts → B must be at ~100% BEFORE the cut.
+            // Faster ramp: ease to 60% by midpoint, reach 100% at 80% of fade
+            // (well before A's cut at ~98%). This avoids the volume hole.
+            let rampEnd = 0.80
+            if progress < rampEnd {
+                let p = Float(progress / rampEnd)
+                let eased = p * p * (3.0 - 2.0 * p)
+                return maxVolumeB * (baseLevel + (1.0 - baseLevel) * eased)
+            }
+            return maxVolumeB
+
+        case .crossfade:
+            // Complementary to A's hold→drop (holdEnd=0.60):
+            // Ease to ~30% during hold, then push to 100%.
+            let rampStart = 0.55
+            if progress < rampStart {
+                let p = Float(progress / rampStart)
+                let target: Float = 0.30
+                let eased = p * p * (3.0 - 2.0 * p)
+                return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+            }
+            let rampP = Float((progress - rampStart) / (1.0 - rampStart))
+            let eased = rampP * rampP * (3.0 - 2.0 * rampP)
+            return maxVolumeB * (0.30 + 0.70 * eased)
         }
     }
 
@@ -737,8 +900,9 @@ class CrossfadeExecutor {
 
         // Safety net: when app returns to foreground after background suspension,
         // check if the crossfade should have already completed and force it.
+        // Uses willEnterForegroundNotification (fires before didBecomeActive) for earliest possible recovery.
         foregroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.checkAndForceCompleteIfStale()
         }
@@ -790,6 +954,17 @@ class CrossfadeExecutor {
         mixerA.outputVolume = gA
         mixerB.outputVolume = gB
 
+        // ── Stereo micro-separation: reduces masking during overlap ──
+        // A drifts slightly left, B slightly right. Max ±0.08 (barely perceptible).
+        // Ramps with crossfade progress so it's not a sudden shift.
+        let fadeDur = timings.transitionEndTime - timings.volumeFadeStartTime
+        if fadeDur > 0 && t >= timings.volumeFadeStartTime {
+            let panProgress = Float(min(1.0, (t - timings.volumeFadeStartTime) / fadeDur))
+            let panAmount: Float = 0.08 * panProgress
+            mixerA.pan = -panAmount  // A slightly left
+            mixerB.pan = panAmount   // B slightly right
+        }
+
         // ── Filter automation (always active on both players) ──
         applyFiltersA(at: t)
         applyFiltersB(at: t)
@@ -831,61 +1006,68 @@ class CrossfadeExecutor {
     private func applyFiltersA(at t: Double) {
         guard t >= timings.filterStartTime else { return }
 
+        // ── Filter pivot aligned with hold→drop ──
+        // During A's "hold" phase (~first 60%), filters are gentle (A sounds mostly natural).
+        // During A's "drop" phase (~last 40%), filters ramp aggressively (A thins out and vanishes).
+        // This matches the volume curve: hold at 85% → exponential drop at 60-65%.
+        let totalFilterDur = timings.transitionEndTime - timings.filterStartTime
+        guard totalFilterDur > 0 else { return }
+
+        // Pivot = where filters shift from gentle to aggressive (aligned with volume drop)
+        let pivotTime = timings.filterStartTime + totalFilterDur * 0.60
+
         // ── Lowpass sweep (energy-down) OR highpass (normal) ──
         if useLowpassA, let lpA = preset.lowpassA {
             // Lowpass sweep: 20kHz → 800Hz — song "goes dark"
-            let dur = timings.transitionEndTime - timings.filterStartTime
-            guard dur > 0 else { return }
-            let p = Float(min(1, (t - timings.filterStartTime) / dur))
-            eqA.bands[0].frequency = expInterp(lpA.startFreq, lpA.endFreq, p)
+            // Use hold→drop aligned: gentle to midpoint during hold, aggressive during drop
+            if t < pivotTime {
+                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3  // ~30% of sweep during hold
+                eqA.bands[0].frequency = expInterp(lpA.startFreq, midFreq, min(1, p))
+            } else {
+                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
+                eqA.bands[0].frequency = expInterp(midFreq, lpA.endFreq, min(1, p))
+            }
         } else {
             let bandA = eqA.bands[0]
-            if config.transitionType == .eqMix || config.transitionType == .beatMatchBlend {
-                let pivotTime = timings.volumeFadeStartTime + (timings.transitionEndTime - timings.volumeFadeStartTime) * 0.3
-                if t < pivotTime {
-                    let dur = pivotTime - timings.filterStartTime
-                    guard dur > 0 else { return }
-                    let p = (t - timings.filterStartTime) / dur
-                    bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(min(1, p)))
-                } else {
-                    let dur = timings.transitionEndTime - pivotTime
-                    guard dur > 0 else { return }
-                    let p = (t - pivotTime) / dur
-                    bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
-                }
+            // Hold phase: gentle sweep startFreq → midFreq (~60% of time, ~30% of sweep)
+            // Drop phase: aggressive sweep midFreq → endFreq (~40% of time, ~70% of sweep)
+            if t < pivotTime {
+                let dur = pivotTime - timings.filterStartTime
+                let p = Float((t - timings.filterStartTime) / dur)
+                bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
             } else {
-                if t < timings.volumeFadeStartTime {
-                    let dur = timings.volumeFadeStartTime - timings.filterStartTime
-                    guard dur > 0 else { return }
-                    let p = (t - timings.filterStartTime) / dur
-                    bandA.frequency = linInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, Float(p))
-                } else {
-                    let dur = timings.transitionEndTime - timings.volumeFadeStartTime
-                    guard dur > 0 else { return }
-                    let p = (t - timings.volumeFadeStartTime) / dur
-                    bandA.frequency = linInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, Float(min(1, p)))
-                }
+                let dur = timings.transitionEndTime - pivotTime
+                let p = Float((t - pivotTime) / dur)
+                bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
         }
 
-        // ── Mid scoop on A: parametric dip ramps in during crossfade ──
-        // Gradually scoops ~1.5kHz on A so B's vocals can be heard clearly.
-        // Ramps from startGain (0dB) to endGain (-12 to -16dB) over the crossfade.
+        // ── Mid scoop on A: hold→drop aligned ──
+        // Gentle during hold (reach ~40% of target), aggressive during drop.
         if useMidScoop, let ms = preset.midScoopA {
-            let dur = timings.transitionEndTime - timings.filterStartTime
-            if dur > 0 {
-                let p = Float(min(1, (t - timings.filterStartTime) / dur))
-                eqA.bands[2].gain = linInterp(ms.startGain, ms.endGain, p)
+            if t < pivotTime {
+                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
+                eqA.bands[2].gain = linInterp(ms.startGain, holdTarget, min(1, p))
+            } else {
+                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
+                eqA.bands[2].gain = linInterp(holdTarget, ms.endGain, min(1, p))
             }
         }
 
-        // ── High-shelf cut on A: attenuates hi-hats/cymbals ──
-        // Ramps from 0dB to -8/-10dB so B's transients aren't masked.
+        // ── High-shelf cut on A: hold→drop aligned ──
         if useHighShelfCut, let hs = preset.highShelfA {
-            let dur = timings.transitionEndTime - timings.filterStartTime
-            if dur > 0 {
-                let p = Float(min(1, (t - timings.filterStartTime) / dur))
-                eqA.bands[3].gain = linInterp(hs.startGain, hs.endGain, p)
+            if t < pivotTime {
+                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
+                eqA.bands[3].gain = linInterp(hs.startGain, holdTarget, min(1, p))
+            } else {
+                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
+                eqA.bands[3].gain = linInterp(holdTarget, hs.endGain, min(1, p))
             }
         }
 
@@ -917,6 +1099,7 @@ class CrossfadeExecutor {
     // MARK: - Filter B automation (port exacto de AudioEffectsChain.ts líneas 332-394)
 
     private func applyFiltersB(at t: Double) {
+        guard !config.skipBFilters else { return }
         let hpB = eqB.bands[0]
         let lsB = eqB.bands[1]
 
@@ -982,14 +1165,32 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
-        // Reset crossfade EQ (bands 0-1) to bypass — B continues with clean audio
-        for i in 0..<min(eqA.bands.count, 4) {
-            eqA.bands[i].bypass = true
-            eqB.bands[i].bypass = true
-        }
+        // Reset crossfade EQ (bands 0-3) to neutral — bypass alone can be unreliable
+        // in CoreAudio, so we also reset parameters to ensure no residual filtering.
+        resetCrossfadeBands(eqA)
+        resetCrossfadeBands(eqB)
+
+        // Reset stereo pan — both players back to center
+        mixerA.pan = 0
+        mixerB.pan = 0
 
         // Reset time-stretch rates — B continues at normal speed after crossfade
         resetTimeStretch()
+
+        // Backstop: serialize a final reset on automationQueue after any stale filterTick.
+        // completeCrossfade can be called from main queue (checkAndForceCompleteIfStale)
+        // where the same race with in-flight filterTick applies.
+        let eqA = self.eqA, eqB = self.eqB
+        let mA = self.mixerA, mB = self.mixerB
+        let tpA = self.timePitchA, tpB = self.timePitchB
+        Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
+            Self.resetBandsStatic(eqA)
+            Self.resetBandsStatic(eqB)
+            mA.pan = 0
+            mB.pan = 0
+            tpA?.rate = 1.0
+            tpB?.rate = 1.0
+        }
 
         let vol = getMasterVolume?() ?? 1.0
         engine.mainMixerNode.outputVolume = vol

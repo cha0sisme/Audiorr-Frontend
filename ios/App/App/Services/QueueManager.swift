@@ -637,13 +637,34 @@ final class QueueManager: AudioEngineDelegate {
                     currentSongAnalysis.energy = curAn.energy ?? 0.5
                     currentSongAnalysis.danceability = curAn.danceability ?? 0.5
                     currentSongAnalysis.key = curAn.key
-                    currentSongAnalysis.outroStartTime = curAn.outroStartTime ?? max(currentDuration - 30, 0)
-                    currentSongAnalysis.introEndTime = curAn.introEndTime ?? min(30, currentDuration)
-                    currentSongAnalysis.vocalStartTime = curAn.vocalStartTime ?? 0
+                    // BPM policy: prefer Essentia when confidence is high.
+                    // bpmEssentia is null until backend batch completes — graceful fallback to librosa.
+                    if let bpmE = curAn.bpmEssentia, let conf = curAn.bpmConfidence, conf > 0.8 {
+                        currentSongAnalysis.bpm = bpmE
+                        currentSongAnalysis.beatInterval = 60.0 / bpmE
+                    }
+
+                    // Top-level intro/outro = ML prediction (human-labeled training data).
+                    // Heuristic = percussive/energy/spectral detection (mechanical boundary).
+                    // Use ML as primary. Heuristic is fallback when ML not available.
+                    currentSongAnalysis.outroStartTime = curAn.outroStartTime
+                        ?? curAn.outroStartHeuristic
+                        ?? max(currentDuration - 30, 0)
+                    currentSongAnalysis.introEndTime = curAn.introEndTime
+                        ?? curAn.introEndHeuristic
+                        ?? min(30, currentDuration)
+                    // vocalStartTime: top-level once backend persists it, fallback to diagnostics
+                    currentSongAnalysis.vocalStartTime = curAn.vocalStartTime
+                        ?? curAn.vocalStartFromDiagnostics
+                        ?? 0
                     // Mark whether real analysis data was present for outro/intro
-                    currentSongAnalysis.hasOutroData = curAn.outroStartTime != nil
-                    currentSongAnalysis.hasIntroData = curAn.introEndTime != nil
-                    if let beats = curAn.beats { currentSongAnalysis.downbeatTimes = beats }
+                    currentSongAnalysis.hasOutroData = curAn.outroStartTime != nil || curAn.outroStartHeuristic != nil
+                    currentSongAnalysis.hasIntroData = curAn.introEndTime != nil || curAn.introEndHeuristic != nil
+                    // Backend `beats` contains ALL beats (every hit), not downbeats (first beat of each measure).
+                    // Downbeats = every 4th beat in 4/4 time. Extract them for beat sync phase alignment.
+                    if let beats = curAn.beats, beats.count >= 4 {
+                        currentSongAnalysis.downbeatTimes = stride(from: 0, to: beats.count, by: 4).map { beats[$0] }
+                    }
                     if let segs = curAn.speechSegments {
                         currentSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
                     }
@@ -678,13 +699,26 @@ final class QueueManager: AudioEngineDelegate {
                     nextSongAnalysis.energy = nxtAn.energy ?? 0.5
                     nextSongAnalysis.danceability = nxtAn.danceability ?? 0.5
                     nextSongAnalysis.key = nxtAn.key
-                    nextSongAnalysis.outroStartTime = nxtAn.outroStartTime ?? max(nextDuration - 30, 0)
-                    nextSongAnalysis.introEndTime = nxtAn.introEndTime ?? min(30, nextDuration)
-                    nextSongAnalysis.vocalStartTime = nxtAn.vocalStartTime ?? 0
-                    // Mark whether real analysis data was present for outro/intro
-                    nextSongAnalysis.hasOutroData = nxtAn.outroStartTime != nil
-                    nextSongAnalysis.hasIntroData = nxtAn.introEndTime != nil
-                    if let beats = nxtAn.beats { nextSongAnalysis.downbeatTimes = beats }
+                    // BPM policy: prefer Essentia when confidence is high
+                    if let bpmE = nxtAn.bpmEssentia, let conf = nxtAn.bpmConfidence, conf > 0.8 {
+                        nextSongAnalysis.bpm = bpmE
+                        nextSongAnalysis.beatInterval = 60.0 / bpmE
+                    }
+                    // ML primary, heuristic fallback (same policy as currentSong)
+                    nextSongAnalysis.outroStartTime = nxtAn.outroStartTime
+                        ?? nxtAn.outroStartHeuristic
+                        ?? max(nextDuration - 30, 0)
+                    nextSongAnalysis.introEndTime = nxtAn.introEndTime
+                        ?? nxtAn.introEndHeuristic
+                        ?? min(30, nextDuration)
+                    nextSongAnalysis.vocalStartTime = nxtAn.vocalStartTime
+                        ?? nxtAn.vocalStartFromDiagnostics
+                        ?? 0
+                    nextSongAnalysis.hasOutroData = nxtAn.outroStartTime != nil || nxtAn.outroStartHeuristic != nil
+                    nextSongAnalysis.hasIntroData = nxtAn.introEndTime != nil || nxtAn.introEndHeuristic != nil
+                    if let beats = nxtAn.beats, beats.count >= 4 {
+                        nextSongAnalysis.downbeatTimes = stride(from: 0, to: beats.count, by: 4).map { beats[$0] }
+                    }
                     if let segs = nxtAn.speechSegments {
                         nextSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
                     }
@@ -718,12 +752,14 @@ final class QueueManager: AudioEngineDelegate {
                 }
 
                 // Calculate crossfade
+                let currentPlaybackTime = AudioEngineManager.shared?.currentTime() ?? 0
                 let crossfadeResult = DJMixingService.calculateCrossfadeConfig(
                     currentAnalysis: currentSongAnalysis,
                     nextAnalysis: nextSongAnalysis,
                     bufferADuration: currentDuration,
                     bufferBDuration: nextDuration,
                     mode: self.isDjMode ? .dj : .normal,
+                    currentPlaybackTimeA: currentPlaybackTime,
                     userFadeDuration: self.crossfadeDuration
                 )
 
@@ -760,20 +796,19 @@ final class QueueManager: AudioEngineDelegate {
                     useHighShelfCut: crossfadeResult.useHighShelfCut,
                     isOutroInstrumental: crossfadeResult.isOutroInstrumental,
                     isIntroInstrumental: crossfadeResult.isIntroInstrumental,
-                    danceability: crossfadeResult.danceability
+                    danceability: crossfadeResult.danceability,
+                    skipBFilters: crossfadeResult.skipBFilters
                 )
 
-                // ── Trailing silence on A (analysis-based) ──
-                // Use speechSegments to find where audio really ends.
-                // If the last speech/audio is well before file end, there's trailing silence.
-                // Without backend (no analysis), we use full duration — users can disable crossfade.
+                // ── Trailing silence on A ──
+                // Use AudioEngineManager.currentEffectiveEnd if set from analysis (energy-based).
+                // Do NOT use speechSegments for this — speechSegments tracks vocals only.
+                // An instrumental outro is NOT silence and must not be trimmed.
                 var effectiveDuration = currentDuration
-                if currentSongAnalysis.hasOutroData && !currentSongAnalysis.speechSegments.isEmpty {
-                    let lastAudioEnd = currentSongAnalysis.speechSegments.map(\.end).max() ?? currentDuration
-                    if lastAudioEnd < currentDuration - 3 {
-                        effectiveDuration = lastAudioEnd + 1.0
-                        print("[QueueManager] 🔇 Trailing silence: audio ends ~\(String(format: "%.1f", lastAudioEnd))s, file=\(String(format: "%.1f", currentDuration))s")
-                    }
+                let engineEffEnd = AudioEngineManager.shared?.currentEffectiveEnd ?? 0
+                if engineEffEnd > 0 && engineEffEnd < currentDuration - 3 {
+                    effectiveDuration = engineEffEnd + 1.0
+                    print("[QueueManager] Trailing silence: effectiveEnd=\(String(format: "%.1f", engineEffEnd))s, file=\(String(format: "%.1f", currentDuration))s")
                 }
 
                 // ── Leading silence on B (analysis-based) ──
@@ -804,7 +839,8 @@ final class QueueManager: AudioEngineDelegate {
                         useHighShelfCut: config.useHighShelfCut,
                         isOutroInstrumental: config.isOutroInstrumental,
                         isIntroInstrumental: config.isIntroInstrumental,
-                        danceability: config.danceability
+                        danceability: config.danceability,
+                        skipBFilters: config.skipBFilters
                     )
                 } else {
                     finalConfig = config
@@ -814,28 +850,91 @@ final class QueueManager: AudioEngineDelegate {
                 // triggerTime = when in song A the crossfade should START.
                 // entryPoint = where in song B to begin playing (NOT the trigger).
                 //
-                // Priority hierarchy:
-                //   1. cuePoint (backend-calculated, most precise)
-                //   2. lastVocalTime (where vocals actually end — better than generic outroStartTime)
-                //   3. outroStartTime (section-level outro detection)
-                //   4. heuristic fallback (fadeDuration before end)
+                // DJ logic: trigger as LATE as possible (let A's outro play out),
+                // but never before vocals end. The fade should finish near A's end.
+                //
+                //   1. cuePoint → direct trigger (backend calculated, accounts for everything)
+                //   2. Otherwise: idealTrigger (fade fits before end) clamped by vocalFloor
+                //      - vocalFloor = lastVocalTime or outroStartTime (earliest safe point)
+                //      - idealTrigger = effectiveDuration - fadeDuration - 1 (latest possible)
+                //      - trigger = max(vocalFloor, idealTrigger) → A plays full outro
                 let outroStart = currentSongAnalysis.outroStartTime
+                let fadeDur = crossfadeResult.fadeDuration
                 var triggerTime: Double
-                if currentSongAnalysis.hasCuePoint {
-                    triggerTime = currentSongAnalysis.cuePoint
-                    print("[QueueManager] Using backend cuePoint as trigger: \(String(format: "%.1f", triggerTime))s")
-                } else if currentSongAnalysis.hasVocalEndData
-                            && currentSongAnalysis.lastVocalTime > 0
-                            && currentSongAnalysis.lastVocalTime < effectiveDuration - 3 {
-                    // Last vocal time: where vocals end. Trigger here so we fade during
-                    // the instrumental tail, avoiding vocal bleed into the crossfade.
-                    triggerTime = currentSongAnalysis.lastVocalTime
-                    print("[QueueManager] Using lastVocalTime as trigger: \(String(format: "%.1f", triggerTime))s")
+
+                // ── Trigger calculation ──
+                // The trigger is the LATEST safe point to start the crossfade.
+                // All data sources (cuePoint, lastVocalTime, outroStart) act as FLOORS —
+                // the earliest the transition can begin. The ideal trigger (latest possible
+                // so the fade fits before A ends) is then clamped to respect these floors.
+                //
+                // Step 1: Gather all floors (earliest safe trigger points)
+                var vocalFloor: Double = 0
+                if currentSongAnalysis.hasVocalEndData
+                    && currentSongAnalysis.lastVocalTime > 0
+                    && currentSongAnalysis.lastVocalTime < effectiveDuration - 3 {
+                    vocalFloor = currentSongAnalysis.lastVocalTime
                 } else if outroStart > 0 && outroStart < effectiveDuration - 5 {
-                    triggerTime = outroStart
+                    vocalFloor = outroStart
+                }
+
+                // cuePoint from backend acts as a floor too — it's the backend's
+                // best estimate of where the transition zone begins, but it doesn't
+                // know our fadeDuration or the next song. Use it as a floor, not an override.
+                if currentSongAnalysis.hasCuePoint {
+                    // Use the later of cuePoint and vocalFloor — both are "earliest safe" estimates
+                    vocalFloor = max(vocalFloor, currentSongAnalysis.cuePoint)
+                    print("[QueueManager] Backend cuePoint=\(String(format: "%.1f", currentSongAnalysis.cuePoint))s used as floor")
+                }
+
+                // Step 2: Ideal trigger — fade finishes right when A ends
+                let idealTrigger = max(0, effectiveDuration - fadeDur - 1)
+
+                // Step 3: Trigger = as late as possible, but after vocals/cuePoint
+                triggerTime = max(vocalFloor, idealTrigger)
+
+                // Safety: if vocalFloor pushed trigger so late that fade can't fit,
+                // fall back to idealTrigger (accept partial vocal overlap — better than
+                // having the fade run past A's end with B at partial volume).
+                if triggerTime + fadeDur > effectiveDuration + 1 {
+                    triggerTime = idealTrigger
+                    print("[QueueManager] Floor too late — using idealTrigger to fit fade")
+                }
+
+                let floorDesc: String
+                if currentSongAnalysis.hasCuePoint {
+                    floorDesc = "cuePoint"
+                } else if vocalFloor > 0 {
+                    floorDesc = currentSongAnalysis.hasVocalEndData ? "lastVocal" : "outroStart"
                 } else {
-                    // Fallback: start crossfade `fadeDuration` seconds before effective end
-                    triggerTime = max(0, effectiveDuration - crossfadeResult.fadeDuration - 2)
+                    floorDesc = "none"
+                }
+                print("[QueueManager] Trigger: ideal=\(String(format: "%.1f", idealTrigger))s floor=\(String(format: "%.1f", vocalFloor))s (\(floorDesc)) → \(String(format: "%.1f", triggerTime))s")
+
+                // ── Snap trigger to A's nearest phrase/downbeat boundary ──
+                // A DJ always starts a mix on a musical phrase boundary.
+                // Starting mid-phrase sounds amateur and random.
+                if !currentSongAnalysis.phraseBoundaries.isEmpty {
+                    // Prefer phrase boundaries (8/16 bar groupings)
+                    let maxEarly = crossfadeResult.fadeDuration * 0.3  // don't shift more than 30% of fade
+                    if let best = currentSongAnalysis.phraseBoundaries
+                        .filter({ $0 >= triggerTime - maxEarly && $0 <= triggerTime + maxEarly && $0 > 0 })
+                        .min(by: { abs($0 - triggerTime) < abs($1 - triggerTime) }) {
+                        let adj = best - triggerTime
+                        triggerTime = best
+                        print("[QueueManager] Trigger snapped to phrase boundary: \(adj >= 0 ? "+" : "")\(String(format: "%.2f", adj))s")
+                    }
+                } else if !currentSongAnalysis.downbeatTimes.isEmpty
+                            && currentSongAnalysis.beatInterval > 0 {
+                    // Fallback: snap to nearest downbeat
+                    let maxShift = currentSongAnalysis.beatInterval * 2
+                    if let best = currentSongAnalysis.downbeatTimes
+                        .filter({ $0 >= triggerTime - maxShift && $0 <= triggerTime + maxShift && $0 > 0 })
+                        .min(by: { abs($0 - triggerTime) < abs($1 - triggerTime) }) {
+                        let adj = best - triggerTime
+                        triggerTime = best
+                        print("[QueueManager] Trigger snapped to downbeat: \(adj >= 0 ? "+" : "")\(String(format: "%.2f", adj))s")
+                    }
                 }
 
                 // CRITICAL: For CUT_A type transitions (A ends abruptly), the trigger must be
@@ -848,6 +947,23 @@ final class QueueManager: AudioEngineDelegate {
                         triggerTime = max(0, minTrigger)
                         print("[QueueManager] Adjusted trigger for abrupt-A transition: \(String(format: "%.1f", triggerTime))s (ensures B reaches full volume)")
                     }
+                }
+
+                // Post-snap safety: if trigger was snapped forward (by phrase/downbeat alignment),
+                // the remaining time (effectiveDuration - triggerTime) may be too short for the
+                // full fade duration. This causes B to still be ramping when A ends → audible gap.
+                // Fix: clamp trigger so at least fadeDur + 0.5s fits before A's end.
+                let remainingAfterTrigger = effectiveDuration - triggerTime
+                if remainingAfterTrigger < fadeDur + 0.5 && remainingAfterTrigger > 2.0 {
+                    // Enough room for a shorter fade — pull trigger back
+                    triggerTime = max(0, effectiveDuration - fadeDur - 0.5)
+                    print("[QueueManager] Post-snap clamp: remaining too short, trigger moved to \(String(format: "%.1f", triggerTime))s")
+                } else if remainingAfterTrigger <= 2.0 && triggerTime > 5.0 {
+                    // Less than 2s left — not enough for any meaningful fade.
+                    // Pull trigger back to idealTrigger (let the full fade play out).
+                    let idealFallback = max(0, effectiveDuration - fadeDur - 1)
+                    triggerTime = idealFallback
+                    print("[QueueManager] Post-snap clamp: <2s remaining, reverted to ideal trigger \(String(format: "%.1f", triggerTime))s")
                 }
 
                 // Safety: if we already passed the trigger point (e.g. after a seek),

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		3400AA012FA1000000000001 /* ArtistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400AA002FA1000000000001 /* ArtistsView.swift */; };
 		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
@@ -25,7 +26,6 @@
 		3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE112FA7000000000010 /* DevicePickerView.swift */; };
 		3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE132FA7000000000012 /* AddToPlaylistView.swift */; };
 		3400FF012FA8000000000001 /* BackendService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF002FA8000000000001 /* BackendService.swift */; };
-		29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */; };
 		3400FF032FA8000000000003 /* PersistenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF022FA8000000000002 /* PersistenceService.swift */; };
 		3400FF052FA8000000000005 /* DJMixingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF042FA8000000000004 /* DJMixingService.swift */; };
 		3400FF072FA8000000000007 /* QueueManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF062FA8000000000006 /* QueueManager.swift */; };
@@ -89,7 +89,6 @@
 		3400EE112FA7000000000010 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		3400EE132FA7000000000012 /* AddToPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToPlaylistView.swift; sourceTree = "<group>"; };
 		3400FF002FA8000000000001 /* BackendService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendService.swift; sourceTree = "<group>"; };
-		B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationManager.swift; sourceTree = "<group>"; };
 		3400FF022FA8000000000002 /* PersistenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceService.swift; sourceTree = "<group>"; };
 		3400FF042FA8000000000004 /* DJMixingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJMixingService.swift; sourceTree = "<group>"; };
 		3400FF062FA8000000000006 /* QueueManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueueManager.swift; sourceTree = "<group>"; };
@@ -134,6 +133,7 @@
 		AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineManager.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileLoader.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfadeExecutor.swift; sourceTree = "<group>"; };
+		B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationManager.swift; sourceTree = "<group>"; };
 		CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -601,7 +601,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -628,7 +628,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;

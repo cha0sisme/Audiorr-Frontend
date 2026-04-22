@@ -3,8 +3,8 @@ import MediaPlayer
 // Capacitor removed — fully native
 
 /// Motor de audio nativo basado en AVAudioEngine.
-/// Grafo: playerA → eqA → mixerA → mainMixer → output
-///        playerB → eqB → mixerB → mainMixer → output
+/// Grafo: playerA → timePitchA → eqA → mixerA → mainMixer → limiter → output
+///        playerB → timePitchB → eqB → mixerB → mainMixer → limiter → output
 ///
 /// Gestiona reproducción, NowPlaying, remote commands e interrupciones.
 class AudioEngineManager {
@@ -24,6 +24,7 @@ class AudioEngineManager {
     private var timePitchB: AVAudioUnitTimePitch
     private var mixerA: AVAudioMixerNode
     private var mixerB: AVAudioMixerNode
+    private let limiter: AVAudioUnitEffect
 
     // MARK: - Estado
 
@@ -146,6 +147,21 @@ class AudioEngineManager {
         eqB.bands[3].filterType = .highShelf
         for i in 0..<8 { eqB.bands[i].bypass = true }
 
+        // PeakLimiter: prevents clipping when A+B overlap during crossfade.
+        // Transparent when signal is below 0dBFS — only catches peaks.
+        let limiterDesc = AudioComponentDescription(
+            componentType: kAudioUnitType_Effect,
+            componentSubType: kAudioUnitSubType_PeakLimiter,
+            componentManufacturer: kAudioUnitManufacturer_Apple,
+            componentFlags: 0,
+            componentFlagsMask: 0
+        )
+        limiter = AVAudioUnitEffect(audioComponentDescription: limiterDesc)
+        // Configure: fast attack, moderate release, no pre-gain
+        AudioUnitSetParameter(limiter.audioUnit, kLimiterParam_AttackTime, kAudioUnitScope_Global, 0, 0.003, 0)
+        AudioUnitSetParameter(limiter.audioUnit, kLimiterParam_DecayTime, kAudioUnitScope_Global, 0, 0.06, 0)
+        AudioUnitSetParameter(limiter.audioUnit, kLimiterParam_PreGain, kAudioUnitScope_Global, 0, 0, 0)
+
         setupAudioGraph()
         setupObservers()
         setupCommandCenter()
@@ -170,24 +186,31 @@ class AudioEngineManager {
         engine.attach(eqB)
         engine.attach(mixerA)
         engine.attach(mixerB)
+        engine.attach(limiter)
 
         let mainMixer = engine.mainMixerNode
 
-        // Conectar grafo A: playerA → timePitchA → eqA → mixerA → mainMixer
         // Usamos el formato del mainMixer para todas las conexiones intermedias.
         // AVAudioMixerNode convierte formatos automáticamente si hay mismatch.
         let format = mainMixer.outputFormat(forBus: 0)
 
+        // Grafo A: playerA → timePitchA → eqA → mixerA → mainMixer
         engine.connect(playerA, to: timePitchA, format: nil)
         engine.connect(timePitchA, to: eqA, format: nil)
         engine.connect(eqA, to: mixerA, format: nil)
         engine.connect(mixerA, to: mainMixer, format: format)
 
-        // Conectar grafo B: playerB → timePitchB → eqB → mixerB → mainMixer
+        // Grafo B: playerB → timePitchB → eqB → mixerB → mainMixer
         engine.connect(playerB, to: timePitchB, format: nil)
         engine.connect(timePitchB, to: eqB, format: nil)
         engine.connect(eqB, to: mixerB, format: nil)
         engine.connect(mixerB, to: mainMixer, format: format)
+
+        // Limiter: mainMixer → limiter → outputNode
+        // Prevents clipping when both A+B are audible during crossfade overlap.
+        // Transparent when signal is below 0dBFS.
+        engine.connect(mainMixer, to: limiter, format: format)
+        engine.connect(limiter, to: engine.outputNode, format: format)
 
         // Volumen inicial
         mainMixer.outputVolume = volume
@@ -195,7 +218,7 @@ class AudioEngineManager {
         mixerB.outputVolume = 0.0 // B silenciado hasta crossfade
 
         engine.prepare()
-        print("[AudioEngineManager] Audio graph configurado")
+        print("[AudioEngineManager] Audio graph configurado (con limiter)")
     }
 
     /// Intenta arrancar el engine si no está corriendo.
@@ -278,12 +301,12 @@ class AudioEngineManager {
             // Aplicar ReplayGain via mixerA
             mixerA.outputVolume = replayGainMultiplier
 
-            // Asegurar EQ en bypass para bandas de transición (no estamos en crossfade)
-            eqA.bands[0].bypass = true
-            eqA.bands[1].bypass = true
-            eqB.bands[0].bypass = true
-            eqB.bands[1].bypass = true
-            
+            // Asegurar EQ + pan en neutral para bandas de transición (no estamos en crossfade)
+            resetCrossfadeBands(eqA)
+            resetCrossfadeBands(eqB)
+            mixerA.pan = 0
+            mixerB.pan = 0
+
             // Forzar volumen maestro al valor actual del usuario
             engine.mainMixerNode.outputVolume = volume
 
@@ -732,8 +755,10 @@ class AudioEngineManager {
         }
 
         mixerA.outputVolume = replayGainMultiplierA
-        eqA.bands[0].bypass = true
-        eqA.bands[1].bypass = true
+        resetCrossfadeBands(eqA)
+        resetCrossfadeBands(eqB)
+        mixerA.pan = 0
+        mixerB.pan = 0
         engine.mainMixerNode.outputVolume = volume
 
         playStartOffset = currentPos
@@ -933,12 +958,14 @@ class AudioEngineManager {
             if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
             if !self.nextSongAlbum.isEmpty  { self.currentSongAlbum  = self.nextSongAlbum }
 
-            // Resetear EQ a bypass (bandas de crossfade 0-1 tras el swap)
-            self.eqA.bands[0].bypass = true
-            self.eqA.bands[1].bypass = true
-            self.eqB.bands[0].bypass = true
-            self.eqB.bands[1].bypass = true
-            
+            // Resetear EQ a neutral (bandas de crossfade 0-3 tras el swap)
+            self.resetCrossfadeBands(self.eqA)
+            self.resetCrossfadeBands(self.eqB)
+
+            // Reset stereo pan (post-swap: both must be centered)
+            self.mixerA.pan = 0
+            self.mixerB.pan = 0
+
             // Resetear mixer volumes
             self.mixerA.outputVolume = self.replayGainMultiplierA
             self.mixerB.outputVolume = 0
@@ -990,12 +1017,12 @@ class AudioEngineManager {
             swap(&self.mixerA, &self.mixerB)
             self.timePitchA.rate = 1.0
             self.timePitchB.rate = 1.0
-            // CRITICAL: Reset crossfade EQ to bypass — without this, the new song
+            // CRITICAL: Reset crossfade EQ to neutral — without this, the new song
             // continues playing with a frozen highpass/lowshelf from the interrupted crossfade
-            self.eqA.bands[0].bypass = true
-            self.eqA.bands[1].bypass = true
-            self.eqB.bands[0].bypass = true
-            self.eqB.bands[1].bypass = true
+            self.resetCrossfadeBands(self.eqA)
+            self.resetCrossfadeBands(self.eqB)
+            self.mixerA.pan = 0
+            self.mixerB.pan = 0
             self.currentFile = self.nextFile
             self.nextFile = nil
             self.replayGainMultiplierA = self.replayGainMultiplierB
@@ -1025,11 +1052,21 @@ class AudioEngineManager {
         // Reset time-stretch rates
         timePitchA.rate = 1.0
         timePitchB.rate = 1.0
-        // Reset EQ to bypass — covers stream fallback crossfade (no executor to call cancel on)
-        eqA.bands[0].bypass = true
-        eqA.bands[1].bypass = true
-        eqB.bands[0].bypass = true
-        eqB.bands[1].bypass = true
+        // Reset EQ to neutral — covers stream fallback crossfade (no executor to call cancel on)
+        resetCrossfadeBands(eqA)
+        resetCrossfadeBands(eqB)
+        // Reset stereo pan
+        mixerA.pan = 0
+        mixerB.pan = 0
+        // Backstop on automationQueue: serialize after any in-flight filterTick from executor
+        let eqA = self.eqA, eqB = self.eqB
+        let mA = self.mixerA, mB = self.mixerB
+        CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.15) {
+            CrossfadeExecutor.resetBandsStatic(eqA)
+            CrossfadeExecutor.resetBandsStatic(eqB)
+            mA.pan = 0
+            mB.pan = 0
+        }
         stopStreamPlayer()  // Clean up stream observer to prevent stale callbacks
     }
 
@@ -1061,13 +1098,8 @@ class AudioEngineManager {
         crossfadeStartedAt = CFAbsoluteTimeGetCurrent()
         delegate?.audioEngineCrossfadeStarted()
 
-        // Calcular startOffset de B (mismo algoritmo que CrossfadeExecutor.calculateTimings)
-        let startOffset: Double
-        if config.needsAnticipation {
-            startOffset = max(0, config.entryPoint - config.fadeDuration - config.anticipationTime)
-        } else {
-            startOffset = max(0, config.entryPoint - config.fadeDuration)
-        }
+        // Calcular startOffset de B (delegando a CrossfadeExecutor para evitar duplicar lógica)
+        let startOffset = CrossfadeExecutor.calculateTimings(config: config).startOffset
 
         // Crear AVPlayer para B y posicionarlo en startOffset
         let item = AVPlayerItem(url: streamURL)
@@ -1098,11 +1130,11 @@ class AudioEngineManager {
                 self.streamFadeWatchdog = nil
                 self.playerA.stop()
                 self.mixerA.outputVolume = 0
-                // Reset crossfade EQ to bypass
-                self.eqA.bands[0].bypass = true
-                self.eqA.bands[1].bypass = true
-                self.eqB.bands[0].bypass = true
-                self.eqB.bands[1].bypass = true
+                // Reset crossfade EQ + pan to neutral
+                self.resetCrossfadeBands(self.eqA)
+                self.resetCrossfadeBands(self.eqB)
+                self.mixerA.pan = 0
+                self.mixerB.pan = 0
                 self.isCrossfading = false
                 self.crossfadeExecutor = nil
                 self.nextStreamURL = nil
@@ -1156,11 +1188,11 @@ class AudioEngineManager {
             self.mixerA.outputVolume = 0
             bPlayer.volume = min(1.0, self.volume * capturedMaxB)
             self.playerA.stop()
-            // Reset crossfade EQ to bypass
-            self.eqA.bands[0].bypass = true
-            self.eqA.bands[1].bypass = true
-            self.eqB.bands[0].bypass = true
-            self.eqB.bands[1].bypass = true
+            // Reset crossfade EQ + pan to neutral
+            self.resetCrossfadeBands(self.eqA)
+            self.resetCrossfadeBands(self.eqB)
+            self.mixerA.pan = 0
+            self.mixerB.pan = 0
             // Observer is already in self.streamPlayerEndObserver — just assign the player
             self.streamPlayer = bPlayer
             self.isStreamMode = true
@@ -1209,11 +1241,11 @@ class AudioEngineManager {
             self.mixerA.outputVolume = 0
             bPlayer.volume = min(1.0, self.volume * capturedMaxB)
             self.playerA.stop()
-            // Reset crossfade EQ to bypass
-            self.eqA.bands[0].bypass = true
-            self.eqA.bands[1].bypass = true
-            self.eqB.bands[0].bypass = true
-            self.eqB.bands[1].bypass = true
+            // Reset crossfade EQ + pan to neutral
+            self.resetCrossfadeBands(self.eqA)
+            self.resetCrossfadeBands(self.eqB)
+            self.mixerA.pan = 0
+            self.mixerB.pan = 0
 
             // B pasa a ser el stream player activo
             // Observer is already in self.streamPlayerEndObserver (registered before fade started)
@@ -1841,6 +1873,27 @@ class AudioEngineManager {
             print("[AudioEngineManager] IO buffer: \(String(format: "%.1f", actual * 1000))ms (pedido: \(String(format: "%.1f", preferredBuffer * 1000))ms)")
         } catch {
             print("[AudioEngineManager] Error configurando IO buffer: \(error)")
+        }
+    }
+
+    // MARK: - EQ Reset (crossfade bands)
+
+    /// Resets crossfade bands (0-3) to neutral: bypass + neutral parameters.
+    /// AVAudioUnitEQ bypass can be unreliable in CoreAudio — the DSP may keep
+    /// processing even with bypass=true. Setting gain=0 and freq to inaudible
+    /// values guarantees no residual filtering.
+    private func resetCrossfadeBands(_ eq: AVAudioUnitEQ) {
+        let count = min(eq.bands.count, 4)
+        for i in 0..<count {
+            let band = eq.bands[i]
+            band.bypass = true
+            band.gain = 0
+            band.bandwidth = 2.0    // wide/flat — no resonance peak even if bypass fails
+            if band.filterType == .highPass {
+                band.frequency = 20
+            } else if band.filterType == .lowPass {
+                band.frequency = 20000
+            }
         }
     }
 
