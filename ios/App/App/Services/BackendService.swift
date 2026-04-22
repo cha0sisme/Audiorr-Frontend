@@ -230,6 +230,14 @@ final class BackendService {
         return try jsonDict(from: data)
     }
 
+    func getAdminUsers() async throws -> [[String: Any]] {
+        let data = try await get(path: "/api/user/admin/users")
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw URLError(.cannotParseResponse)
+        }
+        return array
+    }
+
     // MARK: - Daily Mixes
 
     func getDailyMixes() async throws -> [[String: Any]] {

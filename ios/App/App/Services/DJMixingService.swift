@@ -66,6 +66,7 @@ enum DJMixingService {
         var bpm: Double = 120
         var beatInterval: Double = 0
         var energy: Double = 0.5
+        var danceability: Double = 0.5
         var key: String?
         var outroStartTime: Double = 0
         var introEndTime: Double = 0
@@ -88,6 +89,18 @@ enum DJMixingService {
         var energyMain: Double = 0
         var energyOutro: Double = 0
         var hasEnergyProfile: Bool = false
+        /// Backend vocal presence flags — definitive, more reliable than speechSegments heuristics.
+        var hasIntroVocals: Bool = false
+        var hasOutroVocals: Bool = false
+        /// Backend-suggested fade durations (from diagnostics.fade_info).
+        /// Used as primary values; frontend heuristics are fallback.
+        var backendFadeInDuration: Double?
+        var backendFadeOutDuration: Double?
+        var backendFadeOutLeadTime: Double?
+        /// Where vocals actually end in the song — more precise than outroStartTime.
+        /// From analysis_log.Instrumental Outro.last_vocal_time_candidate.
+        var lastVocalTime: Double = 0
+        var hasVocalEndData: Bool = false
     }
 
     /// Complete crossfade configuration output.
@@ -118,6 +131,13 @@ enum DJMixingService {
         /// DJ-grade filters: mid scoop (vocal anti-clash) and high-shelf (hi-hat cleanup).
         let useMidScoop: Bool
         let useHighShelfCut: Bool
+        /// True when A's outro is purely instrumental (vocals end before crossfade zone).
+        /// Allows CrossfadeExecutor to use lighter filters on A.
+        let isOutroInstrumental: Bool
+        /// True when B's intro is purely instrumental (no vocals in entry zone).
+        let isIntroInstrumental: Bool
+        /// Average danceability of the two songs — high danceability needs bass preserved.
+        let danceability: Double
     }
 
     // MARK: - Main Entry Point
@@ -222,6 +242,44 @@ enum DJMixingService {
         let dbB: [Double] = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawDbB.map { $0 / Double(timeStretch.rateB) } : rawDbB
 
+        // ── Instrumental outro/intro detection ──
+        // A's outro is instrumental if vocals end before the crossfade zone starts.
+        let outroInstrumental: Bool
+        if let cur = safeCurrent {
+            let crossfadeStartA = bufferADuration - fade.duration
+            if cur.hasVocalEndData {
+                outroInstrumental = cur.lastVocalTime < crossfadeStartA
+            } else if !cur.hasOutroVocals && cur.hasEnergyProfile {
+                outroInstrumental = true  // backend says no vocals in outro
+            } else {
+                outroInstrumental = false
+            }
+        } else {
+            outroInstrumental = false
+        }
+
+        // B's intro is instrumental if no vocals in entry zone
+        let introInstrumental: Bool
+        if let nxt = safeNext {
+            if nxt.hasEnergyProfile && !nxt.hasIntroVocals {
+                introInstrumental = true
+            } else if nxt.vocalStartTime > entry.entryPoint + fade.duration {
+                introInstrumental = true  // vocals start after the fade window
+            } else if !nxt.speechSegments.isEmpty {
+                let bEnd = entry.entryPoint + fade.duration
+                introInstrumental = !nxt.speechSegments.contains { $0.start < bEnd && $0.end > entry.entryPoint }
+            } else {
+                introInstrumental = false
+            }
+        } else {
+            introInstrumental = false
+        }
+
+        // Average danceability — high values need bass/groove preserved
+        let danceA = (safeCurrent?.hasError != true) ? (safeCurrent?.danceability ?? 0.5) : 0.5
+        let danceB = (safeNext?.hasError != true) ? (safeNext?.danceability ?? 0.5) : 0.5
+        let avgDanceability = (danceA + danceB) / 2.0
+
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
@@ -242,7 +300,10 @@ enum DJMixingService {
             downbeatTimesA: dbA,
             downbeatTimesB: dbB,
             useMidScoop: djFilters.useMidScoop,
-            useHighShelfCut: djFilters.useHighShelfCut
+            useHighShelfCut: djFilters.useHighShelfCut,
+            isOutroInstrumental: outroInstrumental,
+            isIntroInstrumental: introInstrumental,
+            danceability: avgDanceability
         )
     }
 
@@ -265,6 +326,7 @@ enum DJMixingService {
         a.vocalStartTime = min(max(0, a.vocalStartTime), maxT)
         a.chorusStartTime = min(max(0, a.chorusStartTime), maxT)
         if a.hasCuePoint { a.cuePoint = min(max(0, a.cuePoint), maxT) }
+        if a.hasVocalEndData { a.lastVocalTime = min(max(0, a.lastVocalTime), maxT) }
         a.phraseBoundaries = a.phraseBoundaries.filter { $0 >= 0 && $0 <= maxT }
         a.downbeatTimes = a.downbeatTimes.filter { $0 >= 0 && $0 <= maxT }
         a.speechSegments = a.speechSegments.compactMap { seg in
@@ -534,44 +596,64 @@ enum DJMixingService {
         let hasNext = nextAnalysis != nil && nextAnalysis?.hasError == false
 
         if hasCurrent, hasNext, let current = currentAnalysis, let next = nextAnalysis {
-            let introB = next.introEndTime
-            let vocalB = next.vocalStartTime
-            // Use per-section energy when available
-            let energyA = current.hasEnergyProfile ? current.energyOutro : current.energy
-            let energyB = next.hasEnergyProfile ? next.energyIntro : next.energy
+            // ── Priority 1: Backend-suggested fade durations ──
+            // The backend calculates optimal fade durations per song based on actual audio shape.
+            // Use them as primary when both songs have backend data, with safety clamps.
+            let backendFadeIn = next.backendFadeInDuration
+            let backendFadeOut = current.backendFadeOutDuration
 
-            let outroAStart = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
-            let outroADuration = bufferADuration - outroAStart
-            let hasValidOutro = outroADuration >= 2
+            if userFadeDuration == nil, let bfi = backendFadeIn, bfi >= 2 {
+                // Use B's backend fadeIn as primary (it knows the intro energy shape)
+                fadeDuration = max(config.minFadeDuration, min(config.maxFadeDuration, bfi))
+                decision = "Backend fadeIn: \(String(format: "%.1f", bfi))s → \(String(format: "%.1f", fadeDuration))s."
 
-            let dropB = introB > 1.0 ? introB : vocalB
-
-            if dropB > entryPoint {
-                let idealFade = dropB - entryPoint
-                if hasValidOutro {
-                    let constrained = min(idealFade, outroADuration)
-                    let localMin = mode == .dj ? 2.0 : config.minFadeDuration
-                    fadeDuration = max(localMin, min(config.maxFadeDuration, constrained))
-                } else {
-                    let localMin = mode == .dj ? 2.0 : config.minFadeDuration
-                    fadeDuration = max(localMin, min(config.maxFadeDuration, idealFade))
+                // If A also has a backend fadeOut, average them for the best compromise
+                if let bfo = backendFadeOut, bfo >= 2 {
+                    let avg = (fadeDuration + max(config.minFadeDuration, min(config.maxFadeDuration, bfo))) / 2
+                    fadeDuration = avg
+                    decision = "Backend fadeIn/Out: \(String(format: "%.1f", bfi))/\(String(format: "%.1f", bfo))s → avg \(String(format: "%.1f", fadeDuration))s."
                 }
-                decision = "Adaptada a intro \(String(format: "%.2f", idealFade))s → \(String(format: "%.2f", fadeDuration))s."
-            } else if hasValidOutro {
-                fadeDuration = max(config.minFadeDuration, min(config.maxFadeDuration - 2, outroADuration * 0.8))
-                decision = "Adaptada a outro (\(String(format: "%.2f", outroADuration))s) → \(String(format: "%.2f", fadeDuration))s."
             } else {
-                fadeDuration = userFadeDuration ?? (mode == .dj ? 5 : 6)
-                decision = "Duración por canción abrupta: \(fadeDuration)s."
+                // ── Priority 2: Heuristic fade calculation ──
+                let introB = next.introEndTime
+                let vocalB = next.vocalStartTime
+                // Use per-section energy when available
+                let energyA = current.hasEnergyProfile ? current.energyOutro : current.energy
+                let energyB = next.hasEnergyProfile ? next.energyIntro : next.energy
+
+                let outroAStart = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
+                let outroADuration = bufferADuration - outroAStart
+                let hasValidOutro = outroADuration >= 2
+
+                let dropB = introB > 1.0 ? introB : vocalB
+
+                if dropB > entryPoint {
+                    let idealFade = dropB - entryPoint
+                    if hasValidOutro {
+                        let constrained = min(idealFade, outroADuration)
+                        let localMin = mode == .dj ? 2.0 : config.minFadeDuration
+                        fadeDuration = max(localMin, min(config.maxFadeDuration, constrained))
+                    } else {
+                        let localMin = mode == .dj ? 2.0 : config.minFadeDuration
+                        fadeDuration = max(localMin, min(config.maxFadeDuration, idealFade))
+                    }
+                    decision = "Adaptada a intro \(String(format: "%.2f", idealFade))s → \(String(format: "%.2f", fadeDuration))s."
+                } else if hasValidOutro {
+                    fadeDuration = max(config.minFadeDuration, min(config.maxFadeDuration - 2, outroADuration * 0.8))
+                    decision = "Adaptada a outro (\(String(format: "%.2f", outroADuration))s) → \(String(format: "%.2f", fadeDuration))s."
+                } else {
+                    fadeDuration = userFadeDuration ?? (mode == .dj ? 5 : 6)
+                    decision = "Duración por canción abrupta: \(fadeDuration)s."
+                }
+
+                // Energy flow dropdown
+                if energyB < energyA - 0.25 && hasValidOutro && outroADuration > 12 {
+                    fadeDuration = min(15, max(fadeDuration, outroADuration * 0.9))
+                    decision += " Extendido por caida de energia a \(String(format: "%.2f", fadeDuration))s."
+                }
             }
 
-            // Energy flow dropdown
-            if energyB < energyA - 0.25 && hasValidOutro && outroADuration > 12 {
-                fadeDuration = min(15, max(fadeDuration, outroADuration * 0.9))
-                decision += " Extendido por caida de energia a \(String(format: "%.2f", fadeDuration))s."
-            }
-
-            // Gradual harmonic penalty
+            // Gradual harmonic penalty (applies to both backend and heuristic paths)
             let harmonic = harmonicPenalty(keyA: current.key, keyB: next.key)
             switch harmonic.compatibility {
             case .compatible, .acceptable:
@@ -625,8 +707,19 @@ enum DJMixingService {
         fadeDuration: Double,
         mode: MixMode
     ) -> FilterDecisionResult {
-        let hasVocalsOutro = currentAnalysis?.vocalStartTime ?? 0 > 0 && currentAnalysis?.hasError != true
-        let hasVocalsIntro = nextAnalysis?.vocalStartTime ?? 0 > 0 && nextAnalysis?.hasError != true
+        // Use backend vocal flags when available (definitive), fall back to vocalStartTime
+        let hasVocalsOutro: Bool
+        if let cur = currentAnalysis, !cur.hasError {
+            hasVocalsOutro = cur.hasOutroVocals || cur.vocalStartTime > 0
+        } else {
+            hasVocalsOutro = false
+        }
+        let hasVocalsIntro: Bool
+        if let nxt = nextAnalysis, !nxt.hasError {
+            hasVocalsIntro = nxt.hasIntroVocals || nxt.vocalStartTime > 0
+        } else {
+            hasVocalsIntro = false
+        }
 
         // Use per-section energy: outro of A and intro of B are what overlap
         let energyA: Double
@@ -707,11 +800,20 @@ enum DJMixingService {
         var reasons: [String] = []
 
         // ── Mid Scoop: vocal overlap detection ──
-        // Check if A has vocals in the crossfade zone AND B has vocals in its entry zone.
+        // Priority: backend flags (definitive) → speechSegments (precise) → vocalStartTime (fallback).
         if let current = currentAnalysis, let next = nextAnalysis {
             let crossfadeStartA = bufferADuration - fadeDuration
+            let bOverlapEnd = entryPoint + fadeDuration
+
+            // Detect vocals in A's outro (crossfade zone)
             let aHasVocalsInOutro: Bool
-            if !current.speechSegments.isEmpty {
+            if current.hasOutroVocals {
+                // Backend flag is definitive — vocals confirmed in outro section
+                aHasVocalsInOutro = true
+            } else if current.hasVocalEndData && current.lastVocalTime > crossfadeStartA {
+                // Instrumental outro detection: vocals end after crossfade starts
+                aHasVocalsInOutro = true
+            } else if !current.speechSegments.isEmpty {
                 // Precise: any speech segment overlaps with the crossfade zone
                 aHasVocalsInOutro = current.speechSegments.contains { $0.end > crossfadeStartA }
             } else {
@@ -720,15 +822,17 @@ enum DJMixingService {
                     (current.outroStartTime <= 0 || current.outroStartTime > crossfadeStartA)
             }
 
-            let bVocalStart = next.vocalStartTime
+            // Detect vocals in B's intro (entry zone)
             let bHasVocalsInIntro: Bool
-            if !next.speechSegments.isEmpty {
+            if next.hasIntroVocals {
+                // Backend flag is definitive — vocals confirmed in intro section
+                bHasVocalsInIntro = true
+            } else if !next.speechSegments.isEmpty {
                 // Precise: B has speech in the entry zone (entryPoint to entryPoint + fadeDuration)
-                let bOverlapEnd = entryPoint + fadeDuration
                 bHasVocalsInIntro = next.speechSegments.contains { $0.start < bOverlapEnd && $0.end > entryPoint }
             } else {
                 // Fallback: vocals start within the fade window
-                bHasVocalsInIntro = bVocalStart > 0 && bVocalStart < entryPoint + fadeDuration
+                bHasVocalsInIntro = next.vocalStartTime > 0 && next.vocalStartTime < bOverlapEnd
             }
 
             if aHasVocalsInOutro && bHasVocalsInIntro {
@@ -875,22 +979,43 @@ enum DJMixingService {
             reason = "Polirritmia evitada (A:\(Int(rawBpmA)) B:\(Int(rawBpmB))\(normalizedNote)) → CUT forzado"
         }
 
-        // Safety: vocal trainwreck
+        // Safety: vocal trainwreck detection
+        // Uses backend flags (definitive) → lastVocalTime → speechSegments → vocalStartTime fallback
         if hasCurrent, hasNext, let current = currentAnalysis, let next = nextAnalysis {
             let vocalBStart = next.vocalStartTime - entryPoint
-            if vocalBStart >= 0 && vocalBStart < fadeDuration {
-                let safeOutroA = bufferADuration - fadeDuration
-                var aHasVocalsAtEnd = false
+            let bHasVocalsInFade = vocalBStart >= 0 && vocalBStart < fadeDuration
 
-                if !current.speechSegments.isEmpty {
+            // Also check via backend flag
+            let bIntroVocalOverlap = next.hasIntroVocals || bHasVocalsInFade
+
+            if bIntroVocalOverlap {
+                let safeOutroA = bufferADuration - fadeDuration
+
+                // Detect A vocals at crossfade zone — priority: flag → lastVocalTime → speechSegments → fallback
+                var aHasVocalsAtEnd = false
+                if current.hasOutroVocals {
+                    aHasVocalsAtEnd = true
+                } else if current.hasVocalEndData {
+                    aHasVocalsAtEnd = current.lastVocalTime > safeOutroA
+                } else if !current.speechSegments.isEmpty {
                     aHasVocalsAtEnd = current.speechSegments.contains { $0.end > safeOutroA }
                 } else {
                     aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA) && current.vocalStartTime > 0
                 }
 
                 if aHasVocalsAtEnd && type != .cut {
-                    type = .cut
-                    reason = "Vocal Trainwreck evitado → CUT forzado"
+                    // Before forcing CUT, check if B has an instrumental intro before vocals.
+                    // If so, the crossfade can use the instrumental section cleanly and
+                    // A's volume will have faded before B's vocals start.
+                    let bInstrumentalWindow = next.vocalStartTime - entryPoint
+                    if bInstrumentalWindow > fadeDuration * 0.6 {
+                        // B's vocals start after 60%+ of the fade — A will be mostly silent by then.
+                        // No trainwreck: keep current transition type, but ensure filters are active.
+                        reason += " (vocal overlap OK: B vocals after \(String(format: "%.0f", bInstrumentalWindow))s)"
+                    } else {
+                        type = .cut
+                        reason = "Vocal Trainwreck evitado → CUT forzado"
+                    }
                 }
             }
         }

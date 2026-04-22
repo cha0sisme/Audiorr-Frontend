@@ -57,6 +57,10 @@ class CrossfadeExecutor {
         // DJ-grade filters: activated by analysis
         let useMidScoop: Bool       // Anti-clash vocal: dip mids on A when vocals overlap
         let useHighShelfCut: Bool   // Hi-hat cleanup: attenuate highs on A
+        // Backend analysis intelligence
+        let isOutroInstrumental: Bool   // A's outro is instrumental — lighter filters
+        let isIntroInstrumental: Bool   // B's intro is instrumental — skip mid-scoop
+        let danceability: Double        // High = preserve bass/groove (less aggressive HPF/lowshelf)
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -65,7 +69,9 @@ class CrossfadeExecutor {
              energyA: Double = 0.5, energyB: Double = 0.5,
              beatIntervalA: Double = 0, beatIntervalB: Double = 0,
              downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = [],
-             useMidScoop: Bool = false, useHighShelfCut: Bool = false) {
+             useMidScoop: Bool = false, useHighShelfCut: Bool = false,
+             isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
+             danceability: Double = 0.5) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -84,6 +90,9 @@ class CrossfadeExecutor {
             self.downbeatTimesB = downbeatTimesB
             self.useMidScoop = useMidScoop
             self.useHighShelfCut = useHighShelfCut
+            self.isOutroInstrumental = isOutroInstrumental
+            self.isIntroInstrumental = isIntroInstrumental
+            self.danceability = danceability
         }
     }
 
@@ -249,13 +258,18 @@ class CrossfadeExecutor {
         self.maxVolumeB = maxVolumeB
         self.getMasterVolume = getMasterVolume
 
-        // Seleccionar preset
+        // Seleccionar preset — informed by backend analysis
         // Energy-down: if B is significantly less energetic, use lowpass sweep on A
         let isEnergyDown = config.energyB < config.energyA - 0.2
+        // Both sides instrumental = clean transition, lighter filters suffice
+        let bothInstrumental = config.isOutroInstrumental && config.isIntroInstrumental
         if config.needsAnticipation {
             preset = Self.presetAnticipation
         } else if isEnergyDown {
             preset = Self.presetEnergyDown
+        } else if bothInstrumental {
+            // Instrumental-to-instrumental: no vocal clash risk, use normal (lighter) preset
+            preset = Self.presetNormal
         } else if config.useAggressiveFilters {
             preset = Self.presetAggressive
         } else {
@@ -280,14 +294,18 @@ class CrossfadeExecutor {
 
         // Log
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
-        let djDesc = [config.useMidScoop ? "midScoop" : nil, config.useHighShelfCut ? "hiShelf" : nil]
+        let djDesc = [useMidScoop ? "midScoop" : nil, useHighShelfCut ? "hiShelf" : nil]
+            .compactMap { $0 }.joined(separator: "+")
+        let analysisDesc = [config.isOutroInstrumental ? "outroInst" : nil,
+                           config.isIntroInstrumental ? "introInst" : nil,
+                           config.danceability > 0.7 ? String(format: "dance=%.2f", config.danceability) : nil]
             .compactMap { $0 }.joined(separator: "+")
         let anticDesc = config.needsAnticipation ? String(format: "%.1fs", config.anticipationTime) : "OFF"
         print("""
         [CrossfadeExecutor] ═══════════════════════════════════════
           \(config.transitionType.rawValue): "\(currentTitle)" → "\(nextTitle)"
           Entry: \(String(format: "%.2f", config.entryPoint))s | Fade: \(String(format: "%.2f", config.fadeDuration))s
-          Filters: \(filtersDesc) | DJ: \(djDesc.isEmpty ? "OFF" : djDesc) | Anticipation: \(anticDesc)
+          Filters: \(filtersDesc) | DJ: \(djDesc.isEmpty ? "OFF" : djDesc) | Anticipation: \(anticDesc) | Analysis: \(analysisDesc.isEmpty ? "—" : analysisDesc)
           RG A: \(String(format: "%.3f", maxVolumeA)) | B: \(String(format: "%.3f", maxVolumeB)) | Vol: \(String(format: "%.2f", getMasterVolume()))
           Beat: A=\(String(format: "%.3f", config.beatIntervalA))s B=\(String(format: "%.3f", config.beatIntervalB))s | swap@\(String(format: "%.2f", bassSwapTime - timings.startTime))s | beats:\(hasBeatData ? "YES" : "NO")
           Timings:
@@ -494,6 +512,9 @@ class CrossfadeExecutor {
     private var useMidScoop: Bool = false
     /// Whether high-shelf cut is active on A (hi-hat/cymbal cleanup).
     private var useHighShelfCut: Bool = false
+    /// Danceability scaling factor for bass filters (0.5–1.0).
+    /// High danceability → less aggressive bass cut to preserve groove.
+    private var danceabilityBassScale: Float = 1.0
 
     /// Beat-aligned bass swap: the wall-clock time at which bass should be fully swapped
     /// (nearest downbeat to ~40-50% of the crossfade). Computed once at init.
@@ -511,6 +532,13 @@ class CrossfadeExecutor {
         useBassManagement = preset.lowshelfA != nil ||
             config.transitionType == .beatMatchBlend || config.transitionType == .eqMix
         useLowpassA = preset.lowpassA != nil
+
+        // High danceability (>0.7) = preserve bass/groove: scale lowshelf cuts to 50-100%.
+        // This keeps the track's energy/groove during the transition.
+        if config.danceability > 0.7 {
+            // 0.7 → 1.0, 1.0 → 0.5 (linear interpolation)
+            danceabilityBassScale = Float(1.0 - (config.danceability - 0.7) / 0.3 * 0.5)
+        }
 
         // ── Player A: highpass (or lowpass for energy-down) ──
         if useLowpassA, let lpA = preset.lowpassA {
@@ -547,7 +575,8 @@ class CrossfadeExecutor {
         eqB.bands[1].gain = preset.lowshelfB.startGain
 
         // ── Band 2: Mid scoop on A (vocal anti-clash, ~1.5kHz parametric dip) ──
-        useMidScoop = config.useMidScoop && preset.midScoopA != nil
+        // Skip mid-scoop when B's intro is instrumental — no vocal clash risk
+        useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
         if useMidScoop, let ms = preset.midScoopA {
             eqA.bands[2].bypass = false
             eqA.bands[2].filterType = .parametric
@@ -557,7 +586,8 @@ class CrossfadeExecutor {
         }
 
         // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup, ~8kHz) ──
-        useHighShelfCut = config.useHighShelfCut && preset.highShelfA != nil
+        // Skip high-shelf when A's outro is instrumental — no hi-hat/cymbal clash
+        useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
         if useHighShelfCut, let hs = preset.highShelfA {
             eqA.bands[3].bypass = false
             eqA.bands[3].filterType = .highShelf
@@ -866,16 +896,20 @@ class CrossfadeExecutor {
             let filterDur = timings.transitionEndTime - timings.filterStartTime
             guard filterDur > 0 else { return }
 
+            // Scale target gains by danceability — high danceability preserves more bass
+            let scaledMidGain = lsA.midGain * danceabilityBassScale
+            let scaledEndGain = lsA.endGain * danceabilityBassScale
+
             if t < bassSwapTime {
                 // Before swap point: ease bass down to midGain
                 let preDur = bassSwapTime - timings.filterStartTime
                 let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
-                eqA.bands[1].gain = linInterp(lsA.startGain, lsA.midGain, preP)
+                eqA.bands[1].gain = linInterp(lsA.startGain, scaledMidGain, preP)
             } else {
                 // After swap point: cut bass aggressively to endGain
                 let postDur = timings.transitionEndTime - bassSwapTime
                 let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
-                eqA.bands[1].gain = linInterp(lsA.midGain, lsA.endGain, postP)
+                eqA.bands[1].gain = linInterp(scaledMidGain, scaledEndGain, postP)
             }
         }
     }

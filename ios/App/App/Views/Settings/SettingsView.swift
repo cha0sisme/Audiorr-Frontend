@@ -1,5 +1,27 @@
 import SwiftUI
 
+// MARK: - User Avatar Color (deterministic, matches JS getColorForUsername)
+
+/// Generates a consistent HSL color for a username — same algorithm as the web app.
+/// The color is permanently tied to the username string.
+private func avatarColor(for username: String) -> Color {
+    var hash: Int = 0
+    for char in username.unicodeScalars {
+        hash = Int(char.value) &+ ((hash &<< 5) &- hash)
+    }
+    let hue = Double(abs(hash) % 360)
+    let saturation = Double(60 + abs(hash) % 21) / 100.0
+    let lightness = Double(45 + abs(hash >> 8) % 21) / 100.0
+    // Convert HSL → SwiftUI Color
+    return Color(hue: hue / 360.0, saturation: saturation, brightness: lightness + saturation * min(lightness, 1 - lightness))
+}
+
+private func avatarInitial(for username: String) -> String {
+    let trimmed = username.trimmingCharacters(in: .whitespaces)
+    guard let first = trimmed.first else { return "?" }
+    return String(first).uppercased()
+}
+
 // MARK: - View Model
 
 @MainActor
@@ -190,6 +212,7 @@ struct SettingsView: View {
     @ObservedObject private var theme = AppTheme.shared
     @State private var showLogoutConfirm = false
     @State private var showSaveAlert = false
+    @State private var showProfile = false
     @State private var alertMessage = ""
     @State private var scrollY: CGFloat = 0
 
@@ -222,6 +245,24 @@ struct SettingsView: View {
                     .lineLimit(1)
                     .opacity(stickyOpacity)
             }
+            if !username.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showProfile = true } label: {
+                        ZStack {
+                            Circle()
+                                .fill(avatarColor(for: username))
+                            Text(avatarInitial(for: username))
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 28, height: 28)
+                    }
+                    .opacity(stickyOpacity)
+                }
+            }
+        }
+        .sheet(isPresented: $showProfile) {
+            UserProfileSheet(username: username)
         }
         .preferredColorScheme(theme.colorScheme)
         .onAppear { vm.load() }
@@ -242,11 +283,28 @@ struct SettingsView: View {
 
     // MARK: - Large header
 
+    private var username: String {
+        NavidromeService.shared.credentials?.username ?? ""
+    }
+
     private var largeHeader: some View {
         HStack(alignment: .bottom) {
             Text("Configuración")
                 .font(.system(size: 34, weight: .bold))
             Spacer()
+            if !username.isEmpty {
+                Button { showProfile = true } label: {
+                    ZStack {
+                        Circle()
+                            .fill(avatarColor(for: username))
+                        Text(avatarInitial(for: username))
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 38, height: 38)
+                    .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
@@ -275,55 +333,53 @@ struct SettingsView: View {
                 header: "Reproducción",
                 footer: crossfadeFooter
             ) {
-                // Crossfade toggle (always visible)
-                settingsRow {
-                    Label("Crossfade", systemImage: "arrow.trianglehead.swap")
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { vm.crossfadeEnabled },
-                        set: { _ in vm.toggleCrossfade() }
-                    ))
-                    .labelsHidden()
-                }
-
-                // Duration slider (when crossfade is ON)
-                if vm.crossfadeEnabled {
-                    Divider().padding(.leading, 16)
+                if BackendState.shared.isAvailable {
+                    // Backend connected → DJ Mode toggle only (crossfade is always on)
                     settingsRow {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Label("Duración", systemImage: "timer")
-                                Spacer()
-                                Text("\(Int(vm.crossfadeDuration))s")
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                            }
-                            Slider(value: Binding(
-                                get: { vm.crossfadeDuration },
-                                set: { vm.setCrossfadeDuration($0) }
-                            ), in: 2...15, step: 1)
-                            .tint(.accentColor)
-                            HStack {
-                                Text("2s")
-                                Spacer()
-                                Text("15s")
-                            }
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                        }
+                        Label("Modo DJ", systemImage: "dial.medium.fill")
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { vm.isDjMode },
+                            set: { _ in vm.toggleDjMode() }
+                        ))
+                        .labelsHidden()
+                    }
+                } else {
+                    // No backend → standard crossfade toggle + duration
+                    settingsRow {
+                        Label("Crossfade", systemImage: "arrow.trianglehead.swap")
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { vm.crossfadeEnabled },
+                            set: { _ in vm.toggleCrossfade() }
+                        ))
+                        .labelsHidden()
                     }
 
-                    // DJ mode (only when backend is available + crossfade ON)
-                    if BackendState.shared.isAvailable {
+                    if vm.crossfadeEnabled {
                         Divider().padding(.leading, 16)
                         settingsRow {
-                            Label("Modo DJ", systemImage: "dial.medium.fill")
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { vm.isDjMode },
-                                set: { _ in vm.toggleDjMode() }
-                            ))
-                            .labelsHidden()
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Label("Duración", systemImage: "timer")
+                                    Spacer()
+                                    Text("\(Int(vm.crossfadeDuration))s")
+                                        .foregroundStyle(.secondary)
+                                        .monospacedDigit()
+                                }
+                                Slider(value: Binding(
+                                    get: { vm.crossfadeDuration },
+                                    set: { vm.setCrossfadeDuration($0) }
+                                ), in: 2...15, step: 1)
+                                .tint(.accentColor)
+                                HStack {
+                                    Text("2s")
+                                    Spacer()
+                                    Text("15s")
+                                }
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            }
                         }
                     }
                 }
@@ -462,14 +518,14 @@ struct SettingsView: View {
     // MARK: - Dynamic footers
 
     private var crossfadeFooter: String {
+        if BackendState.shared.isAvailable {
+            if vm.isDjMode {
+                return "Modo DJ analiza las canciones para crear mezclas dinámicas inteligentes. La duración se ajusta automáticamente según el análisis. ReplayGain normaliza el volumen."
+            }
+            return "Las transiciones se optimizan automáticamente con el análisis del backend. Activa Modo DJ para mezclas dinámicas inteligentes. ReplayGain normaliza el volumen."
+        }
         if !vm.crossfadeEnabled {
             return "Las canciones cambiarán sin transición. ReplayGain normaliza el volumen entre canciones."
-        }
-        if BackendState.shared.isAvailable && vm.isDjMode {
-            return "Modo DJ analiza las canciones para crear mezclas dinámicas inteligentes. La duración se ajusta automáticamente según el análisis. ReplayGain normaliza el volumen."
-        }
-        if BackendState.shared.isAvailable {
-            return "Crossfade mezcla las canciones con transiciones suaves. Con el backend conectado, el análisis optimiza los puntos de entrada y salida. ReplayGain normaliza el volumen."
         }
         return "Crossfade mezcla las canciones con una transición de \(Int(vm.crossfadeDuration))s. ReplayGain normaliza el volumen entre canciones."
     }
@@ -535,5 +591,379 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.red)
         }
+    }
+}
+
+// MARK: - User Profile Sheet
+
+@MainActor
+final class UserProfileViewModel: ObservableObject {
+    let username: String
+
+    @Published var period: String = "week"
+    @Published var isLoading = true
+    @Published var totalPlays: Int = 0
+    @Published var topGenre: String?
+    @Published var lastScrobble: (title: String, artist: String, playedAt: Date)?
+    @Published var lastConnection: Date?
+    @Published var topSongs: [(id: String, title: String, artist: String, coverArt: String?, plays: Int)] = []
+    @Published var topArtists: [(artist: String, plays: Int)] = []
+
+    init(username: String) {
+        self.username = username
+    }
+
+    func load() {
+        Task { await fetchAll() }
+    }
+
+    func setPeriod(_ p: String) {
+        period = p
+        Task { await fetchStats() }
+    }
+
+    private func fetchAll() async {
+        isLoading = true
+        // Fetch user info (last connection, last scrobble) and stats in parallel
+        async let statsTask: () = fetchStats()
+        async let userTask: () = fetchUserInfo()
+        _ = await (statsTask, userTask)
+        isLoading = false
+    }
+
+    private func fetchStats() async {
+        guard BackendState.shared.isAvailable else { return }
+        do {
+            let dict = try await BackendService.shared.getUserStats(username: username, period: period)
+            totalPlays = dict["total_plays"] as? Int ?? 0
+
+            if let genres = dict["top_genres"] as? [[String: Any]], let first = genres.first {
+                topGenre = first["genre"] as? String
+            }
+
+            if let songs = dict["top_songs"] as? [[String: Any]] {
+                topSongs = songs.prefix(5).map { s in
+                    (id: s["id"] as? String ?? "",
+                     title: s["title"] as? String ?? "",
+                     artist: s["artist"] as? String ?? "",
+                     coverArt: s["cover_art"] as? String,
+                     plays: s["plays"] as? Int ?? 0)
+                }
+            }
+
+            if let artists = dict["top_artists"] as? [[String: Any]] {
+                topArtists = artists.prefix(5).map { a in
+                    (artist: a["artist"] as? String ?? "", plays: a["plays"] as? Int ?? 0)
+                }
+            }
+        } catch {
+            print("[UserProfile] Stats fetch failed: \(error)")
+        }
+    }
+
+    private func fetchUserInfo() async {
+        guard BackendState.shared.isAvailable else { return }
+        do {
+            let users = try await BackendService.shared.getAdminUsers()
+            guard let user = users.first(where: { ($0["username"] as? String) == username }) else { return }
+
+            if let updated = user["updatedAt"] as? String {
+                lastConnection = ISO8601DateFormatter().date(from: updated)
+            }
+
+            if let scrobble = user["lastScrobble"] as? [String: Any],
+               let title = scrobble["title"] as? String,
+               let artist = scrobble["artist"] as? String {
+                let playedAt = (scrobble["playedAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                lastScrobble = (title: title, artist: artist, playedAt: playedAt)
+            }
+        } catch {
+            print("[UserProfile] Admin users fetch failed: \(error)")
+        }
+    }
+}
+
+struct UserProfileSheet: View {
+    let username: String
+    @StateObject private var vm: UserProfileViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    init(username: String) {
+        self.username = username
+        _vm = StateObject(wrappedValue: UserProfileViewModel(username: username))
+    }
+
+    private var color: Color { avatarColor(for: username) }
+    private var initial: String { avatarInitial(for: username) }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    profileHero
+                    if vm.isLoading {
+                        ProgressView()
+                            .padding(.top, 40)
+                    } else if BackendState.shared.isAvailable {
+                        statsContent
+                            .padding(.horizontal, 16)
+                            .padding(.top, 24)
+                            .padding(.bottom, 40)
+                    }
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Cerrar") { dismiss() }
+                }
+            }
+            .onAppear { vm.load() }
+        }
+    }
+
+    // MARK: - Hero
+
+    private var profileHero: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(color.gradient)
+                    .shadow(color: color.opacity(0.4), radius: 20, y: 8)
+                Text(initial)
+                    .font(.system(size: 44, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 100, height: 100)
+
+            Text(username)
+                .font(.title.bold())
+
+            // Last connection + server
+            VStack(spacing: 4) {
+                if let date = vm.lastConnection {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.caption2)
+                        Text("Última conexión \(date, format: .dateTime.day().month(.abbreviated))")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
+                if !serverUrl.isEmpty {
+                    Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+        .background(color.opacity(0.08).ignoresSafeArea())
+    }
+
+    // MARK: - Stats
+
+    private var statsContent: some View {
+        VStack(spacing: 20) {
+            // Period picker
+            HStack {
+                Text("Estadísticas")
+                    .font(.title3.bold())
+                Spacer()
+                Picker("Período", selection: Binding(
+                    get: { vm.period },
+                    set: { vm.setPeriod($0) }
+                )) {
+                    Text("Semanal").tag("week")
+                    Text("Mensual").tag("month")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+            }
+
+            // Summary cards
+            HStack(spacing: 12) {
+                statCard(title: "Reproducciones", value: "\(vm.totalPlays)")
+                if let genre = vm.topGenre {
+                    statCard(title: "Género favorito", value: genre)
+                }
+            }
+
+            // Last scrobble
+            if let scrobble = vm.lastScrobble {
+                profileCard {
+                    HStack(spacing: 12) {
+                        Image(systemName: "music.note")
+                            .font(.title3)
+                            .foregroundStyle(color)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Último scrobble")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(scrobble.title)
+                                .font(.subheadline.bold())
+                                .lineLimit(1)
+                            Text(scrobble.artist)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Text(scrobble.playedAt, format: .dateTime.day().month(.abbreviated).hour().minute())
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+            }
+
+            // Top Songs
+            if !vm.topSongs.isEmpty {
+                profileCard {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Top Canciones")
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                            .padding(.bottom, 8)
+
+                        ForEach(Array(vm.topSongs.enumerated()), id: \.offset) { index, song in
+                            if index > 0 { Divider().padding(.leading, 60) }
+                            HStack(spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20)
+
+                                if let coverArt = song.coverArt,
+                                   let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
+                                    AsyncImage(url: url) { image in
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        Color(.tertiarySystemFill)
+                                    }
+                                    .frame(width: 40, height: 40)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                } else {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color(.tertiarySystemFill))
+                                        .frame(width: 40, height: 40)
+                                        .overlay {
+                                            Image(systemName: "music.note")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                }
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(song.title)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                    Text(song.artist)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Text("\(song.plays)")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+            }
+
+            // Top Artists
+            if !vm.topArtists.isEmpty {
+                profileCard {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Top Artistas")
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 16)
+                            .padding(.top, 12)
+                            .padding(.bottom, 8)
+
+                        ForEach(Array(vm.topArtists.enumerated()), id: \.offset) { index, artist in
+                            if index > 0 { Divider().padding(.leading, 60) }
+                            HStack(spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20)
+                                // Artist avatar circle with initial
+                                ZStack {
+                                    Circle()
+                                        .fill(avatarColor(for: artist.artist).opacity(0.8))
+                                    Text(avatarInitial(for: artist.artist))
+                                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                }
+                                .frame(width: 40, height: 40)
+
+                                Text(artist.artist)
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(artist.plays)")
+                                    .font(.subheadline.bold())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+            }
+
+            // Empty state
+            if vm.totalPlays == 0 && vm.topSongs.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "music.note.list")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.tertiary)
+                    Text("No hay reproducciones registradas")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 40)
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func statCard(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title2.bold())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func profileCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            content()
+        }
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

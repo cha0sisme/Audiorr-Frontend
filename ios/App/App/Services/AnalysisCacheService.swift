@@ -36,6 +36,8 @@ actor AnalysisCacheService {
         var energyProfile: EnergyProfile? { diagnostics?.fadeInfo?.energyProfile }
         /// Chorus structure from diagnostics — more complete than top-level `structure`
         var chorusStructure: [StructureSegment]? { diagnostics?.analysisLog?.lastChorusEnd?.chorusStructure }
+        /// Last vocal time — where vocals actually end in the song (more precise than outroStartTime)
+        var lastVocalTime: Double? { diagnostics?.analysisLog?.instrumentalOutro?.lastVocalTimeCandidate }
 
         struct Diagnostics: Codable {
             let fadeInfo: FadeInfo?
@@ -57,9 +59,21 @@ actor AnalysisCacheService {
 
         struct AnalysisLog: Codable {
             let lastChorusEnd: LastChorusEnd?
+            let instrumentalOutro: InstrumentalOutro?
 
             enum CodingKeys: String, CodingKey {
                 case lastChorusEnd = "Last Chorus End"
+                case instrumentalOutro = "Instrumental Outro"
+            }
+        }
+
+        struct InstrumentalOutro: Codable {
+            let lastVocalTimeCandidate: Double?
+            let decision: String?
+
+            enum CodingKeys: String, CodingKey {
+                case lastVocalTimeCandidate = "last_vocal_time_candidate"
+                case decision
             }
         }
 
@@ -149,6 +163,7 @@ actor AnalysisCacheService {
         analysis.bpm = result.bpm ?? 120
         analysis.beatInterval = result.beatInterval ?? (60.0 / analysis.bpm)
         analysis.energy = result.energy ?? 0.5
+        analysis.danceability = result.danceability ?? 0.5
         analysis.key = result.key
         analysis.outroStartTime = result.outroStartTime ?? max(duration - 30, 0)
         analysis.introEndTime = result.introEndTime ?? min(30, duration)
@@ -187,7 +202,24 @@ actor AnalysisCacheService {
             analysis.energyMain = ep.main ?? analysis.energy
             analysis.energyOutro = ep.outro ?? analysis.energy
             analysis.hasEnergyProfile = true
+            analysis.hasIntroVocals = ep.introVocals ?? false
+            analysis.hasOutroVocals = ep.outroVocals ?? false
         }
+
+        // Backend-suggested fade durations (from diagnostics.fade_info)
+        if let fi = result.fadeInDuration, fi > 0 { analysis.backendFadeInDuration = fi }
+        if let fo = result.fadeOutDuration, fo > 0 { analysis.backendFadeOutDuration = fo }
+        if let fol = result.fadeOutLeadTime, fol > 0 { analysis.backendFadeOutLeadTime = fol }
+
+        // Last vocal time — where vocals actually end (from analysis_log.Instrumental Outro)
+        if let lvt = result.lastVocalTime, lvt > 0 && lvt < duration {
+            analysis.lastVocalTime = lvt
+            analysis.hasVocalEndData = true
+        }
+
+        // Mark whether backend provided real intro/outro data
+        analysis.hasIntroData = result.introEndTime != nil
+        analysis.hasOutroData = result.outroStartTime != nil
 
         return analysis
     }

@@ -635,6 +635,7 @@ final class QueueManager: AudioEngineDelegate {
                     currentSongAnalysis.bpm = curAn.bpm ?? 120
                     currentSongAnalysis.beatInterval = curAn.beatInterval ?? (60.0 / currentSongAnalysis.bpm)
                     currentSongAnalysis.energy = curAn.energy ?? 0.5
+                    currentSongAnalysis.danceability = curAn.danceability ?? 0.5
                     currentSongAnalysis.key = curAn.key
                     currentSongAnalysis.outroStartTime = curAn.outroStartTime ?? max(currentDuration - 30, 0)
                     currentSongAnalysis.introEndTime = curAn.introEndTime ?? min(30, currentDuration)
@@ -657,6 +658,17 @@ final class QueueManager: AudioEngineDelegate {
                         currentSongAnalysis.energyMain = ep.main ?? currentSongAnalysis.energy
                         currentSongAnalysis.energyOutro = ep.outro ?? currentSongAnalysis.energy
                         currentSongAnalysis.hasEnergyProfile = true
+                        currentSongAnalysis.hasIntroVocals = ep.introVocals ?? false
+                        currentSongAnalysis.hasOutroVocals = ep.outroVocals ?? false
+                    }
+                    // Backend fade durations
+                    if let fi = curAn.fadeInDuration, fi > 0 { currentSongAnalysis.backendFadeInDuration = fi }
+                    if let fo = curAn.fadeOutDuration, fo > 0 { currentSongAnalysis.backendFadeOutDuration = fo }
+                    if let fol = curAn.fadeOutLeadTime, fol > 0 { currentSongAnalysis.backendFadeOutLeadTime = fol }
+                    // Last vocal time (from analysis_log.Instrumental Outro)
+                    if let lvt = curAn.lastVocalTime, lvt > 0, lvt < currentDuration {
+                        currentSongAnalysis.lastVocalTime = lvt
+                        currentSongAnalysis.hasVocalEndData = true
                     }
                 }
 
@@ -664,6 +676,7 @@ final class QueueManager: AudioEngineDelegate {
                     nextSongAnalysis.bpm = nxtAn.bpm ?? 120
                     nextSongAnalysis.beatInterval = nxtAn.beatInterval ?? (60.0 / nextSongAnalysis.bpm)
                     nextSongAnalysis.energy = nxtAn.energy ?? 0.5
+                    nextSongAnalysis.danceability = nxtAn.danceability ?? 0.5
                     nextSongAnalysis.key = nxtAn.key
                     nextSongAnalysis.outroStartTime = nxtAn.outroStartTime ?? max(nextDuration - 30, 0)
                     nextSongAnalysis.introEndTime = nxtAn.introEndTime ?? min(30, nextDuration)
@@ -681,6 +694,26 @@ final class QueueManager: AudioEngineDelegate {
                         nextSongAnalysis.energyMain = ep.main ?? nextSongAnalysis.energy
                         nextSongAnalysis.energyOutro = ep.outro ?? nextSongAnalysis.energy
                         nextSongAnalysis.hasEnergyProfile = true
+                        nextSongAnalysis.hasIntroVocals = ep.introVocals ?? false
+                        nextSongAnalysis.hasOutroVocals = ep.outroVocals ?? false
+                    }
+                    // Backend fade durations for next song
+                    if let fi = nxtAn.fadeInDuration, fi > 0 { nextSongAnalysis.backendFadeInDuration = fi }
+                    if let fo = nxtAn.fadeOutDuration, fo > 0 { nextSongAnalysis.backendFadeOutDuration = fo }
+                    // Last vocal time for next song
+                    if let lvt = nxtAn.lastVocalTime, lvt > 0, lvt < nextDuration {
+                        nextSongAnalysis.lastVocalTime = lvt
+                        nextSongAnalysis.hasVocalEndData = true
+                    }
+                    // Chorus structure
+                    let chorusSource = nxtAn.chorusStructure ?? nxtAn.structure
+                    if let structure = chorusSource,
+                       let chorus = structure.first(where: { $0.label.lowercased().contains("chorus") }) {
+                        nextSongAnalysis.chorusStartTime = chorus.startTime
+                    }
+                    // Phrase boundaries
+                    if let structure = chorusSource ?? nxtAn.structure {
+                        nextSongAnalysis.phraseBoundaries = structure.map { $0.startTime }
                     }
                 }
 
@@ -724,7 +757,10 @@ final class QueueManager: AudioEngineDelegate {
                     downbeatTimesA: crossfadeResult.downbeatTimesA,
                     downbeatTimesB: crossfadeResult.downbeatTimesB,
                     useMidScoop: crossfadeResult.useMidScoop,
-                    useHighShelfCut: crossfadeResult.useHighShelfCut
+                    useHighShelfCut: crossfadeResult.useHighShelfCut,
+                    isOutroInstrumental: crossfadeResult.isOutroInstrumental,
+                    isIntroInstrumental: crossfadeResult.isIntroInstrumental,
+                    danceability: crossfadeResult.danceability
                 )
 
                 // ── Trailing silence on A (analysis-based) ──
@@ -765,7 +801,10 @@ final class QueueManager: AudioEngineDelegate {
                         downbeatTimesA: config.downbeatTimesA,
                         downbeatTimesB: config.downbeatTimesB,
                         useMidScoop: config.useMidScoop,
-                        useHighShelfCut: config.useHighShelfCut
+                        useHighShelfCut: config.useHighShelfCut,
+                        isOutroInstrumental: config.isOutroInstrumental,
+                        isIntroInstrumental: config.isIntroInstrumental,
+                        danceability: config.danceability
                     )
                 } else {
                     finalConfig = config
@@ -775,16 +814,24 @@ final class QueueManager: AudioEngineDelegate {
                 // triggerTime = when in song A the crossfade should START.
                 // entryPoint = where in song B to begin playing (NOT the trigger).
                 //
-                // Priority: cuePoint (backend-calculated) > outroStartTime > heuristic fallback.
-                // The backend's cuePoint already accounts for chorus structure, energy drops,
-                // and optimal transition timing — it's the most precise trigger available.
+                // Priority hierarchy:
+                //   1. cuePoint (backend-calculated, most precise)
+                //   2. lastVocalTime (where vocals actually end — better than generic outroStartTime)
+                //   3. outroStartTime (section-level outro detection)
+                //   4. heuristic fallback (fadeDuration before end)
                 let outroStart = currentSongAnalysis.outroStartTime
                 var triggerTime: Double
                 if currentSongAnalysis.hasCuePoint {
                     triggerTime = currentSongAnalysis.cuePoint
                     print("[QueueManager] Using backend cuePoint as trigger: \(String(format: "%.1f", triggerTime))s")
+                } else if currentSongAnalysis.hasVocalEndData
+                            && currentSongAnalysis.lastVocalTime > 0
+                            && currentSongAnalysis.lastVocalTime < effectiveDuration - 3 {
+                    // Last vocal time: where vocals end. Trigger here so we fade during
+                    // the instrumental tail, avoiding vocal bleed into the crossfade.
+                    triggerTime = currentSongAnalysis.lastVocalTime
+                    print("[QueueManager] Using lastVocalTime as trigger: \(String(format: "%.1f", triggerTime))s")
                 } else if outroStart > 0 && outroStart < effectiveDuration - 5 {
-                    // Use analysis-based outro start
                     triggerTime = outroStart
                 } else {
                     // Fallback: start crossfade `fadeDuration` seconds before effective end
