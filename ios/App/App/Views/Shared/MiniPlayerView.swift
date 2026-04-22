@@ -39,10 +39,16 @@ struct MiniPlayerView: View {
 
                 // Text
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(state.title)
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(state.title)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if state.isExplicit {
+                            ExplicitBadge(color: .secondary, size: 13)
+                        }
+                    }
 
                     Text(state.artist)
                         .font(.system(size: 12, weight: .regular))

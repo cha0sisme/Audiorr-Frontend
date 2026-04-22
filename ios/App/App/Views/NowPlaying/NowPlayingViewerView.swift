@@ -164,6 +164,15 @@ struct NowPlayingViewerView: View {
         }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
+        .onChange(of: state.viewerIsOpen) { _, isOpen in
+            // Si el viewer se cierra externamente (Dynamic Island, Remote Command, etc.)
+            // mientras hay un drag en curso, resetear el offset para que la transición
+            // de salida arranque desde la posición correcta.
+            if !isOpen {
+                dragOffset = 0
+                isDragging = false
+            }
+        }
         .onChange(of: state.coverArt) { _, _ in
             loadArtwork()
         }
@@ -353,10 +362,16 @@ struct NowPlayingViewerView: View {
     private var songInfoView: some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(state.title)
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(state.title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    if state.isExplicit {
+                        ExplicitBadge(color: .white.opacity(0.5), size: 18)
+                    }
+                }
 
                 Text(state.artist)
                     .font(.title3)
@@ -397,10 +412,16 @@ struct NowPlayingViewerView: View {
 
             // Title + artist
             VStack(alignment: .leading, spacing: 2) {
-                Text(state.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(state.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+
+                    if state.isExplicit {
+                        ExplicitBadge(color: .white.opacity(0.5), size: 13)
+                    }
+                }
 
                 Text(state.artist)
                     .font(.subheadline)
@@ -435,6 +456,7 @@ struct NowPlayingViewerView: View {
     private func dismissDragGesture(screenHeight: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { value in
+                guard state.viewerIsOpen else { return }
                 let translation = value.translation.height
                 if translation > 0 {
                     isDragging = true
@@ -443,6 +465,10 @@ struct NowPlayingViewerView: View {
             }
             .onEnded { value in
                 isDragging = false
+                guard state.viewerIsOpen else {
+                    dragOffset = 0
+                    return
+                }
                 let translation = value.translation.height
                 let velocity = value.predictedEndTranslation.height - translation
 

@@ -32,8 +32,6 @@ final class SettingsViewModel: ObservableObject {
     @Published var crossfadeDuration: Double = 8  // seconds (2–15)
     @Published var scrobbleEnabled = false
 
-    @Published var lastfmApiKey = ""
-    @Published var lastfmHasSecret = false
     @Published var scrobbleStatus: ScrobbleStatus = .idle
 
     private let settingsKey = "audiorr_settings"
@@ -44,11 +42,6 @@ final class SettingsViewModel: ObservableObject {
         loadJSSettings()
         loadScrobble()
 
-        Task {
-            if BackendState.shared.isAvailable {
-                await loadLastFmConfig()
-            }
-        }
     }
 
     // MARK: - JS Settings bridge (audiorr_settings in localStorage)
@@ -129,61 +122,6 @@ final class SettingsViewModel: ObservableObject {
     // MARK: - Last.fm (backend API)
 
     private func backendBase() -> String? { NavidromeService.shared.backendURL() }
-
-    func loadLastFmConfig() async {
-        guard let base = backendBase(),
-              let url = URL(string: "\(base)/api/config/lastfm")
-        else { return }
-
-        guard let (data, resp) = try? await URLSession.shared.data(from: url),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            lastfmApiKey = ""
-            lastfmHasSecret = false
-            return
-        }
-
-        lastfmApiKey = dict["apiKey"] as? String ?? ""
-        lastfmHasSecret = dict["hasSecret"] as? Bool ?? false
-    }
-
-    func saveLastFmApiKey() async -> Bool {
-        let trimmed = lastfmApiKey.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty,
-              let base = backendBase(),
-              let url = URL(string: "\(base)/api/config/lastfm")
-        else { return false }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["apiKey": trimmed])
-
-        guard let (_, resp) = try? await URLSession.shared.data(for: request),
-              (resp as? HTTPURLResponse)?.statusCode == 200
-        else { return false }
-
-        lastfmHasSecret = false
-        return true
-    }
-
-    func deleteLastFmApiKey() async -> Bool {
-        guard let base = backendBase(),
-              let url = URL(string: "\(base)/api/config/lastfm")
-        else { return false }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-
-        guard let (_, resp) = try? await URLSession.shared.data(for: request),
-              (resp as? HTTPURLResponse)?.statusCode == 200
-        else { return false }
-
-        lastfmApiKey = ""
-        lastfmHasSecret = false
-        return true
-    }
 
     // MARK: - Logout
 
@@ -429,45 +367,6 @@ struct SettingsView: View {
                         ? L.scrobbleFooter
                         : nil
                 ) {
-                    settingsRow {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Label(L.apiKey, systemImage: "key.fill")
-                                .font(.subheadline.weight(.medium))
-                            TextField(L.enterApiKey, text: $vm.lastfmApiKey)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.subheadline)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-
-                            HStack(spacing: 12) {
-                                Button(L.save) {
-                                    Task {
-                                        let ok = await vm.saveLastFmApiKey()
-                                        alertMessage = ok ? L.keySaved : L.keySaveError
-                                        showSaveAlert = true
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-
-                                Button(L.delete, role: .destructive) {
-                                    Task {
-                                        let ok = await vm.deleteLastFmApiKey()
-                                        alertMessage = ok ? L.keyDeleted : L.keyDeleteError
-                                        showSaveAlert = true
-                                    }
-                                }
-                                .controlSize(.small)
-                            }
-
-                            if vm.lastfmHasSecret && vm.lastfmApiKey.isEmpty {
-                                Text(L.secretStoredOnBackend)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Divider().padding(.leading, 16)
                     settingsRow {
                         Label(L.scrobbling, systemImage: "arrow.up.right.circle.fill")
                         Spacer()

@@ -331,10 +331,16 @@ struct HomeView: View {
 
             // Title + Artist
             VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(song.title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if vm.topWeeklySongs.first(where: { $0.id == song.songId })?.isExplicit == true {
+                        ExplicitBadge(size: 14)
+                    }
+                }
                 Text(song.artist)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)

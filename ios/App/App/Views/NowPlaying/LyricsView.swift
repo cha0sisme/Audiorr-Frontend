@@ -71,6 +71,14 @@ struct LyricsView: View {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
+            .onChange(of: userIsScrolling) { _, isScrolling in
+                // Cuando el auto-scroll se reactiva, centrar inmediatamente
+                // en la línea activa sin esperar a que cambie.
+                guard !isScrolling, let id = activeLineId else { return }
+                withAnimation(Anim.content) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 

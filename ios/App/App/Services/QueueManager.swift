@@ -1124,6 +1124,7 @@ final class QueueManager: AudioEngineDelegate {
             state.albumId = song.albumId
             state.artistId = song.artistId
             state.coverArt = song.coverArt
+            state.isExplicit = song.isExplicit
             state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
             state.isVisible = true
         }

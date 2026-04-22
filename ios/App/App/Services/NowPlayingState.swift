@@ -55,6 +55,7 @@ final class NowPlayingState {
     var albumId = ""
     var artistId = ""
     var coverArt = ""
+    var isExplicit = false
 
     // -- Playback context (e.g. "playlist:abc", "album:xyz", "top-weekly") --
     var contextUri = ""

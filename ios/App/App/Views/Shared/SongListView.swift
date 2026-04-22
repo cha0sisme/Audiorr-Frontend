@@ -17,6 +17,7 @@ struct SongListView: View {
     var showAlbumInMenu: Bool = true
     var showArtistInMenu: Bool = true
     var showArtist: Bool = true
+    var showCover: Bool = false
     var contextUri: String? = nil
     var contextName: String? = nil
 
@@ -36,7 +37,7 @@ struct SongListView: View {
                         .background(
                             isLight ? Color.black.opacity(0.07) : Color.white.opacity(0.07)
                         )
-                        .padding(.leading, 58)
+                        .padding(.leading, showCover ? 76 : 58)
                         .padding(.trailing, 16)
                 }
             }
@@ -55,7 +56,7 @@ struct SongListView: View {
             Button {
                 PlayerService.shared.playPlaylist(songs, startingAt: idx, contextUri: contextUri, contextName: contextName)
             } label: {
-                SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist)
+                SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist, showCover: showCover)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -127,6 +128,7 @@ private struct SongRowView: View {
     let index: Int
     let palette: AlbumPalette
     var showArtist: Bool = true
+    var showCover: Bool = false
 
     @State private var isCached = false
     private let nowPlaying = NowPlayingState.shared
@@ -139,20 +141,41 @@ private struct SongRowView: View {
     private var isCurrentSong: Bool { nowPlaying.isVisible && nowPlaying.songId == song.id }
 
     var body: some View {
-        HStack(spacing: 14) {
-            if isCurrentSong {
-                NowPlayingIndicator(
-                    isPlaying: nowPlaying.isPlaying,
-                    color: isLight ? Color.black : Color.white,
-                    barWidth: 2.5,
-                    height: 12
-                )
-                .frame(width: 24)
+        HStack(spacing: showCover ? 12 : 14) {
+            if showCover {
+                // Album cover thumbnail (Apple Music playlist style)
+                ZStack(alignment: .center) {
+                    CachedCoverThumbnail(coverArt: song.coverArt, size: 44, cornerRadius: 6)
+
+                    if isCurrentSong {
+                        // Overlay: dark scrim + equalizer
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.black.opacity(0.45))
+                            .frame(width: 44, height: 44)
+                        NowPlayingIndicator(
+                            isPlaying: nowPlaying.isPlaying,
+                            color: .white,
+                            barWidth: 2.5,
+                            height: 12
+                        )
+                    }
+                }
+                .frame(width: 44, height: 44)
             } else {
-                Text("\(index)")
-                    .font(.system(size: 15).monospacedDigit())
-                    .foregroundStyle(tertiaryText)
-                    .frame(width: 24, alignment: .trailing)
+                if isCurrentSong {
+                    NowPlayingIndicator(
+                        isPlaying: nowPlaying.isPlaying,
+                        color: isLight ? Color.black : Color.white,
+                        barWidth: 2.5,
+                        height: 12
+                    )
+                    .frame(width: 24)
+                } else {
+                    Text("\(index)")
+                        .font(.system(size: 15).monospacedDigit())
+                        .foregroundStyle(tertiaryText)
+                        .frame(width: 24, alignment: .trailing)
+                }
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -192,7 +215,7 @@ private struct SongRowView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 4)
-        .padding(.vertical, 10)
+        .padding(.vertical, showCover ? 6 : 10)
         .task {
             isCached = await OfflineStorageManager.shared.isCached(songId: song.id)
         }
@@ -212,17 +235,38 @@ struct InstantMenuButton: UIViewRepresentable {
     let tint: UIColor
     let menuBuilder: () -> UIMenu
 
+    class Coordinator {
+        var menuBuilder: () -> UIMenu
+        init(menuBuilder: @escaping () -> UIMenu) {
+            self.menuBuilder = menuBuilder
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(menuBuilder: menuBuilder)
+    }
+
     func makeUIView(context: Context) -> UIButton {
         let button = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
         button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
         button.showsMenuAsPrimaryAction = true
         button.tintColor = tint
+        // Construir el menú de forma diferida: solo se ejecuta menuBuilder()
+        // cuando el usuario abre el menú, no en cada re-render de SwiftUI.
+        // Esto evita que las actualizaciones frecuentes de NowPlayingState (250ms)
+        // reconstruyan el UIMenu constantemente y causen parpadeos en la UI.
+        let coordinator = context.coordinator
+        button.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { completion in
+                completion(coordinator.menuBuilder().children)
+            }
+        ])
         return button
     }
 
     func updateUIView(_ button: UIButton, context: Context) {
-        button.menu = menuBuilder()
+        context.coordinator.menuBuilder = menuBuilder
         button.tintColor = tint
     }
 }

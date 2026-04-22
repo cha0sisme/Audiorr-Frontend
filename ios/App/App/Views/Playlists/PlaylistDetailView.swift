@@ -533,7 +533,7 @@ struct PlaylistDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 32)
             } else {
-                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, showCover: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             }
         }
     }

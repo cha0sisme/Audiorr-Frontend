@@ -128,14 +128,18 @@ struct PersistableSong: Codable, Identifiable {
     let coverArt: String
     let duration: Double
     let replayGainMultiplier: Float
+    let explicitStatus: String?
+
+    var isExplicit: Bool { explicitStatus == "explicit" }
 
     init(id: String, title: String, artist: String, album: String,
          albumId: String, artistId: String, coverArt: String, duration: Double,
-         replayGainMultiplier: Float = 1.0) {
+         replayGainMultiplier: Float = 1.0, explicitStatus: String? = nil) {
         self.id = id; self.title = title; self.artist = artist
         self.album = album; self.albumId = albumId; self.artistId = artistId
         self.coverArt = coverArt; self.duration = duration
         self.replayGainMultiplier = replayGainMultiplier
+        self.explicitStatus = explicitStatus
     }
 
     init(from queue: QueueSong) {
@@ -148,6 +152,7 @@ struct PersistableSong: Codable, Identifiable {
         coverArt = queue.coverArt
         duration = queue.duration
         replayGainMultiplier = 1.0
+        explicitStatus = nil
     }
 
     init(from song: NavidromeSong) {
@@ -160,6 +165,7 @@ struct PersistableSong: Codable, Identifiable {
         coverArt = song.coverArt ?? ""
         duration = song.duration ?? 0
         replayGainMultiplier = song.replayGainMultiplier
+        explicitStatus = song.explicitStatus
     }
 
     func toQueueSong() -> QueueSong {

@@ -295,15 +295,17 @@ actor OfflineStorageManager {
         var currentSize = totalCacheSize()
         guard currentSize > maxBytes else { return }
 
-        // Fetch unpinned songs sorted by lastAccessedAt ascending (oldest first)
-        var descriptor = FetchDescriptor<CachedSong>(
+        // Fetch ALL unpinned completed songs sorted by lastAccessedAt ascending (oldest first).
+        // No fetchLimit — si el usuario baja el límite de 10GB a 500MB necesitamos
+        // poder evictar cientos de canciones en un solo pase.
+        let descriptor = FetchDescriptor<CachedSong>(
             predicate: #Predicate { $0.isPinned == false && $0.downloadState == "completed" },
             sortBy: [SortDescriptor(\CachedSong.lastAccessedAt, order: .forward)]
         )
-        descriptor.fetchLimit = 100 // Process in batches
 
         guard let candidates = try? context.fetch(descriptor) else { return }
 
+        var evictedCount = 0
         for song in candidates {
             guard currentSize > maxBytes else { break }
 
@@ -311,10 +313,13 @@ actor OfflineStorageManager {
             try? FileManager.default.removeItem(at: fileURL)
             currentSize -= song.fileSize
             context.delete(song)
-            print("[OfflineStorage] Evicted: \(song.songId) (\(song.fileSize / 1024)KB)")
+            evictedCount += 1
         }
 
-        try? context.save()
+        if evictedCount > 0 {
+            try? context.save()
+            print("[OfflineStorage] Evicted \(evictedCount) songs, new size: \(currentSize / 1_048_576)MB / \(maxBytes / 1_048_576)MB")
+        }
     }
 
     // MARK: - Private Helpers

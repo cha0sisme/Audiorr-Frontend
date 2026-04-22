@@ -108,6 +108,7 @@ struct SeeAllArtistCard: View {
 
 struct SeeAllGridView: View {
     let destination: SeeAllDestination
+    @Namespace private var heroNS
 
     private let albumColumns = [
         GridItem(.flexible(), spacing: 14),
@@ -126,7 +127,7 @@ struct SeeAllGridView: View {
                 LazyVGrid(columns: albumColumns, spacing: 20) {
                     ForEach(items) { album in
                         NavigationLink(value: album) {
-                            AlbumCardView(album: album, axis: .grid)
+                            AlbumCardView(album: album, axis: .grid, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -137,7 +138,7 @@ struct SeeAllGridView: View {
                 LazyVGrid(columns: albumColumns, spacing: 20) {
                     ForEach(items) { playlist in
                         NavigationLink(value: playlist) {
-                            PlaylistCardView(playlist: playlist, axis: .grid)
+                            PlaylistCardView(playlist: playlist, axis: .grid, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -148,7 +149,7 @@ struct SeeAllGridView: View {
                 LazyVGrid(columns: artistColumns, spacing: 24) {
                     ForEach(items) { artist in
                         NavigationLink(value: artist) {
-                            ArtistCardView(artist: artist, size: 110)
+                            ArtistCardView(artist: artist, size: 110, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -160,6 +161,18 @@ struct SeeAllGridView: View {
         }
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: NavidromeAlbum.self) {
+            AlbumDetailView(album: $0)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
+        .navigationDestination(for: NavidromePlaylist.self) {
+            PlaylistDetailView(playlist: $0)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
+        .navigationDestination(for: NavidromeArtist.self) {
+            ArtistDetailView(artist: $0, heroNamespace: heroNS)
+                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+        }
     }
 }
 
