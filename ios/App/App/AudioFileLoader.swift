@@ -1,5 +1,5 @@
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 
 /// Descarga archivos de audio desde URLs remotas (Navidrome streaming) y los cachea
 /// como archivos temporales locales para uso con AVAudioFile.

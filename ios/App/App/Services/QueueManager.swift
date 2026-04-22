@@ -813,7 +813,7 @@ final class QueueManager: AudioEngineDelegate {
 
                 // ── Leading silence on B (analysis-based) ──
                 // If B's entry point is at 0 but vocal/chorus starts later, skip past silence.
-                var adjustedEntryPoint = crossfadeResult.entryPoint
+                let adjustedEntryPoint = crossfadeResult.entryPoint
 
                 // Update config with adjusted entry point if needed
                 let finalConfig: CrossfadeExecutor.Config
