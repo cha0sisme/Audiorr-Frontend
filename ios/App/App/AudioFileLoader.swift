@@ -340,53 +340,66 @@ class AudioFileLoader: @unchecked Sendable {
             writer.startWriting()
             writer.startSession(atSourceTime: .zero)
 
-            // Wrap AV types in Sendable box — they are used single-threaded on writeQueue
-            struct AVContext: @unchecked Sendable {
-                let reader: AVAssetReader
-                let readerOutput: AVAssetReaderTrackOutput
-                let writer: AVAssetWriter
-                let writerInput: AVAssetWriterInput
-            }
-            let av = AVContext(reader: reader, readerOutput: readerOutput, writer: writer, writerInput: writerInput)
+            self.runTranscodeLoop(
+                reader: reader, readerOutput: readerOutput,
+                writer: writer, writerInput: writerInput,
+                songId: songId, sourceURL: sourceURL, cafURL: cafURL
+            )
+        }
+    }
 
-            let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
-            av.writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
-                autoreleasepool {
-                while av.writerInput.isReadyForMoreMediaData {
-                    guard av.reader.status == .reading,
-                          let buffer = av.readerOutput.copyNextSampleBuffer() else {
-                        av.writerInput.markAsFinished()
+    // MARK: - Transcode Loop
 
-                        if av.reader.status == .completed {
-                            av.writer.finishWriting { [weak self] in
-                                guard let self = self else { return }
-                                self.queue.async(flags: []) {
-                                    // Replace the MP3 with the CAF
-                                    try? FileManager.default.removeItem(at: sourceURL)
-                                    let cafSize = (try? FileManager.default.attributesOfItem(atPath: cafURL.path)[.size] as? Int64) ?? 0
-                                    self.fileSizes[songId] = cafSize
-                                    let sizeMB = Double(cafSize) / 1024.0 / 1024.0
-                                    print("[AudioFileLoader] Transcoded: \(songId) → CAF (\(String(format: "%.1f", sizeMB))MB)")
-                                    self.resolveContinuations(songId: songId, result: .success(cafURL))
-                                    // Promote transcoded file to persistent offline cache
-                                    self.promoteToOfflineCache(songId: songId, fileURL: cafURL)
-                                }
-                            }
-                        } else {
-                            print("[AudioFileLoader] Transcode read failed: \(songId) — \(av.reader.error?.localizedDescription ?? "unknown")")
-                            av.writer.cancelWriting()
-                            try? FileManager.default.removeItem(at: cafURL)
-                            self?.queue.async(flags: []) {
-                                self?.resolveContinuations(songId: songId, result: .success(sourceURL))
+    /// Extracted to avoid capturing non-Sendable AV types in the Task.detached closure.
+    /// Sendable wrapper for AV types used single-threaded on the transcode writeQueue.
+    private struct TranscodeContext: @unchecked Sendable {
+        let reader: AVAssetReader
+        let readerOutput: AVAssetReaderTrackOutput
+        let writer: AVAssetWriter
+        let writerInput: AVAssetWriterInput
+    }
+
+    private func runTranscodeLoop(
+        reader: AVAssetReader, readerOutput: AVAssetReaderTrackOutput,
+        writer: AVAssetWriter, writerInput: AVAssetWriterInput,
+        songId: String, sourceURL: URL, cafURL: URL
+    ) {
+        let ctx = TranscodeContext(reader: reader, readerOutput: readerOutput, writer: writer, writerInput: writerInput)
+        let writeQueue = DispatchQueue(label: "com.audiorr.transcode.\(songId)")
+        ctx.writerInput.requestMediaDataWhenReady(on: writeQueue) { [weak self] in
+            autoreleasepool {
+            while ctx.writerInput.isReadyForMoreMediaData {
+                guard ctx.reader.status == .reading,
+                      let buffer = ctx.readerOutput.copyNextSampleBuffer() else {
+                    ctx.writerInput.markAsFinished()
+
+                    if ctx.reader.status == .completed {
+                        ctx.writer.finishWriting { [weak self] in
+                            guard let self = self else { return }
+                            self.queue.async(flags: []) {
+                                try? FileManager.default.removeItem(at: sourceURL)
+                                let cafSize = (try? FileManager.default.attributesOfItem(atPath: cafURL.path)[.size] as? Int64) ?? 0
+                                self.fileSizes[songId] = cafSize
+                                let sizeMB = Double(cafSize) / 1024.0 / 1024.0
+                                print("[AudioFileLoader] Transcoded: \(songId) → CAF (\(String(format: "%.1f", sizeMB))MB)")
+                                self.resolveContinuations(songId: songId, result: .success(cafURL))
+                                self.promoteToOfflineCache(songId: songId, fileURL: cafURL)
                             }
                         }
-                        return
+                    } else {
+                        print("[AudioFileLoader] Transcode read failed: \(songId) — \(ctx.reader.error?.localizedDescription ?? "unknown")")
+                        ctx.writer.cancelWriting()
+                        try? FileManager.default.removeItem(at: cafURL)
+                        self?.queue.async(flags: []) {
+                            self?.resolveContinuations(songId: songId, result: .success(sourceURL))
+                        }
                     }
-
-                    av.writerInput.append(buffer)
+                    return
                 }
-                } // autoreleasepool
+
+                ctx.writerInput.append(buffer)
             }
+            } // autoreleasepool
         }
     }
 
