@@ -981,17 +981,17 @@ class AudioEngineManager {
             // Asegurar que el master mixer tiene el volumen correcto post-crossfade
             self.engine.mainMixerNode.outputVolume = self.volume
 
-            // Backstop: serialize a final EQ reset on automationQueue after any
-            // stale filterTick that was in-flight when completeCrossfade ran.
-            // This catches the race between completeCrossfade (automationQueue)
-            // dispatching onComplete (main) and a ghost filterTick re-applying values.
+            // Backstop: staggered EQ resets on automationQueue to catch any
+            // ghost filterTick that was in-flight during completion.
             let bsEqA = self.eqA, bsEqB = self.eqB
             let bsMixA = self.mixerA, bsMixB = self.mixerB
-            CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.2) {
-                CrossfadeExecutor.resetBandsStatic(bsEqA)
-                CrossfadeExecutor.resetBandsStatic(bsEqB)
-                bsMixA.pan = 0
-                bsMixB.pan = 0
+            for delay in [0.1, 0.3, 0.6] {
+                CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + delay) {
+                    CrossfadeExecutor.resetBandsStatic(bsEqA)
+                    CrossfadeExecutor.resetBandsStatic(bsEqB)
+                    bsMixA.pan = 0
+                    bsMixB.pan = 0
+                }
             }
 
             self.isCrossfading = false

@@ -160,6 +160,7 @@ struct SettingsView: View {
     @State private var showProfile = false
     @State private var alertMessage = ""
     @State private var scrollY: CGFloat = 0
+    @State private var backendURLOverride: String = ""
 
     private let collapseThreshold: CGFloat = 44
 
@@ -192,6 +193,9 @@ struct SettingsView: View {
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
             vm.load()
+            if TransitionDiagnostics.debugModeEnabled {
+                backendURLOverride = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
+            }
         }
         .alert("Last.fm", isPresented: $showSaveAlert) {
             Button("OK") {}
@@ -460,6 +464,53 @@ struct SettingsView: View {
                             Text(BackendState.shared.isAvailable ? "Connected" : "Disconnected")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Divider().padding(.leading, 16)
+
+                    // Editable backend URL (debug only)
+                    settingsRow {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Backend URL")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("Auto (\(NavidromeService.shared.backendURL() ?? "N/A"))",
+                                      text: $backendURLOverride)
+                                .font(.subheadline)
+                                .keyboardType(.URL)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit {
+                                    NavidromeService.shared.setBackendOverride(
+                                        backendURLOverride.isEmpty ? nil : backendURLOverride
+                                    )
+                                }
+
+                            HStack(spacing: 10) {
+                                Button("Apply") {
+                                    NavidromeService.shared.setBackendOverride(
+                                        backendURLOverride.isEmpty ? nil : backendURLOverride
+                                    )
+                                }
+                                .font(.caption.bold())
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+
+                                if NavidromeService.shared.hasBackendOverride {
+                                    Button("Reset to Auto") {
+                                        backendURLOverride = ""
+                                        NavidromeService.shared.setBackendOverride(nil)
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .tint(.orange)
+                                }
+
+                                Spacer()
+                            }
                         }
                     }
 

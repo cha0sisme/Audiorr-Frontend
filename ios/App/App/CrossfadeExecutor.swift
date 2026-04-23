@@ -184,17 +184,17 @@ class CrossfadeExecutor {
         highShelfA: nil
     )
 
-    /// Gentle preset: nearly invisible transition. Minimal filter movement —
-    /// just enough separation to avoid muddiness, but the listener barely notices the change.
-    /// Used for NATURAL_BLEND to create variety and avoid transition fatigue.
+    /// Gentle preset: smooth transition with audible but non-aggressive filtering.
+    /// B enters with noticeable bass reduction that sweeps open gradually.
+    /// Used for NATURAL_BLEND — enough spectral separation to sound professional.
     static let presetGentle = FilterPreset(
-        highpassA: .init(startFreq: 60, midFreq: 120, endFreq: 250, q: 0.5),
-        highpassB: .init(startFreq: 120, midFreq: 80, endFreq: 40, q: 0.4),
-        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -3, endGain: -6),
-        lowshelfB: .init(frequency: 200, startGain: -4, midGain: -2, endGain: 0),
+        highpassA: .init(startFreq: 60, midFreq: 150, endFreq: 300, q: 0.5),
+        highpassB: .init(startFreq: 250, midFreq: 150, endFreq: 40, q: 0.5),
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -8),
+        lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
         lowpassA: nil,
-        midScoopA: nil,   // No mid scoop — keep it invisible
-        highShelfA: nil    // No hi-shelf — minimal spectral change
+        midScoopA: nil,
+        highShelfA: nil
     )
 
     /// Stem-mix preset: B enters filtered to vocals/mids only, A stays full then exits via highpass.
@@ -243,9 +243,12 @@ class CrossfadeExecutor {
     // DispatchSourceTimer en vez de CADisplayLink — funciona en background
     // Uses a dedicated high-priority queue instead of .main to avoid iOS
     // throttling/suspending the timer during background audio or CarPlay.
-    static let automationQueue = DispatchQueue(
-        label: "com.audiorr.crossfade.automation", qos: .userInteractive
-    )
+    private static let queueKey = DispatchSpecificKey<Bool>()
+    static let automationQueue: DispatchQueue = {
+        let q = DispatchQueue(label: "com.audiorr.crossfade.automation", qos: .userInteractive)
+        q.setSpecific(key: queueKey, value: true)
+        return q
+    }()
     private var filterTimer: DispatchSourceTimer?
     private var safetyWatchdog: DispatchSourceTimer?
     private var secondaryWatchdog: DispatchSourceTimer?
@@ -1285,7 +1288,19 @@ class CrossfadeExecutor {
 
     // MARK: - Completion
 
+    /// Completion must ALWAYS run on automationQueue to serialize with filterTick.
+    /// This prevents the race where filterTick re-applies filters after reset
+    /// because isCancelled is not atomic across threads.
     private func completeCrossfade() {
+        if DispatchQueue.getSpecific(key: Self.queueKey) == nil {
+            // Called from main/other thread — dispatch to automationQueue
+            Self.automationQueue.async { [weak self] in
+                self?.completeCrossfade()
+            }
+            return
+        }
+
+        // Now guaranteed to be on automationQueue (serialized with filterTick)
         guard !isCancelled else { return }
         isCancelled = true
 
@@ -1303,8 +1318,7 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
-        // Reset crossfade EQ (bands 0-3) to neutral — bypass alone can be unreliable
-        // in CoreAudio, so we also reset parameters to ensure no residual filtering.
+        // Reset crossfade EQ (bands 0-3) to neutral
         resetCrossfadeBands(eqA)
         resetCrossfadeBands(eqB)
 
@@ -1314,21 +1328,6 @@ class CrossfadeExecutor {
 
         // Reset time-stretch rates — B continues at normal speed after crossfade
         resetTimeStretch()
-
-        // Backstop: serialize a final reset on automationQueue after any stale filterTick.
-        // completeCrossfade can be called from main queue (checkAndForceCompleteIfStale)
-        // where the same race with in-flight filterTick applies.
-        let eqA = self.eqA, eqB = self.eqB
-        let mA = self.mixerA, mB = self.mixerB
-        let tpA = self.timePitchA, tpB = self.timePitchB
-        Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
-            Self.resetBandsStatic(eqA)
-            Self.resetBandsStatic(eqB)
-            mA.pan = 0
-            mB.pan = 0
-            tpA?.rate = 1.0
-            tpB?.rate = 1.0
-        }
 
         let vol = getMasterVolume?() ?? 1.0
         engine.mainMixerNode.outputVolume = vol

@@ -481,10 +481,8 @@ enum DJMixingService {
             entryPoint: entry.entryPoint, fadeDuration: fade.duration
         )
 
-        // Short outro or very short fade → B enters clean (no highpass/lowshelf sweep)
-        let outroStartA = safeCurrent?.outroStartTime ?? bufferADuration
-        let outroLenA = bufferADuration - outroStartA
-        let skipBFilters = outroLenA <= 5.0 || fade.duration <= 3.0
+        // Only skip B filters for very short fades where there's no time for a sweep
+        let skipBFilters = fade.duration <= 3.0
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
@@ -1389,7 +1387,10 @@ enum DJMixingService {
         var isBAbrupt = false
         if let next = nextAnalysis, next.hasError != true {
             if next.hasIntroData {
-                isBAbrupt = next.introEndTime < 2 && entryPoint < 5
+                // Only consider B truly abrupt when intro is extremely short AND
+                // entry point is near the start. Previously introEndTime < 2 triggered
+                // too often for pop songs with quick verse entries.
+                isBAbrupt = next.introEndTime < 1 && entryPoint < 2
             }
         } else if nextAnalysis == nil {
             isBAbrupt = fadeDuration < 3
