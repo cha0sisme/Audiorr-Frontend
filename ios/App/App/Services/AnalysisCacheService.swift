@@ -25,12 +25,18 @@ actor AnalysisCacheService {
         let vocalStartTime: Double?
         let speechSegments: [SpeechSegment]?
         let structure: [StructureSegment]?
-        // New fields from backend v2 — null until backend deploys
+        // New fields from backend v2
         let bpmEssentia: Double?
         let bpmConfidence: Double?
         let introEndTimeHeuristic: Double?
         let outroStartTimeHeuristic: Double?
         let modelUsed: Bool?
+        // Temporal curves (normalized 0-1, 5s windows) — for future ML/visualization
+        let rmsCurve: [Double]?
+        let percussiveCurve: [Double]?
+        let harmonicCurve: [Double]?
+        let onsetDensity: [Double]?
+        let rmsTailCurve: [Double]?
         // Diagnostics object — contains fade_info with cuePoint, energyProfile, etc.
         let diagnostics: Diagnostics?
 
@@ -246,8 +252,17 @@ actor AnalysisCacheService {
             analysis.energyMain = ep.main ?? analysis.energy
             analysis.energyOutro = ep.outro ?? analysis.energy
             analysis.hasEnergyProfile = true
-            analysis.hasIntroVocals = ep.introVocals ?? false
-            analysis.hasOutroVocals = ep.outroVocals ?? false
+            // Only set vocal flags when the backend explicitly provided them.
+            // When nil, leave as false + hasVocalData=false so downstream code
+            // doesn't assume "no vocals" (which would wrongly mark everything as instrumental).
+            if let iv = ep.introVocals {
+                analysis.hasIntroVocals = iv
+                analysis.hasVocalData = true
+            }
+            if let ov = ep.outroVocals {
+                analysis.hasOutroVocals = ov
+                analysis.hasVocalData = true
+            }
         }
 
         // Backend-suggested fade durations (from diagnostics.fade_info)
@@ -264,6 +279,18 @@ actor AnalysisCacheService {
         // Mark whether backend provided real intro/outro data
         analysis.hasIntroData = result.introEndTime != nil
         analysis.hasOutroData = result.outroStartTime != nil
+
+        // BPM confidence system (Essentia cross-validation)
+        if let conf = result.bpmConfidence {
+            analysis.bpmConfidence = conf
+            analysis.hasBpmConfidence = true
+        }
+        analysis.bpmEssentia = result.bpmEssentia
+
+        // ML override tracking
+        analysis.modelUsed = result.modelUsed ?? false
+        analysis.introEndTimeHeuristic = result.introEndHeuristic
+        analysis.outroStartTimeHeuristic = result.outroStartHeuristic
 
         return analysis
     }

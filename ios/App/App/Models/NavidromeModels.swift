@@ -38,6 +38,56 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
         return AudioEngineManager.computeReplayGainMultiplier(gainDb: db, trackPeak: peak)
     }
 
+    // Subsonic API sends ReplayGain as a nested object: { "replayGain": { "trackGain": ..., "trackPeak": ..., "albumGain": ..., "albumPeak": ... } }
+    // We flatten it into our top-level properties during decoding.
+
+    private struct ReplayGainData: Decodable {
+        let trackGain: Double?
+        let trackPeak: Double?
+        let albumGain: Double?
+        let albumPeak: Double?
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, artist, artistId, album, albumId, coverArt
+        case duration, track, year, genre, explicitStatus
+        case replayGain
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        artist = try c.decode(String.self, forKey: .artist)
+        artistId = try c.decodeIfPresent(String.self, forKey: .artistId)
+        album = try c.decode(String.self, forKey: .album)
+        albumId = try c.decodeIfPresent(String.self, forKey: .albumId)
+        coverArt = try c.decodeIfPresent(String.self, forKey: .coverArt)
+        duration = try c.decodeIfPresent(Double.self, forKey: .duration)
+        track = try c.decodeIfPresent(Int.self, forKey: .track)
+        year = try c.decodeIfPresent(Int.self, forKey: .year)
+        genre = try c.decodeIfPresent(String.self, forKey: .genre)
+        explicitStatus = try c.decodeIfPresent(String.self, forKey: .explicitStatus)
+        let rg = try c.decodeIfPresent(ReplayGainData.self, forKey: .replayGain)
+        replayGainTrackGain = rg?.trackGain
+        replayGainTrackPeak = rg?.trackPeak
+        replayGainAlbumGain = rg?.albumGain
+        replayGainAlbumPeak = rg?.albumPeak
+    }
+
+    init(id: String, title: String, artist: String, artistId: String?,
+         album: String, albumId: String?, coverArt: String?,
+         duration: Double?, track: Int?, year: Int?, genre: String?,
+         explicitStatus: String?,
+         replayGainTrackGain: Double?, replayGainTrackPeak: Double?,
+         replayGainAlbumGain: Double?, replayGainAlbumPeak: Double?) {
+        self.id = id; self.title = title; self.artist = artist; self.artistId = artistId
+        self.album = album; self.albumId = albumId; self.coverArt = coverArt
+        self.duration = duration; self.track = track; self.year = year; self.genre = genre
+        self.explicitStatus = explicitStatus
+        self.replayGainTrackGain = replayGainTrackGain; self.replayGainTrackPeak = replayGainTrackPeak
+        self.replayGainAlbumGain = replayGainAlbumGain; self.replayGainAlbumPeak = replayGainAlbumPeak
+    }
 }
 
 extension NavidromeSong {

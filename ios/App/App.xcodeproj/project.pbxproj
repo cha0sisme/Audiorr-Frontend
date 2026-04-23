@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3400FF432FA8000000000043 /* TransitionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF422FA8000000000042 /* TransitionDiagnostics.swift */; };
+		3400FF452FA8000000000045 /* TransitionDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */; };
 		29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		3400AA012FA1000000000001 /* ArtistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400AA002FA1000000000001 /* ArtistsView.swift */; };
@@ -136,6 +138,8 @@
 		B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationManager.swift; sourceTree = "<group>"; };
 		CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
+		3400FF422FA8000000000042 /* TransitionDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnostics.swift; sourceTree = "<group>"; };
+		3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -221,6 +225,7 @@
 				3400FF0C2FA800000000000C /* SmartMixManager.swift */,
 				3400FF042FA8000000000004 /* DJMixingService.swift */,
 				3400FF0E2FA800000000000E /* ConnectService.swift */,
+				3400FF422FA8000000000042 /* TransitionDiagnostics.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -282,6 +287,7 @@
 				342286D22F920B0000785736 /* LoginView.swift */,
 				3400BB002FA2000000000001 /* SettingsView.swift */,
 				3400FF3A2FA800000000003A /* StorageManagementView.swift */,
+				3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -455,6 +461,8 @@
 				3400EE102FA700000000000F /* QueuePanelView.swift in Sources */,
 				3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */,
 				3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */,
+				3400FF432FA8000000000043 /* TransitionDiagnostics.swift in Sources */,
+				3400FF452FA8000000000045 /* TransitionDiagnosticsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

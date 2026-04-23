@@ -93,13 +93,35 @@ final class NavidromeService: ObservableObject {
 
 
     /// URL base del backend de Audiorr (puerto 2999).
-    /// Siempre derivado del serverUrl de Navidrome (mismo host, puerto 2999).
+    /// Uses manual override from UserDefaults if set, otherwise derived from Navidrome host.
     func backendURL() -> String? {
+        // Manual override for testing
+        if let override = UserDefaults.standard.string(forKey: "audiorr_backend_url"),
+           !override.isEmpty {
+            return override
+        }
         guard let serverUrl = credentials?.serverUrl,
               let components = URLComponents(string: serverUrl),
               let host = components.host else { return nil }
         let scheme = components.scheme ?? "http"
         return "\(scheme)://\(host):2999"
+    }
+
+    /// Whether a manual backend URL override is active.
+    var hasBackendOverride: Bool {
+        guard let override = UserDefaults.standard.string(forKey: "audiorr_backend_url") else { return false }
+        return !override.isEmpty
+    }
+
+    /// Set or clear the manual backend URL override.
+    func setBackendOverride(_ url: String?) {
+        if let url, !url.isEmpty {
+            UserDefaults.standard.set(url, forKey: "audiorr_backend_url")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "audiorr_backend_url")
+        }
+        invalidateBackendAvailableCache()
+        Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
     }
 
     /// URL de la cover generada por el backend para una playlist.

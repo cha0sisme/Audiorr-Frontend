@@ -61,20 +61,25 @@ final class LyricsService {
     private func doFetch(songId: String, title: String, artist: String) async -> LyricsResult {
         print("[LyricsService] doFetch: songId=\(songId) title='\(title)' artist='\(artist)'")
 
-        // 1. Try embedded lyrics from audio file metadata
-        let embedded = await fetchEmbedded(songId: songId)
+        // Fetch embedded and LRCLib in parallel (both are network calls)
+        async let embeddedTask = fetchEmbedded(songId: songId)
+        async let lrclibTask = fetchLRCLib(title: title, artist: artist)
+
+        let embedded = await embeddedTask
+        let lrclib = await lrclibTask
+
         if let embedded {
             print("[LyricsService] Found embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
         }
 
-        // If embedded lyrics are good quality (synced + more than 1 line), use them directly
+        // 1. If embedded lyrics are good quality (synced + more than 1 line), use them
         if let embedded, embedded.isSynced, embedded.lines.count > 1 {
             print("[LyricsService] ✓ Using embedded lyrics (good quality)")
             return embedded
         }
 
-        // 2. Try LRCLib (better source for synced lyrics)
-        if let lrclib = await fetchLRCLib(title: title, artist: artist) {
+        // 2. LRCLib (already fetched in parallel)
+        if let lrclib {
             print("[LyricsService] ✓ Found LRCLib lyrics: \(lrclib.lines.count) lines, synced=\(lrclib.isSynced)")
             return lrclib
         }

@@ -925,7 +925,7 @@ class AudioEngineManager {
             maxVolumeB: replayGainMultiplierB,
             getMasterVolume: { [weak self] in self?.volume ?? 1.0 },
             currentTitle: currentSongTitle,
-            nextTitle: "" // Se establece desde JS al llamar executeCrossfade
+            nextTitle: nextSongTitle
         )
 
         executor.onComplete = { [weak self] startOffset in

@@ -65,6 +65,16 @@ struct LyricsView: View {
                         }
                     }
             )
+            .onAppear {
+                // Scroll inicial cuando se abre la vista a mitad de canción
+                if let id = activeLineId {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        withAnimation(Anim.content) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                    }
+                }
+            }
             .onChange(of: activeLineId) { _, newId in
                 guard !userIsScrolling, let id = newId else { return }
                 withAnimation(Anim.content) {

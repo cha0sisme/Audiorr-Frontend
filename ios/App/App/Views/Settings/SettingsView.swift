@@ -26,9 +26,9 @@ private func avatarInitial(for username: String) -> String {
 
 @MainActor
 final class SettingsViewModel: ObservableObject {
-    @Published var isDjMode = false
+    @Published var isDjMode = true
     @Published var useReplayGain = true
-    @Published var crossfadeEnabled = true
+    @Published var crossfadeEnabled = false
     @Published var crossfadeDuration: Double = 8  // seconds (2–15)
     @Published var scrobbleEnabled = false
 
@@ -41,7 +41,10 @@ final class SettingsViewModel: ObservableObject {
     func load() {
         loadJSSettings()
         loadScrobble()
-
+        // Clear any leftover backend URL override when not in debug mode
+        if !TransitionDiagnostics.debugModeEnabled {
+            NavidromeService.shared.setBackendOverride(nil)
+        }
     }
 
     // MARK: - JS Settings bridge (audiorr_settings in localStorage)
@@ -77,6 +80,8 @@ final class SettingsViewModel: ObservableObject {
 
     func toggleDjMode() {
         isDjMode.toggle()
+        // DJ mode requires crossfade — enable it if turning DJ mode on
+        if isDjMode { crossfadeEnabled = true }
         saveJSSettings()
     }
 
@@ -185,7 +190,9 @@ struct SettingsView: View {
             UserProfileSheet(username: username)
         }
         .preferredColorScheme(theme.colorScheme)
-        .onAppear { vm.load() }
+        .onAppear {
+            vm.load()
+        }
         .alert("Last.fm", isPresented: $showSaveAlert) {
             Button("OK") {}
         } message: {
@@ -296,8 +303,8 @@ struct SettingsView: View {
                 header: L.playback,
                 footer: crossfadeFooter
             ) {
+                // DJ Mode toggle (only when backend is available)
                 if BackendState.shared.isAvailable {
-                    // Backend connected → DJ Mode toggle only (crossfade is always on)
                     settingsRow {
                         Label(L.djMode, systemImage: "dial.medium.fill")
                         Spacer()
@@ -307,10 +314,13 @@ struct SettingsView: View {
                         ))
                         .labelsHidden()
                     }
-                } else {
-                    // No backend → standard crossfade toggle + duration
+                    Divider().padding(.leading, 16)
+                }
+
+                // Crossfade toggle (only when backend is unavailable — with backend, crossfade is always on)
+                if !BackendState.shared.isAvailable {
                     settingsRow {
-                        Label(L.crossfade, systemImage: "arrow.trianglehead.swap")
+                        Label("Crossfade", systemImage: "arrow.triangle.swap")
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { vm.crossfadeEnabled },
@@ -318,31 +328,34 @@ struct SettingsView: View {
                         ))
                         .labelsHidden()
                     }
-
                     if vm.crossfadeEnabled {
                         Divider().padding(.leading, 16)
-                        settingsRow {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Label(L.duration, systemImage: "timer")
-                                    Spacer()
-                                    Text("\(Int(vm.crossfadeDuration))s")
-                                        .foregroundStyle(.secondary)
-                                        .monospacedDigit()
-                                }
-                                Slider(value: Binding(
-                                    get: { vm.crossfadeDuration },
-                                    set: { vm.setCrossfadeDuration($0) }
-                                ), in: 2...15, step: 1)
-                                .tint(.accentColor)
-                                HStack {
-                                    Text("2s")
-                                    Spacer()
-                                    Text("15s")
-                                }
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                    }
+                }
+
+                // Crossfade duration slider (shown when crossfade is active)
+                if BackendState.shared.isAvailable || vm.crossfadeEnabled {
+                    settingsRow {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label(L.duration, systemImage: "timer")
+                                Spacer()
+                                Text("\(Int(vm.crossfadeDuration))s")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
                             }
+                            Slider(value: Binding(
+                                get: { vm.crossfadeDuration },
+                                set: { vm.setCrossfadeDuration($0) }
+                            ), in: 2...15, step: 1)
+                            .tint(.accentColor)
+                            HStack {
+                                Text("2s")
+                                Spacer()
+                                Text("15s")
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                         }
                     }
                 }
@@ -415,6 +428,54 @@ struct SettingsView: View {
                 }
             }
 
+            // ── Debug / Diagnostics (only visible in debug mode) ──
+            if TransitionDiagnostics.debugModeEnabled {
+                settingsSection(header: "Debug") {
+                    NavigationLink {
+                        TransitionDiagnosticsView()
+                    } label: {
+                        settingsRow {
+                            Label("Transition Diagnostics", systemImage: "waveform.badge.magnifyingglass")
+                            Spacer()
+                            if NowPlayingState.shared.isCrossfading {
+                                Text("ACTIVE")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.cyan)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    Divider().padding(.leading, 16)
+
+                    settingsRow {
+                        Label("Backend", systemImage: "server.rack")
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(BackendState.shared.isAvailable ? Color.green : Color.red)
+                                .frame(width: 8, height: 8)
+                            Text(BackendState.shared.isAvailable ? "Connected" : "Disconnected")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Divider().padding(.leading, 16)
+
+                    settingsRow {
+                        Button {
+                            BackendState.shared.invalidateAndRecheck()
+                        } label: {
+                            Label("Retry Connection", systemImage: "arrow.clockwise")
+                                .font(.subheadline)
+                        }
+                    }
+                }
+            }
+
             // ── Servidor ──
             settingsSection(header: L.server) {
                 if let creds = NavidromeService.shared.credentials {
@@ -458,9 +519,6 @@ struct SettingsView: View {
                 return L.crossfadeFooterDjOn()
             }
             return L.crossfadeFooterBackend()
-        }
-        if !vm.crossfadeEnabled {
-            return L.crossfadeFooterOff()
         }
         return L.crossfadeFooterOn(Int(vm.crossfadeDuration))
     }

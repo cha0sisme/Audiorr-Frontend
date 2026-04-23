@@ -1,14 +1,16 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║                                                                      ║
-// ║   DJMixingService — "Crossfade Intelligence Engine" v3.0             ║
-// ║   Codename: "Phantom Cut"                                            ║
+// ║   DJMixingService — "Crossfade Intelligence Engine" v4.0             ║
+// ║   Codename: "Chameleon Mix"                                          ║
 // ║                                                                      ║
 // ║   Audiorr — Audiophile-grade music player                            ║
 // ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
 // ║                                                                      ║
 // ║   Pure crossfade intelligence — no side effects, no audio playback.  ║
-// ║   Analyzes song structure, energy, harmony, and rhythm to decide     ║
-// ║   the optimal transition between any two tracks.                     ║
+// ║   Analyzes the RELATIONSHIP between any two tracks to decide         ║
+// ║   the optimal transition. The same song B will sound different       ║
+// ║   depending on what song A precedes it — like a chameleon adapting   ║
+// ║   to its context.                                                     ║
 // ║                                                                      ║
 // ║   v1.0 — JS DJMixingAlgorithms.ts (basic crossfade + beat sync)     ║
 // ║   v2.0 — Velvet Transition: equal-power curves, bass swap,           ║
@@ -21,12 +23,19 @@
 // ║          entryPoint), skipBFilters for short fades/outros,            ║
 // ║          phrase/downbeat trigger snapping, PeakLimiter + stereo      ║
 // ║          micro-separation in executor                                 ║
+// ║   v4.0 — Chameleon Mix: TransitionProfile captures the A↔B           ║
+// ║          relationship as a unit. Entry point, fade, filters, and      ║
+// ║          transition type all derive from the pairing — the same       ║
+// ║          song transitions differently in a Pop mix vs Hip Hop mix.   ║
+// ║          Outro-anchored triggers (DJ exits at outro, not at end).    ║
+// ║          Calibrated energy thresholds (danceability-aware).           ║
+// ║          Conservative harmonic BPM (half/double only, 6% max stretch)║
 // ║                                                                      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 import Foundation
 
-/// DJMixingService v3.0 "Phantom Cut" — pure crossfade intelligence calculations.
+/// DJMixingService v4.0 "Relational Mix" — pure crossfade intelligence calculations.
 /// No side effects, no audio playback — just math.
 enum DJMixingService {
 
@@ -44,6 +53,7 @@ enum DJMixingService {
         case beatMatchBlend = "BEAT_MATCH_BLEND"
         case cutAFadeInB = "CUT_A_FADE_IN_B"
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
+        case stemMix = "STEM_MIX"
     }
 
     struct MixModeConfig {
@@ -80,31 +90,101 @@ enum DJMixingService {
         var downbeatTimes: [Double] = []
         var speechSegments: [(start: Double, end: Double)] = []
         var hasError: Bool = false
-        /// True when outroStartTime comes from real analysis data (not a default).
         var hasOutroData: Bool = false
-        /// True when introEndTime comes from real analysis data (not a default).
         var hasIntroData: Bool = false
-        /// Backend-calculated cue point — ideal time to start crossfade on this song.
-        /// When present, overrides the heuristic trigger calculation in QueueManager.
         var cuePoint: Double = 0
         var hasCuePoint: Bool = false
-        /// Per-section energy from backend (more useful than global `energy`).
         var energyIntro: Double = 0
         var energyMain: Double = 0
         var energyOutro: Double = 0
         var hasEnergyProfile: Bool = false
-        /// Backend vocal presence flags — definitive, more reliable than speechSegments heuristics.
         var hasIntroVocals: Bool = false
         var hasOutroVocals: Bool = false
-        /// Backend-suggested fade durations (from diagnostics.fade_info).
-        /// Used as primary values; frontend heuristics are fallback.
+        var hasVocalData: Bool = false
         var backendFadeInDuration: Double?
         var backendFadeOutDuration: Double?
         var backendFadeOutLeadTime: Double?
-        /// Where vocals actually end in the song — more precise than outroStartTime.
-        /// From analysis_log.Instrumental Outro.last_vocal_time_candidate.
         var lastVocalTime: Double = 0
         var hasVocalEndData: Bool = false
+        // BPM confidence system (Essentia cross-validation)
+        var bpmConfidence: Double = 1.0   // 0-1, default 1.0 (trust) when backend doesn't provide
+        var bpmEssentia: Double?          // second opinion from Essentia
+        var hasBpmConfidence: Bool = false // true when backend provided bpmConfidence
+        // ML override tracking
+        var modelUsed: Bool = false       // true when ML overrode intro/outro values
+        var introEndTimeHeuristic: Double? // heuristic value (before ML override)
+        var outroStartTimeHeuristic: Double? // heuristic value (before ML override)
+    }
+
+    // MARK: - Transition Profile (A↔B Relationship)
+
+    enum BPMRelationship {
+        case identical      // diff < 3 after harmonic normalization
+        case compatible     // diff 3-12 (stretchable)
+        case incompatible   // diff > 12 (no beat match)
+    }
+
+    enum EnergyFlow {
+        case energyUp       // B intro > A outro + 0.15
+        case energyDown     // B intro < A outro - 0.15
+        case steady         // within ±0.15
+    }
+
+    enum VocalOverlapRisk {
+        case none           // neither has vocals in overlap zone
+        case aOnly          // A has outro vocals, B intro instrumental
+        case bOnly          // B has intro vocals, A outro instrumental
+        case both           // vocal trainwreck risk
+    }
+
+    enum TransitionCharacter {
+        case punch          // target structural moment in B (compatible BPMs, good energy)
+        case smooth         // invisible blend, B starts early (incompatible BPMs)
+        case dramatic       // big energy change, needs special handling
+        case minimal        // both low energy, gentle handoff
+    }
+
+    /// Captures the full A↔B relationship. Computed ONCE, drives ALL downstream decisions.
+    struct TransitionProfile {
+        // ── Energy relationship ──
+        let energyA: Double
+        let energyB: Double
+        let energyGap: Double       // signed: positive = B is hotter
+        let energyFlow: EnergyFlow
+
+        // ── Rhythm relationship ──
+        let bpmA: Double
+        let bpmB: Double            // raw
+        let bpmBNormalized: Double  // after harmonic normalization
+        let bpmDiff: Double         // abs(bpmA - bpmBNormalized)
+        let bpmRelationship: BPMRelationship
+        /// True when BOTH songs have confident BPM (≥0.5).
+        /// When false, BPM-dependent decisions (beat sync, time-stretch) should be conservative.
+        let bpmTrusted: Bool
+
+        // ── Harmonic relationship ──
+        let harmonic: HarmonicPenalty
+
+        // ── Vocal relationship ──
+        let vocalOverlapRisk: VocalOverlapRisk
+        let aHasOutroVocals: Bool
+        let bHasIntroVocals: Bool
+
+        // ── Groove/style relationship ──
+        let danceabilityA: Double
+        let danceabilityB: Double
+        let avgDanceability: Double
+        let bassConflictRisk: Bool  // both high danceability = bass overlap
+
+        // ── High-level character derived from the relationship ──
+        let character: TransitionCharacter
+
+        /// 0-1: how stylistically similar A and B appear.
+        /// Inferred from BPM range, energy range, danceability correlation.
+        /// High = same "world" (both EDM, both chill). Low = genre jump.
+        let styleAffinity: Double
+
+        let mode: MixMode
     }
 
     /// Complete crossfade configuration output.
@@ -118,38 +198,195 @@ enum DJMixingService {
         let anticipationTime: Double
         let beatSyncInfo: String
         let isBeatSynced: Bool
-        /// Time-stretch: whether to adjust playback rate to match BPMs during crossfade.
         let useTimeStretch: Bool
-        /// Target playback rate for song A during crossfade (1.0 = no change).
         let rateA: Float
-        /// Target playback rate for song B during crossfade (1.0 = no change).
         let rateB: Float
-        /// Energy levels for preset selection and volume compensation.
         let energyA: Double
         let energyB: Double
-        /// Beat grid info for beat-aware automation in CrossfadeExecutor.
         let beatIntervalA: Double
         let beatIntervalB: Double
         let downbeatTimesA: [Double]
         let downbeatTimesB: [Double]
-        /// DJ-grade filters: mid scoop (vocal anti-clash) and high-shelf (hi-hat cleanup).
         let useMidScoop: Bool
         let useHighShelfCut: Bool
-        /// True when A's outro is purely instrumental (vocals end before crossfade zone).
-        /// Allows CrossfadeExecutor to use lighter filters on A.
         let isOutroInstrumental: Bool
-        /// True when B's intro is purely instrumental (no vocals in entry zone).
         let isIntroInstrumental: Bool
-        /// Average danceability of the two songs — high danceability needs bass preserved.
         let danceability: Double
-        /// When true, B plays without highpass/lowshelf filters (clean entry).
-        /// Set when A's outro is very short (≤5s) or fade ≤ 3s — no time for a proper filter sweep.
         let skipBFilters: Bool
+        let transitionReason: String
+        /// Trigger bias: how many seconds earlier (negative) or later (positive) the trigger
+        /// should fire relative to the default "latest possible" position.
+        /// Driven by the A↔B relationship:
+        ///   - minimal/smooth character → negative (trigger earlier for longer, invisible blend)
+        ///   - punch character → 0 or positive (trigger late for maximum impact)
+        ///   - bass conflict → negative (trigger earlier to give filters time to clean)
+        ///   - energy-down → negative (start earlier for graceful descent)
+        let triggerBias: Double
+        /// Human-readable reason for the trigger bias.
+        let triggerBiasReason: String
+    }
+
+    // MARK: - Build Transition Profile
+
+    /// Analyzes the A↔B relationship and produces a unified profile that drives all decisions.
+    /// Called ONCE at the top of calculateCrossfadeConfig.
+    private static func buildTransitionProfile(
+        currentAnalysis: SongAnalysis?,
+        nextAnalysis: SongAnalysis?,
+        mode: MixMode,
+        bufferADuration: Double,
+        bufferBDuration: Double
+    ) -> TransitionProfile {
+        let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError != true
+        let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
+
+        // ── Energy (per-section preferred) ──
+        let eA: Double
+        if let cur = currentAnalysis, hasCurrent, cur.hasEnergyProfile {
+            eA = cur.energyOutro
+        } else {
+            eA = hasCurrent ? (currentAnalysis?.energy ?? 0.5) : 0.5
+        }
+        let eB: Double
+        if let nxt = nextAnalysis, hasNext, nxt.hasEnergyProfile {
+            eB = nxt.energyIntro
+        } else {
+            eB = hasNext ? (nextAnalysis?.energy ?? 0.5) : 0.5
+        }
+        let gap = eB - eA
+        let flow: EnergyFlow
+        if gap > 0.15 { flow = .energyUp }
+        else if gap < -0.15 { flow = .energyDown }
+        else { flow = .steady }
+
+        // ── BPM (with confidence system) ──
+        let bA = hasCurrent ? (currentAnalysis?.bpm ?? 120) : 120
+        let bB = hasNext ? (nextAnalysis?.bpm ?? 120) : 120
+        let bBNorm = harmonicBPM(bA, bB)
+        let diff = abs(bA - bBNorm)
+        let bpmRel: BPMRelationship
+        if diff < 3 { bpmRel = .identical }
+        else if diff <= 12 { bpmRel = .compatible }
+        else { bpmRel = .incompatible }
+
+        // BPM confidence: both songs must have confidence ≥ 0.5 for trusted BPM decisions.
+        // When untrusted, time-stretch and aggressive beat sync should be disabled.
+        let confA = currentAnalysis?.bpmConfidence ?? 1.0
+        let confB = nextAnalysis?.bpmConfidence ?? 1.0
+        let trusted = confA >= 0.5 && confB >= 0.5
+        if !trusted {
+            let lowConf = confA < 0.5 ? "A" : "B"
+            let val = confA < 0.5 ? confA : confB
+            print("[DJMixingService] ⚠️ BPM untrusted (\(lowConf) confidence=\(String(format: "%.2f", val))) — conservative beat decisions")
+        }
+
+        // ── Harmonic ──
+        let harm = harmonicPenalty(keyA: currentAnalysis?.key, keyB: nextAnalysis?.key)
+
+        // ── Vocal overlap (conservative estimate: A's last ~15s, B's first ~20s) ──
+        let conservativeCrossfadeZoneA = max(0, bufferADuration - 15)
+        let conservativeBEnd: Double = 20
+
+        let aVocals: Bool
+        if let cur = currentAnalysis, hasCurrent {
+            if cur.hasVocalData && cur.hasOutroVocals {
+                aVocals = true
+            } else if cur.hasVocalEndData {
+                aVocals = cur.lastVocalTime > conservativeCrossfadeZoneA
+            } else if !cur.speechSegments.isEmpty {
+                aVocals = cur.speechSegments.contains { $0.end > conservativeCrossfadeZoneA }
+            } else {
+                aVocals = cur.vocalStartTime > 0 &&
+                    (cur.outroStartTime <= 0 || cur.outroStartTime > conservativeCrossfadeZoneA)
+            }
+        } else { aVocals = false }
+
+        let bVocals: Bool
+        if let nxt = nextAnalysis, hasNext {
+            if nxt.hasVocalData && nxt.hasIntroVocals {
+                bVocals = true
+            } else if !nxt.speechSegments.isEmpty {
+                bVocals = nxt.speechSegments.contains { $0.start < conservativeBEnd }
+            } else {
+                bVocals = nxt.vocalStartTime > 0 && nxt.vocalStartTime < conservativeBEnd
+            }
+        } else { bVocals = false }
+
+        let vocalRisk: VocalOverlapRisk
+        switch (aVocals, bVocals) {
+        case (true, true):   vocalRisk = .both
+        case (true, false):  vocalRisk = .aOnly
+        case (false, true):  vocalRisk = .bOnly
+        case (false, false): vocalRisk = .none
+        }
+
+        // ── Danceability / bass conflict ──
+        let dA = hasCurrent ? (currentAnalysis?.danceability ?? 0.5) : 0.5
+        let dB = hasNext ? (nextAnalysis?.danceability ?? 0.5) : 0.5
+        let avgDance = (dA + dB) / 2.0
+        let bassConflict = dA > 0.65 && dB > 0.65
+
+        // ── Style affinity (0-1) ──
+        // How "similar" the two songs are stylistically. Inferred from BPM, energy, danceability.
+        // Songs in the same BPM bracket, similar energy, similar danceability = same "world".
+        let bpmAffinity = max(0, 1.0 - diff / 30.0)                   // 0 diff = 1.0, 30+ diff = 0
+        let energyAffinity = max(0, 1.0 - abs(gap) / 0.6)             // 0 gap = 1.0, 0.6+ gap = 0
+        let danceAffinity = max(0, 1.0 - abs(dA - dB) / 0.5)          // 0 diff = 1.0, 0.5+ = 0
+        let harmonicAffinity: Double
+        switch harm.compatibility {
+        case .compatible: harmonicAffinity = 1.0
+        case .acceptable: harmonicAffinity = 0.7
+        case .tense:      harmonicAffinity = 0.4
+        case .clash:      harmonicAffinity = 0.1
+        }
+        // Weighted: BPM matters most (genre identifier), then energy, then harmony, then danceability
+        let affinity = min(1.0, max(0,
+            bpmAffinity * 0.35 + energyAffinity * 0.25 + harmonicAffinity * 0.25 + danceAffinity * 0.15
+        ))
+
+        // ── Character: what kind of transition does this pairing call for? ──
+        // NOTE: Backend energy values are compressed (most music falls 0.05-0.30).
+        // "Minimal" should only apply to truly ambient/quiet tracks, not to
+        // Kanye, Bruno Mars, Bad Bunny etc. that happen to have low RMS energy.
+        // Danceability is a strong signal: high danceability = NOT minimal.
+        let character: TransitionCharacter
+        if mode != .dj {
+            character = .smooth
+        } else if eA < 0.15 && eB < 0.15 && avgDance < 0.5 {
+            // Truly ambient/quiet: both very low energy AND low danceability
+            character = .minimal
+        } else if abs(gap) > 0.35 || harm.compatibility == .clash {
+            character = .dramatic
+        } else if bpmRel != .incompatible && affinity > 0.4 {
+            character = .punch
+        } else {
+            character = .smooth
+        }
+
+        let profile = TransitionProfile(
+            energyA: eA, energyB: eB, energyGap: gap, energyFlow: flow,
+            bpmA: bA, bpmB: bB, bpmBNormalized: bBNorm, bpmDiff: diff,
+            bpmRelationship: bpmRel, bpmTrusted: trusted,
+            harmonic: harm,
+            vocalOverlapRisk: vocalRisk, aHasOutroVocals: aVocals, bHasIntroVocals: bVocals,
+            danceabilityA: dA, danceabilityB: dB, avgDanceability: avgDance,
+            bassConflictRisk: bassConflict,
+            character: character,
+            styleAffinity: affinity,
+            mode: mode
+        )
+
+        print("[DJMixingService] 🎛️ Profile: character=\(character) affinity=\(String(format: "%.2f", affinity)) " +
+              "energy=\(String(format: "%.2f→%.2f", eA, eB)) flow=\(flow) " +
+              "bpm=\(Int(bA))→\(Int(bB))(norm:\(Int(bBNorm))) rel=\(bpmRel) trusted=\(trusted) " +
+              "vocal=\(vocalRisk) harmonic=\(harm.compatibility) bassConflict=\(bassConflict)")
+
+        return profile
     }
 
     // MARK: - Main Entry Point
 
-    /// Calculate full crossfade configuration (replaces calculateCrossfadeConfig in JS).
+    /// Calculate full crossfade configuration.
     static func calculateCrossfadeConfig(
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis?,
@@ -159,156 +396,98 @@ enum DJMixingService {
         currentPlaybackTimeA: Double? = nil,
         userFadeDuration: Double? = nil
     ) -> CrossfadeResult {
-        // Sanitize all analysis data before any calculations.
-        // Protects against out-of-range values from the backend.
         let safeCurrent = currentAnalysis.map { sanitize($0, duration: bufferADuration) }
         let safeNext = nextAnalysis.map { sanitize($0, duration: bufferBDuration) }
 
+        // ── 1. Build relationship profile (computed ONCE, drives everything) ──
+        let profile = buildTransitionProfile(
+            currentAnalysis: safeCurrent,
+            nextAnalysis: safeNext,
+            mode: mode,
+            bufferADuration: bufferADuration,
+            bufferBDuration: bufferBDuration
+        )
+
+        // ── 2. Entry point (where B starts playing) — driven by profile ──
         let entry = calculateSmartEntryPoint(
             nextAnalysis: safeNext,
             currentAnalysis: safeCurrent,
             bufferDuration: bufferBDuration,
-            mode: mode,
+            profile: profile,
             currentPlaybackTimeA: currentPlaybackTimeA
         )
 
+        // ── 3. Fade duration — driven by profile ──
         let fade = calculateAdaptiveFadeDuration(
             entryPoint: entry.entryPoint,
             bufferADuration: bufferADuration,
             bufferBDuration: bufferBDuration,
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
-            mode: mode,
+            profile: profile,
             userFadeDuration: userFadeDuration
         )
 
-        let filter = decideFilterUsage(
+        // ── 4. Filter decisions — driven by profile ──
+        let filter = decideFilterUsage(profile: profile, fadeDuration: fade.duration)
+
+        // ── 5. Anticipation ──
+        let anticipation = decideAnticipation(fadeDuration: fade.duration, entryPoint: entry.entryPoint)
+
+        // ── 6. DJ-grade filters (mid scoop + high shelf) — refined with actual fade zone ──
+        let djFilters = decideDJFilters(
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
+            profile: profile,
             fadeDuration: fade.duration,
-            mode: mode
+            entryPoint: entry.entryPoint,
+            bufferADuration: bufferADuration
         )
 
-        let anticipation = decideAnticipation(
-            fadeDuration: fade.duration,
-            entryPoint: entry.entryPoint
-        )
-
+        // ── 7. Transition type — driven by profile ──
         let transition = decideTransitionType(
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
+            profile: profile,
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
             isBeatSynced: entry.isBeatSynced,
             useFilters: filter.useFilters,
-            useAggressiveFilters: filter.useAggressiveFilters,
-            needsAnticipation: anticipation.needsAnticipation,
-            anticipationTime: anticipation.anticipationTime,
-            bufferADuration: bufferADuration
+            bufferADuration: bufferADuration,
+            hasVocalOverlap: djFilters.useMidScoop
         )
 
-        let timeStretch = decideTimeStretch(
-            currentAnalysis: safeCurrent,
-            nextAnalysis: safeNext,
-            transitionType: transition.type
-        )
+        // ── 8. Time-stretch ──
+        let timeStretch = decideTimeStretch(profile: profile, transitionType: transition.type)
         print("[DJMixingService] \(timeStretch.useTimeStretch ? "⚡ TIME-STRETCH ACTIVE" : "Time-stretch OFF"): \(timeStretch.reason)")
 
-        // ── DJ-grade filter decisions ──
-        let djFilters = decideDJFilters(
-            currentAnalysis: safeCurrent,
-            nextAnalysis: safeNext,
-            fadeDuration: fade.duration,
-            entryPoint: entry.entryPoint,
-            bufferADuration: bufferADuration
-        )
-
-        // Use per-section energy when available: A's outro energy and B's intro energy
-        // are what actually overlap during the crossfade — much more accurate than global average.
-        let eA: Double
-        if let cur = safeCurrent, cur.hasEnergyProfile {
-            eA = cur.energyOutro
-        } else {
-            eA = (safeCurrent?.hasError != true) ? (safeCurrent?.energy ?? 0.5) : 0.5
-        }
-        let eB: Double
-        if let nxt = safeNext, nxt.hasEnergyProfile {
-            eB = nxt.energyIntro
-        } else {
-            eB = (safeNext?.hasError != true) ? (safeNext?.energy ?? 0.5) : 0.5
-        }
-
+        // ── Beat grid (adjusted for time-stretch) ──
         let biA = (safeCurrent?.hasError != true) ? (safeCurrent?.beatInterval ?? 0) : 0
         let rawBiB = (safeNext?.hasError != true) ? (safeNext?.beatInterval ?? 0) : 0
-        // When time-stretch is active, B's effective beat interval changes by 1/rateB
-        // (faster playback = shorter beat intervals in wall-clock time)
         let biB = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawBiB / Double(timeStretch.rateB) : rawBiB
         let dbA = (safeCurrent?.hasError != true) ? (safeCurrent?.downbeatTimes ?? []) : []
         let rawDbB = (safeNext?.hasError != true) ? (safeNext?.downbeatTimes ?? []) : []
-        // Adjust B's downbeat times for time-stretch (wall-clock positions shift)
         let dbB: [Double] = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawDbB.map { $0 / Double(timeStretch.rateB) } : rawDbB
 
-        // ── Instrumental outro/intro detection ──
-        // A's outro is instrumental if vocals end before the crossfade zone starts.
-        // Cross-validate backend flags with speechSegments when available.
-        let outroInstrumental: Bool
-        if let cur = safeCurrent {
-            let crossfadeStartA = bufferADuration - fade.duration
-            if cur.hasVocalEndData {
-                outroInstrumental = cur.lastVocalTime < crossfadeStartA
-            } else if !cur.hasOutroVocals && cur.hasEnergyProfile {
-                // Backend says no vocals in outro — cross-check with speechSegments
-                if !cur.speechSegments.isEmpty {
-                    let vocalsInOutro = cur.speechSegments.contains { $0.end > crossfadeStartA }
-                    if vocalsInOutro {
-                        print("[DJMixingService] ⚠️ Backend says no outro vocals, but speechSegments disagree — treating as vocal outro")
-                    }
-                    outroInstrumental = !vocalsInOutro
-                } else {
-                    outroInstrumental = true
-                }
-            } else {
-                outroInstrumental = false
-            }
-        } else {
-            outroInstrumental = false
-        }
-
-        // B's intro is instrumental if no vocals in entry zone.
-        // Cross-validate: backend flag + vocalStartTime + speechSegments must agree.
-        let introInstrumental: Bool
-        if let nxt = safeNext {
-            let bEnd = entry.entryPoint + fade.duration
-            if nxt.hasEnergyProfile && !nxt.hasIntroVocals {
-                // Backend says no intro vocals — cross-check with vocalStartTime
-                if nxt.vocalStartTime > 0 && nxt.vocalStartTime <= bEnd {
-                    print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalStart (\(String(format: "%.1f", nxt.vocalStartTime))s) is within fade zone — treating as vocal intro")
-                    introInstrumental = false
-                } else {
-                    introInstrumental = true
-                }
-            } else if nxt.vocalStartTime > bEnd {
-                introInstrumental = true  // vocals start after the fade window
-            } else if !nxt.speechSegments.isEmpty {
-                introInstrumental = !nxt.speechSegments.contains { $0.start < bEnd && $0.end > entry.entryPoint }
-            } else {
-                introInstrumental = false
-            }
-        } else {
-            introInstrumental = false
-        }
-
-        // Average danceability — high values need bass/groove preserved
-        let danceA = (safeCurrent?.hasError != true) ? (safeCurrent?.danceability ?? 0.5) : 0.5
-        let danceB = (safeNext?.hasError != true) ? (safeNext?.danceability ?? 0.5) : 0.5
-        let avgDanceability = (danceA + danceB) / 2.0
+        // ── Instrumental detection (refined with actual fade zone) ──
+        let outroInstrumental = detectOutroInstrumental(
+            currentAnalysis: safeCurrent, profile: profile,
+            bufferADuration: bufferADuration, fadeDuration: fade.duration
+        )
+        let introInstrumental = detectIntroInstrumental(
+            nextAnalysis: safeNext, profile: profile,
+            entryPoint: entry.entryPoint, fadeDuration: fade.duration
+        )
 
         // Short outro or very short fade → B enters clean (no highpass/lowshelf sweep)
         let outroStartA = safeCurrent?.outroStartTime ?? bufferADuration
         let outroLenA = bufferADuration - outroStartA
         let skipBFilters = outroLenA <= 5.0 || fade.duration <= 3.0
+
+        // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
+        let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
 
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
@@ -323,8 +502,8 @@ enum DJMixingService {
             useTimeStretch: timeStretch.useTimeStretch,
             rateA: timeStretch.rateA,
             rateB: timeStretch.rateB,
-            energyA: eA,
-            energyB: eB,
+            energyA: profile.energyA,
+            energyB: profile.energyB,
             beatIntervalA: biA,
             beatIntervalB: biB,
             downbeatTimesA: dbA,
@@ -333,8 +512,11 @@ enum DJMixingService {
             useHighShelfCut: djFilters.useHighShelfCut,
             isOutroInstrumental: outroInstrumental,
             isIntroInstrumental: introInstrumental,
-            danceability: avgDanceability,
-            skipBFilters: skipBFilters
+            danceability: profile.avgDanceability,
+            skipBFilters: skipBFilters,
+            transitionReason: transition.reason,
+            triggerBias: trigger.bias,
+            triggerBiasReason: trigger.reason
         )
     }
 
@@ -347,14 +529,246 @@ enum DJMixingService {
         let isBeatSynced: Bool
     }
 
-    /// Clamp analysis timing values to valid range [0, duration] and cross-validate
-    /// backend data for internal consistency. When fields contradict each other,
-    /// demote the less reliable one to its default (as if the backend hadn't sent it).
+    /// Calculate where B starts playing. Driven by the A↔B relationship profile.
+    /// The same song B will get different entry points depending on what A precedes it.
+    static func calculateSmartEntryPoint(
+        nextAnalysis: SongAnalysis?,
+        currentAnalysis: SongAnalysis?,
+        bufferDuration: Double,
+        profile: TransitionProfile,
+        currentPlaybackTimeA: Double? = nil
+    ) -> EntryPointResult {
+        let config = configs[profile.mode]!
+
+        var entryPoint: Double = 0
+        var beatSyncInfo = ""
+        var usedFallback = false
+        var isBeatSynced = false
+
+        guard let rawNext = nextAnalysis, !rawNext.hasError else {
+            entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "", usedFallback: true, isBeatSynced: false)
+        }
+
+        let next = sanitize(rawNext, duration: bufferDuration)
+
+        // ── Character-driven entry strategy ──
+        switch profile.character {
+        case .minimal:
+            // Both low energy — very early entry, invisible handoff.
+            // No structural targeting at all. B plays from the beginning.
+            let earlyEntry = min(2.0, bufferDuration * config.fallbackPercent)
+            entryPoint = max(0, earlyEntry)
+            print("[DJMixingService] 🌙 Minimal: entry=\(String(format: "%.1f", entryPoint))s (both low energy, gentle handoff)")
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (low energy)", usedFallback: false, isBeatSynced: false)
+
+        case .smooth:
+            // Incompatible BPMs or low style affinity — no punch targeting.
+            // But still skip past boring instrumental intros (guitars, ambient pads)
+            // so the listener hears the song's "real start."
+            let baseEntry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+
+            // Prefer entering after the intro if the intro is long enough to matter
+            if next.hasIntroData && next.introEndTime > baseEntry + 3 {
+                entryPoint = next.introEndTime
+            } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < 25 {
+                // Chorus as fallback when intro data isn't useful
+                entryPoint = next.chorusStartTime
+            } else {
+                entryPoint = baseEntry
+            }
+            entryPoint = max(0, min(entryPoint, bufferDuration - 1))
+            print("[DJMixingService] 🌊 Smooth: entry=\(String(format: "%.1f", entryPoint))s (introEnd=\(String(format: "%.1f", next.introEndTime))s, affinity=\(String(format: "%.2f", profile.styleAffinity)))")
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Smooth blend", usedFallback: false, isBeatSynced: false)
+
+        case .dramatic:
+            // Big energy change or harmonic clash — entry strategy depends on direction.
+            entryPoint = calculateDramaticEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+
+        case .punch:
+            // Compatible BPMs, good style affinity — target a structural moment.
+            entryPoint = calculatePunchEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+        }
+
+        // ── Phrase snapping (punch + dramatic only, not smooth/minimal) ──
+        if !next.phraseBoundaries.isEmpty {
+            let maxAhead: Double = profile.character == .dramatic ? 8 : 16
+            if let nextPhrase = next.phraseBoundaries.first(where: { $0 >= entryPoint && $0 <= entryPoint + maxAhead }) {
+                entryPoint = nextPhrase
+            }
+        }
+
+        // ── Beat sync (only when BPMs are compatible AND trusted) ──
+        if profile.bpmRelationship != .incompatible && profile.bpmTrusted {
+            let beatResult = applyBeatSync(
+                entryPoint: entryPoint,
+                currentAnalysis: currentAnalysis,
+                nextAnalysis: next,
+                currentPlaybackTimeA: currentPlaybackTimeA,
+                mode: profile.mode
+            )
+            entryPoint = beatResult.adjustedEntryPoint
+            beatSyncInfo = beatResult.info
+            isBeatSynced = beatResult.isSynced
+        }
+
+        entryPoint = max(0, min(entryPoint, bufferDuration - 1))
+
+        return EntryPointResult(
+            entryPoint: entryPoint,
+            beatSyncInfo: beatSyncInfo,
+            usedFallback: usedFallback,
+            isBeatSynced: isBeatSynced
+        )
+    }
+
+    /// Entry for `.dramatic` character — big energy changes or harmonic clash.
+    private static func calculateDramaticEntry(
+        next: SongAnalysis,
+        profile: TransitionProfile,
+        bufferDuration: Double,
+        config: MixModeConfig
+    ) -> Double {
+        let introEnd = next.introEndTime
+        let vocalStart = next.vocalStartTime
+        let chorusStart = next.chorusStartTime
+
+        switch profile.energyFlow {
+        case .energyUp:
+            // Energy rising (A chill → B hot): prefer chorus or vocalStart for impact.
+            // The dramatic energy jump benefits from landing on a strong moment.
+            if chorusStart > 4 && chorusStart < bufferDuration * 0.4 {
+                print("[DJMixingService] 🔥 Dramatic UP: chorus entry at \(String(format: "%.1f", chorusStart))s")
+                return chorusStart
+            } else if vocalStart > 3 {
+                print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalStart))s")
+                return vocalStart
+            } else if next.hasIntroData && introEnd > 3 {
+                return introEnd
+            } else {
+                return min(config.fallbackMaxSeconds, bufferDuration * 0.03)
+            }
+
+        case .energyDown:
+            // Energy dropping (A hot → B chill): early entry, let B build gradually.
+            // Don't punch — B needs space to breathe as A's energy fades.
+            let earlyEntry = min(4.0, bufferDuration * 0.02)
+            print("[DJMixingService] 🌅 Dramatic DOWN: early entry at \(String(format: "%.1f", earlyEntry))s (energy dropping)")
+            return earlyEntry
+
+        case .steady:
+            // Harmonic clash with steady energy: moderate entry, avoid extending overlap.
+            if vocalStart > 3 {
+                return vocalStart
+            } else if next.hasIntroData && introEnd > 3 {
+                return introEnd
+            } else {
+                return min(config.fallbackMaxSeconds, bufferDuration * 0.02)
+            }
+        }
+    }
+
+    /// Entry for `.punch` character — compatible BPMs, targeting a structural moment in B.
+    private static func calculatePunchEntry(
+        next: SongAnalysis,
+        profile: TransitionProfile,
+        bufferDuration: Double,
+        config: MixModeConfig
+    ) -> Double {
+        let introEnd = next.introEndTime
+        let vocalStart = next.vocalStartTime
+        let chorusStart = next.chorusStartTime
+
+        // Cross-validate intro/vocal timing
+        let hasReliableIntro = next.hasIntroData && introEnd > 3
+        let introVocalDiverge: Bool = {
+            guard hasReliableIntro, vocalStart > 0 else { return false }
+            return vocalStart < introEnd - 8
+        }()
+
+        if introVocalDiverge {
+            print("[DJMixingService] ⚠️ Entry confidence low: introEnd=\(String(format: "%.1f", introEnd))s but vocalStart=\(String(format: "%.1f", vocalStart))s (diverge >8s)")
+        }
+
+        var entry: Double
+
+        // ── Cross-validate vocalStartTime against early speech/vocal data ──
+        // If speech segments show vocals in the first 10s, but backend says vocalStart is
+        // way later, the backend value is unreliable (it may be detecting a different vocal
+        // section, not the first occurrence). Only trust vocalStart for entry logic when
+        // the intro is genuinely instrumental.
+        let hasEarlyVocals = next.hasIntroVocals ||
+            next.speechSegments.contains(where: { $0.start < 10 })
+        let introIsInstrumental = !hasEarlyVocals
+        // vocalStart is only reliable for "enter before vocals" if the intro is truly
+        // instrumental, OR if the value is reasonably small (< 20s).
+        let vocalStartReliable = vocalStart > 0 && (introIsInstrumental || vocalStart < 20)
+
+        // ── Vocal overlap avoidance: if both songs have vocals, prefer entering B
+        // at an instrumental section so A's vocals can fade before B's vocals start ──
+        // ONLY when the intro is confirmed instrumental — if B already has vocals in the
+        // intro, there is no clean instrumental window and this strategy produces wrong
+        // entry points deep into the song.
+        if profile.vocalOverlapRisk == .both && vocalStart > 3
+            && introIsInstrumental && vocalStartReliable {
+            let safeEntry = max(0, vocalStart - 6)
+            if safeEntry > 2 {
+                print("[DJMixingService] 🎤 Punch w/ vocal avoidance: entry=\(String(format: "%.1f", safeEntry))s (vocals at \(String(format: "%.1f", vocalStart))s)")
+                return safeEntry
+            }
+        }
+
+        // ── Style affinity modulates how aggressively we target ──
+        // High affinity (>0.7): same genre feel — aggressive targeting (chorus, introEnd)
+        // Medium affinity (0.4-0.7): compatible — moderate targeting (vocalStart, introEnd)
+        // Low affinity (<0.4): would have been .smooth, shouldn't reach here
+
+        if profile.styleAffinity > 0.7 {
+            // Same "world" — go for the most impactful entry
+            if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
+                entry = vocalStart
+            } else if hasReliableIntro && !introVocalDiverge {
+                entry = introEnd
+            } else if chorusStart > 4 {
+                entry = chorusStart
+            } else if vocalStartReliable && vocalStart > 2 {
+                entry = vocalStart
+            } else if hasReliableIntro {
+                entry = introEnd
+            } else {
+                entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+            }
+        } else {
+            // Moderate affinity — less aggressive, prefer introEnd over chorus
+            if hasReliableIntro && !introVocalDiverge {
+                entry = introEnd
+            } else if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
+                entry = vocalStart
+            } else if vocalStartReliable && vocalStart > 2 {
+                entry = vocalStart
+            } else if hasReliableIntro {
+                entry = introEnd
+            } else {
+                entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+            }
+        }
+
+        // ── Energy boost: rising energy → prefer chorus if nearby ──
+        if profile.energyFlow == .energyUp && profile.energyGap > 0.25 {
+            if chorusStart > entry && chorusStart < entry + 30 {
+                entry = chorusStart
+            }
+        }
+
+        return entry
+    }
+
+    // MARK: - Sanitize
+
     private static func sanitize(_ analysis: SongAnalysis, duration: Double) -> SongAnalysis {
         var a = analysis
         let maxT = max(0, duration)
 
-        // ── Range clamp ──
         a.introEndTime = min(max(0, a.introEndTime), maxT)
         a.outroStartTime = min(max(0, a.outroStartTime), maxT)
         a.vocalStartTime = min(max(0, a.vocalStartTime), maxT)
@@ -369,10 +783,7 @@ enum DJMixingService {
             return s < e ? (start: s, end: e) : nil
         }
 
-        // ── BPM sanity ──
         if a.bpm < 30 || a.bpm > 300 { a.bpm = 120 }
-
-        // ── Energy sanity ──
         a.energy = min(max(0, a.energy), 1)
         if a.hasEnergyProfile {
             a.energyIntro = min(max(0, a.energyIntro), 1)
@@ -380,33 +791,60 @@ enum DJMixingService {
             a.energyOutro = min(max(0, a.energyOutro), 1)
         }
 
-        // ── Cross-validation: outroStartTime vs lastVocalTime ──
-        // If lastVocalTime is AFTER outroStartTime, the "outro" still has vocals.
-        // In that case, outroStartTime is misleading — it's not a clean instrumental outro.
-        // Adjust: move outroStartTime to lastVocalTime (the real instrumental-only start).
         if a.hasOutroData && a.hasVocalEndData
             && a.lastVocalTime > a.outroStartTime + 3 {
             print("[DJMixingService] ⚠️ Sanitize: lastVocal (\(String(format: "%.1f", a.lastVocalTime))s) > outroStart (\(String(format: "%.1f", a.outroStartTime))s) — adjusting outro to vocal end")
             a.outroStartTime = a.lastVocalTime
         }
 
-        // ── Cross-validation: introEndTime vs vocalStartTime ──
-        // Normal order: introEnd ≈ vocalStart (intro ends when vocals begin).
-        // If vocalStart is WAY before introEnd (> 8s), introEnd is likely a false boundary.
-        // Already handled in calculateSmartEntryPoint via introVocalDiverge,
-        // but also flag it here for downstream consumers.
-
-        // ── Cross-validation: chorusStartTime ──
-        // Chorus can't start before the intro ends. If it does, one of them is wrong.
-        if a.hasIntroData && a.chorusStartTime > 0 && a.chorusStartTime < a.introEndTime - 2 {
-            // Chorus before intro end — chorus detection is probably wrong, clear it.
-            print("[DJMixingService] ⚠️ Sanitize: chorusStart (\(String(format: "%.1f", a.chorusStartTime))s) < introEnd (\(String(format: "%.1f", a.introEndTime))s) — clearing chorusStart")
-            a.chorusStartTime = 0
+        // ── 1. ML override cross-validation (FIRST — before any caps) ──
+        // When the ML model overrode intro/outro values, cross-check with heuristics.
+        // If ML and heuristic diverge wildly (>15s), the ML may have hallucinated — fall back to heuristic.
+        // This MUST run before chorus/speechSegment/hard caps so they see the corrected value.
+        if a.modelUsed {
+            if let hIntro = a.introEndTimeHeuristic, a.hasIntroData {
+                let mlIntro = a.introEndTime
+                if abs(mlIntro - hIntro) > 15 {
+                    print("[DJMixingService] ⚠️ Sanitize: ML introEnd (\(String(format: "%.1f", mlIntro))s) diverges >15s from heuristic (\(String(format: "%.1f", hIntro))s) — using heuristic")
+                    a.introEndTime = hIntro
+                }
+            }
+            if let hOutro = a.outroStartTimeHeuristic, a.hasOutroData {
+                let mlOutro = a.outroStartTime
+                if abs(mlOutro - hOutro) > 15 {
+                    print("[DJMixingService] ⚠️ Sanitize: ML outroStart (\(String(format: "%.1f", mlOutro))s) diverges >15s from heuristic (\(String(format: "%.1f", hOutro))s) — using heuristic")
+                    a.outroStartTime = hOutro
+                }
+            }
         }
 
-        // ── beatInterval sanity ──
-        // beatInterval should match BPM: 60/BPM. If backend sends both and they diverge
-        // significantly, prefer the BPM-derived value (BPM is more commonly validated).
+        // ── 2. Cross-validate introEnd against structural landmarks (safety nets) ──
+        // These run AFTER the ML check, so they operate on already-corrected values.
+
+        // 2a. Chorus before introEnd: the intro must end before the chorus starts
+        if a.hasIntroData && a.chorusStartTime > 4 && a.chorusStartTime < a.introEndTime - 5 {
+            print("[DJMixingService] ⚠️ Sanitize: chorusStart (\(String(format: "%.1f", a.chorusStartTime))s) << introEnd (\(String(format: "%.1f", a.introEndTime))s) — capping introEnd to chorus")
+            a.introEndTime = a.chorusStartTime
+        }
+
+        // 2b. Speech segments (vocals) starting well before introEnd
+        if a.hasIntroData && !a.speechSegments.isEmpty {
+            let earlyVocal = a.speechSegments.first(where: { $0.end - $0.start > 3 && $0.start < a.introEndTime - 5 })
+            if let ev = earlyVocal {
+                let cappedIntro = ev.start
+                if cappedIntro < a.introEndTime - 5 && cappedIntro >= 2 {
+                    print("[DJMixingService] ⚠️ Sanitize: vocal segment at \(String(format: "%.1f", ev.start))s << introEnd (\(String(format: "%.1f", a.introEndTime))s) — capping introEnd to vocal start")
+                    a.introEndTime = cappedIntro
+                }
+            }
+        }
+
+        // 2c. Hard cap: intros > 30s are extremely rare outside ambient/classical.
+        if a.hasIntroData && a.introEndTime > 30 {
+            print("[DJMixingService] ⚠️ Sanitize: introEnd (\(String(format: "%.1f", a.introEndTime))s) > 30s hard cap — capping")
+            a.introEndTime = min(a.introEndTime, 30)
+        }
+
         if a.beatInterval > 0 && a.bpm > 0 {
             let bpmDerived = 60.0 / a.bpm
             if abs(a.beatInterval - bpmDerived) / bpmDerived > 0.15 {
@@ -414,15 +852,10 @@ enum DJMixingService {
                 a.beatInterval = bpmDerived
             }
         }
-        // Reject extreme beatInterval values
         if a.beatInterval < 0.15 || a.beatInterval > 3.0 {
             a.beatInterval = a.bpm > 0 ? 60.0 / a.bpm : 0
         }
 
-        // ── Cross-validation: beatInterval vs downbeatTimes ──
-        // If we have enough downbeats (≥4), verify they're consistent with beatInterval.
-        // Downbeats should be ~4 beats apart (one per measure in 4/4).
-        // If the median spacing diverges > 30% from beatInterval*4, the grid is unreliable.
         if a.beatInterval > 0 && a.downbeatTimes.count >= 4 {
             let expectedMeasure = a.beatInterval * 4
             var spacings: [Double] = []
@@ -437,130 +870,8 @@ enum DJMixingService {
             }
         }
 
-        // ── Cross-validation: danceability ──
         a.danceability = min(max(0, a.danceability), 1)
-
         return a
-    }
-
-    static func calculateSmartEntryPoint(
-        nextAnalysis: SongAnalysis?,
-        currentAnalysis: SongAnalysis?,
-        bufferDuration: Double,
-        mode: MixMode,
-        currentPlaybackTimeA: Double? = nil
-    ) -> EntryPointResult {
-        let config = configs[mode]!
-
-        var entryPoint: Double = 0
-        var beatSyncInfo = ""
-        var usedFallback = false
-        var isBeatSynced = false
-
-        guard let rawNext = nextAnalysis, !rawNext.hasError else {
-            entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
-            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "", usedFallback: true, isBeatSynced: false)
-        }
-
-        let next = sanitize(rawNext, duration: bufferDuration)
-
-        let introEndTime = next.introEndTime
-        let vocalStartTime = next.vocalStartTime
-        let chorusStartTime = next.chorusStartTime
-
-        // Entry point = the energy moment itself (intro end, vocal start, chorus).
-        // The fade duration provides the natural lead-in before the punch.
-        //
-        // Confidence check: introEndTime from analysis can be inaccurate on songs
-        // with unconventional structure (ambient intros, spoken word, gradual builds).
-        // Cross-validate with vocalStartTime when both exist — if they diverge wildly,
-        // the intro detection is likely wrong. Fall back to conservative entry.
-        let hasReliableIntro = next.hasIntroData && introEndTime > 3
-        let introVocalDiverge: Bool = {
-            guard hasReliableIntro, vocalStartTime > 0 else { return false }
-            // If vocals start well BEFORE the detected intro end, the "intro" boundary
-            // is likely a false positive (e.g., a verse boundary, not the real intro end).
-            // A real intro→verse transition has vocals starting AT or slightly AFTER introEnd.
-            return vocalStartTime < introEndTime - 8
-        }()
-
-        if mode == .dj {
-            // DJ priority: vocalStart (most reliable marker) → introEnd → chorus → fallback.
-            // A DJ cues to where the vocal drops in — that's the punch the audience feels.
-            // introEndTime is abstract and analysis-dependent; vocalStartTime is concrete.
-            if vocalStartTime > 3 && !introVocalDiverge {
-                entryPoint = vocalStartTime
-            } else if hasReliableIntro && !introVocalDiverge {
-                entryPoint = introEndTime
-            } else if chorusStartTime > 4 {
-                entryPoint = chorusStartTime
-            } else if vocalStartTime > 2 {
-                entryPoint = vocalStartTime
-            } else if hasReliableIntro {
-                entryPoint = introEndTime
-            } else {
-                entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
-                usedFallback = true
-            }
-        } else {
-            // Normal mode: introEnd still primary (less aggressive entry)
-            if introEndTime > 2.5 && !introVocalDiverge {
-                entryPoint = introEndTime
-            } else if vocalStartTime > 1 {
-                entryPoint = vocalStartTime
-            } else if chorusStartTime > 4 {
-                entryPoint = chorusStartTime
-            } else if introEndTime > 2.5 {
-                entryPoint = introEndTime
-            } else {
-                entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
-                usedFallback = true
-            }
-        }
-
-        if introVocalDiverge {
-            print("[DJMixingService] ⚠️ Entry confidence low: introEnd=\(String(format: "%.1f", introEndTime))s but vocalStart=\(String(format: "%.1f", vocalStartTime))s (diverge >\(8)s) — skipped introEnd")
-        }
-
-        // Energy flow (Build-up/Boost)
-        let energyA = (currentAnalysis?.hasError == false) ? (currentAnalysis?.energy ?? 0.5) : 0.5
-        let energyB = next.energy
-
-        if energyB > energyA + 0.25 {
-            if chorusStartTime > entryPoint && chorusStartTime < entryPoint + 30 {
-                entryPoint = chorusStartTime
-            }
-        }
-
-        // Phrasing
-        if !next.phraseBoundaries.isEmpty {
-            let maxAhead: Double = 16
-            if let nextPhrase = next.phraseBoundaries.first(where: { $0 >= entryPoint && $0 <= entryPoint + maxAhead }) {
-                entryPoint = nextPhrase
-            }
-        }
-
-        // Beat matching — enabled for both DJ and normal modes when beat data is available.
-        // In normal mode, only align to downbeats (no cross-phase alignment) for subtle sync.
-        let beatResult = applyBeatSync(
-            entryPoint: entryPoint,
-            currentAnalysis: currentAnalysis,
-            nextAnalysis: next,
-            currentPlaybackTimeA: currentPlaybackTimeA,
-            mode: mode
-        )
-        entryPoint = beatResult.adjustedEntryPoint
-        beatSyncInfo = beatResult.info
-        isBeatSynced = beatResult.isSynced
-
-        entryPoint = max(0, min(entryPoint, bufferDuration - 1))
-
-        return EntryPointResult(
-            entryPoint: entryPoint,
-            beatSyncInfo: beatSyncInfo,
-            usedFallback: usedFallback,
-            isBeatSynced: isBeatSynced
-        )
     }
 
     // MARK: - Beat Sync
@@ -578,7 +889,6 @@ enum DJMixingService {
         currentPlaybackTimeA: Double?,
         mode: MixMode
     ) -> BeatSyncResult {
-        // Need valid beat intervals from at least B to sync
         guard !nextAnalysis.hasError, nextAnalysis.beatInterval > 0 else {
             return BeatSyncResult(adjustedEntryPoint: entryPoint, info: "", isSynced: false)
         }
@@ -589,9 +899,6 @@ enum DJMixingService {
         let beatIntervalB = nextAnalysis.beatInterval
         let targetBeats = nextAnalysis.downbeatTimes
 
-        // Search range: ±1 beat — tight snap to preserve the punch/energy moment.
-        // The entry point now targets the exact energy moment (introEnd, vocalStart, etc.),
-        // so we only allow minimal displacement to land on a beat.
         let searchRange = beatIntervalB * 1.0
 
         var adjustedEntryPoint = entryPoint
@@ -607,18 +914,14 @@ enum DJMixingService {
                 isBeatSynced = true
                 info = "Downbeat real: \(adj >= 0 ? "+" : "")\(String(format: "%.3f", adj))s"
             } else {
-                // No downbeat within ±1 beat — snap to nearest beat grid position
                 let gridSnap = snapToMeasureGrid(entryPoint, measureLength: beatIntervalB * 4, beatInterval: beatIntervalB)
-                // Only apply if the snap is small (within half a beat)
                 if abs(gridSnap) <= beatIntervalB * 0.5 {
                     adjustedEntryPoint = entryPoint + gridSnap
                     isBeatSynced = true
                     info = "Grid snap: \(gridSnap >= 0 ? "+" : "")\(String(format: "%.3f", gridSnap))s"
                 }
-                // Otherwise keep the exact punch position — NOT synced
             }
         } else {
-            // No downbeat data — snap to beat grid only if very close
             let gridSnap = snapToMeasureGrid(entryPoint, measureLength: beatIntervalB * 4, beatInterval: beatIntervalB)
             if abs(gridSnap) <= beatIntervalB * 0.5 {
                 adjustedEntryPoint = entryPoint + gridSnap
@@ -627,7 +930,7 @@ enum DJMixingService {
             }
         }
 
-        // Phase 2: Cross-phase alignment A↔B (DJ mode only — too aggressive for normal)
+        // Phase 2: Cross-phase alignment A↔B (DJ mode only)
         if mode == .dj, hasCurrentBeats, let playbackA = currentPlaybackTimeA, playbackA > 0 {
             let beatFractionA = playbackA.truncatingRemainder(dividingBy: beatIntervalA) / beatIntervalA
             let targetPhaseOffsetB = beatFractionA * beatIntervalB
@@ -636,12 +939,8 @@ enum DJMixingService {
             if phaseError > beatIntervalB / 2 { phaseError -= beatIntervalB }
             if phaseError < -beatIntervalB / 2 { phaseError += beatIntervalB }
 
-            // Only correct if the phase error is significant (>15% of a beat)
-            // and only apply small corrections to preserve the punch alignment
             if abs(phaseError) > beatIntervalB * 0.15 {
-                // Search nearby downbeats for one that also satisfies phase alignment
                 if !targetBeats.isEmpty {
-                    // Only consider downbeats within ±1 beat (tight range to preserve punch)
                     let candidates = targetBeats.filter {
                         abs($0 - adjustedEntryPoint) <= searchRange && $0 >= 0
                     }
@@ -658,13 +957,11 @@ enum DJMixingService {
                         }
                     }
                     let phaseAdj = bestCandidate - adjustedEntryPoint
-                    // Only apply if the adjustment is small (within half a beat)
                     if abs(phaseAdj) <= beatIntervalB * 0.5 {
                         adjustedEntryPoint = bestCandidate
                         info += " + fase A↔B: \(phaseAdj >= 0 ? "+" : "")\(String(format: "%.3f", phaseAdj))s"
                     }
                 } else {
-                    // No downbeats — only apply phase correction if small
                     let phaseAdj = max(-searchRange, min(searchRange, phaseError))
                     if abs(phaseAdj) <= beatIntervalB * 0.5 {
                         adjustedEntryPoint += phaseAdj
@@ -680,20 +977,16 @@ enum DJMixingService {
         return BeatSyncResult(adjustedEntryPoint: max(0, adjustedEntryPoint), info: info, isSynced: isBeatSynced)
     }
 
-    /// Snap a time position to the nearest measure boundary within ±1 beat.
     private static func snapToMeasureGrid(_ time: Double, measureLength: Double, beatInterval: Double) -> Double {
         guard measureLength > 0 else { return 0 }
         let timeIntoMeasure = time.truncatingRemainder(dividingBy: measureLength)
-        // Close to start of measure — snap backward
         if timeIntoMeasure < beatInterval * 0.5 && timeIntoMeasure > 0.001 {
             return -timeIntoMeasure
         }
-        // Close to end of measure — snap forward
         let distToNext = measureLength - timeIntoMeasure
         if distToNext < beatInterval * 0.5 {
             return distToNext
         }
-        // Not near a measure boundary — snap to nearest beat
         let timeIntoBeat = timeIntoMeasure.truncatingRemainder(dividingBy: beatInterval)
         if timeIntoBeat < beatInterval * 0.25 {
             return -timeIntoBeat
@@ -710,99 +1003,105 @@ enum DJMixingService {
         let decision: String
     }
 
+    /// Fade duration — driven by profile relationship.
+    /// High style affinity allows longer fades; low affinity prefers shorter.
+    /// Bass conflict shortens fade; energy-down extends it.
     static func calculateAdaptiveFadeDuration(
         entryPoint: Double,
         bufferADuration: Double,
         bufferBDuration: Double,
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis?,
-        mode: MixMode,
+        profile: TransitionProfile,
         userFadeDuration: Double? = nil
     ) -> FadeDurationResult {
-        let config = configs[mode]!
-        // Use user's custom duration as the base when provided.
-        // The intelligent algorithm (DJ/Normal) will still adapt it based on analysis,
-        // but the user's preference anchors the starting point.
+        let config = configs[profile.mode]!
         let baseDuration = userFadeDuration ?? config.baseFadeDuration
         var fadeDuration = baseDuration
-        var decision = "Usando duracion base (\(fadeDuration)s)."
+        var decision = "Base (\(fadeDuration)s)."
 
         let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError == false
         let hasNext = nextAnalysis != nil && nextAnalysis?.hasError == false
 
         if hasCurrent, hasNext, let current = currentAnalysis, let next = nextAnalysis {
-            // ── Priority 1: Backend-suggested fade durations ──
-            // The backend calculates optimal fade durations per song based on actual audio shape.
-            // Use them as primary when both songs have backend data, with safety clamps.
             let backendFadeIn = next.backendFadeInDuration
             let backendFadeOut = current.backendFadeOutDuration
 
             if userFadeDuration == nil, let bfi = backendFadeIn, bfi >= 2 {
-                // Use B's backend fadeIn as primary (it knows the intro energy shape)
                 fadeDuration = max(config.minFadeDuration, min(config.maxFadeDuration, bfi))
                 decision = "Backend fadeIn: \(String(format: "%.1f", bfi))s → \(String(format: "%.1f", fadeDuration))s."
 
-                // If A also has a backend fadeOut, average them for the best compromise
                 if let bfo = backendFadeOut, bfo >= 2 {
                     let avg = (fadeDuration + max(config.minFadeDuration, min(config.maxFadeDuration, bfo))) / 2
                     fadeDuration = avg
                     decision = "Backend fadeIn/Out: \(String(format: "%.1f", bfi))/\(String(format: "%.1f", bfo))s → avg \(String(format: "%.1f", fadeDuration))s."
                 }
 
-                // Safety: totalTime ≈ fade × 1.2 (filterLead) must fit before punch
                 if entryPoint > 0 && fadeDuration * 1.2 > entryPoint {
-                    let localMin = mode == .dj ? 2.0 : config.minFadeDuration
+                    let localMin = profile.mode == .dj ? 2.0 : config.minFadeDuration
                     fadeDuration = max(localMin, entryPoint / 1.2)
                     decision += " Capped por punch a \(String(format: "%.1f", fadeDuration))s."
                 }
             } else {
-                // ── Priority 2: Heuristic fade — anchored to musical structure ──
-                // Ideal fade = entryPoint (B's intro up to the punch moment).
-                // The crossfade covers B's intro; when it completes, B is at its punch
-                // and A is gone. Constrained by A's outro length and max limits.
-                // Use per-section energy when available
-                let energyA = current.hasEnergyProfile ? current.energyOutro : current.energy
-                let energyB = next.hasEnergyProfile ? next.energyIntro : next.energy
-
                 let outroAStart = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
                 let outroADuration = bufferADuration - outroAStart
                 let hasValidOutro = outroADuration >= 2
-                let localMin = mode == .dj ? 2.0 : config.minFadeDuration
+                let localMin = profile.mode == .dj ? 2.0 : config.minFadeDuration
 
-                let idealFade = entryPoint  // entryPoint IS the punch — fade should cover intro up to it
+                let idealFade = entryPoint
                 let outroConstraint = hasValidOutro ? outroADuration : config.maxFadeDuration
 
                 if idealFade >= localMin {
                     fadeDuration = max(localMin, min(config.maxFadeDuration, idealFade, outroConstraint))
                     decision = "Estructural: intro=\(String(format: "%.1f", idealFade))s outro=\(String(format: "%.1f", outroADuration))s → \(String(format: "%.1f", fadeDuration))s."
                 } else if hasValidOutro {
-                    // Punch is very early — use A's outro as guide
                     fadeDuration = max(localMin, min(config.maxFadeDuration, outroADuration * 0.8))
                     decision = "Punch temprano (\(String(format: "%.1f", idealFade))s), outro=\(String(format: "%.1f", outroADuration))s → \(String(format: "%.1f", fadeDuration))s."
                 } else {
-                    fadeDuration = userFadeDuration ?? (mode == .dj ? 5 : 6)
+                    fadeDuration = userFadeDuration ?? (profile.mode == .dj ? 5 : 6)
                     decision = "Sin estructura clara: \(String(format: "%.1f", fadeDuration))s."
                 }
 
-                // Safety: totalTime ≈ fade × 1.2 (filterLead) must fit before punch.
-                // If it exceeds entryPoint, startOffset clamps to 0 and B overshoots the punch.
                 if entryPoint > 0 && fadeDuration * 1.2 > entryPoint {
                     fadeDuration = max(localMin, entryPoint / 1.2)
                     decision += " Capped por punch a \(String(format: "%.1f", fadeDuration))s."
                 }
+            }
 
-                // Energy flow: extend for energy-down transitions with long outros
-                if energyB < energyA - 0.25 && hasValidOutro && outroADuration > 12 {
-                    fadeDuration = min(15, max(fadeDuration, outroADuration * 0.9))
+            // ── Profile-driven modulations ──
+
+            // Character: minimal → extend for gentler handoff
+            if profile.character == .minimal && fadeDuration < 8 {
+                fadeDuration = min(config.maxFadeDuration, max(fadeDuration, 8))
+                decision += " Extendido por minimal a \(String(format: "%.1f", fadeDuration))s."
+            }
+
+            // Energy flow: energy-down with long outro → extend for graceful descent
+            if profile.energyFlow == .energyDown {
+                let outroAStart2 = current.outroStartTime > 0 ? current.outroStartTime : bufferADuration
+                let outroLen = bufferADuration - outroAStart2
+                if outroLen > 12 {
+                    fadeDuration = min(15, max(fadeDuration, outroLen * 0.9))
                     decision += " Extendido por caida de energia a \(String(format: "%.1f", fadeDuration))s."
                 }
             }
 
-            // Gradual harmonic penalty (applies to both backend and heuristic paths)
-            let harmonic = harmonicPenalty(keyA: current.key, keyB: next.key)
-            switch harmonic.compatibility {
+            // Bass conflict: shorten slightly to reduce bass overlap time
+            if profile.bassConflictRisk && fadeDuration > 6 {
+                fadeDuration = max(5, fadeDuration * 0.85)
+                decision += " Acortado por bass conflict a \(String(format: "%.1f", fadeDuration))s."
+            }
+
+            // Style affinity: low affinity → shorter fade (they sound foreign together)
+            if profile.styleAffinity < 0.35 && fadeDuration > 5 {
+                fadeDuration = max(4, fadeDuration * 0.8)
+                decision += " Acortado por baja afinidad (\(String(format: "%.2f", profile.styleAffinity))) a \(String(format: "%.1f", fadeDuration))s."
+            }
+
+            // Harmonic penalty
+            switch profile.harmonic.compatibility {
             case .compatible, .acceptable:
-                break  // no penalty
+                break
             case .tense:
                 fadeDuration = max(2, fadeDuration * 0.85)
                 decision += " Reducido 15% por tension armonica a \(String(format: "%.2f", fadeDuration))s."
@@ -811,7 +1110,6 @@ enum DJMixingService {
                 decision += " Reducido 25% por clash armonico a \(String(format: "%.2f", fadeDuration))s."
             }
         } else {
-            // No analysis available — use user's duration or a safe default.
             fadeDuration = userFadeDuration ?? (bufferADuration < 30 ? 3 : baseDuration)
             decision = "Sin analisis — duracion \(String(format: "%.0f", fadeDuration))s."
         }
@@ -823,10 +1121,7 @@ enum DJMixingService {
             decision += " Acortado por limite 25% a \(String(format: "%.2f", fadeDuration))s."
         }
 
-        // Cap fade to B's available audio after entry point.
-        // Without this, if B is 20s and entry is at 5s, a 6s fade would end at 11s
-        // but B only has 15s of audio — if B ends before fade completes, there's a gap.
-        // Leave 2s buffer so B doesn't end right as the fade finishes.
+        // Cap to B's available audio after entry point
         let bAvailable = bufferBDuration - entryPoint - 2.0
         if bAvailable > 0 && fadeDuration > bAvailable {
             fadeDuration = max(2, bAvailable)
@@ -846,71 +1141,41 @@ enum DJMixingService {
         let reason: String
     }
 
+    /// Filter decision — driven by profile. No more re-deriving energy/BPM/vocal data.
     static func decideFilterUsage(
-        currentAnalysis: SongAnalysis?,
-        nextAnalysis: SongAnalysis?,
-        fadeDuration: Double,
-        mode: MixMode
+        profile: TransitionProfile,
+        fadeDuration: Double
     ) -> FilterDecisionResult {
-        // Use backend vocal flags when available (definitive), fall back to vocalStartTime
-        let hasVocalsOutro: Bool
-        if let cur = currentAnalysis, !cur.hasError {
-            hasVocalsOutro = cur.hasOutroVocals || cur.vocalStartTime > 0
-        } else {
-            hasVocalsOutro = false
-        }
-        let hasVocalsIntro: Bool
-        if let nxt = nextAnalysis, !nxt.hasError {
-            hasVocalsIntro = nxt.hasIntroVocals || nxt.vocalStartTime > 0
-        } else {
-            hasVocalsIntro = false
-        }
-
-        // Use per-section energy: outro of A and intro of B are what overlap
-        let energyA: Double
-        if let cur = currentAnalysis, cur.hasEnergyProfile {
-            energyA = cur.energyOutro
-        } else {
-            energyA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.energy ?? 0.5) : 0.5
-        }
-        let energyB: Double
-        if let nxt = nextAnalysis, nxt.hasEnergyProfile {
-            energyB = nxt.energyIntro
-        } else {
-            energyB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.energy ?? 0.5) : 0.5
-        }
-        let bpmA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.bpm ?? 120) : 120
-        let bpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 120) : 120
-
-        let keyA = currentAnalysis?.key
-        let keyB = nextAnalysis?.key
-        let harmonic = harmonicPenalty(keyA: keyA, keyB: keyB)
-
-        let energyDiff = abs(energyA - energyB)
-        // Use harmonic BPM for filter decision (half/double tempo shouldn't trigger filters)
-        let bpmDiff = abs(bpmA - harmonicBPM(bpmA, bpmB))
+        let hasVocals = profile.aHasOutroVocals || profile.bHasIntroVocals
         let isVeryShort = fadeDuration < 3
         let isShort = fadeDuration < 4
 
-        let useFilters = hasVocalsOutro || hasVocalsIntro ||
-            energyDiff > 0.3 || bpmDiff > 20 || harmonic.isClash || isVeryShort
+        let useFilters = hasVocals ||
+            abs(profile.energyGap) > 0.3 ||
+            profile.bpmDiff > 20 ||
+            profile.harmonic.isClash ||
+            profile.bassConflictRisk ||
+            isVeryShort
 
-        let useAggressive = (hasVocalsOutro || hasVocalsIntro || isShort ||
-            harmonic.compatibility == .clash) && useFilters
+        let useAggressive = (hasVocals || isShort ||
+            profile.harmonic.compatibility == .clash ||
+            profile.vocalOverlapRisk == .both ||
+            profile.bassConflictRisk) && useFilters
 
         var reasons: [String] = []
-        if hasVocalsOutro || hasVocalsIntro { reasons.append("voces") }
-        if energyDiff > 0.3 { reasons.append("energia \(Int(energyDiff * 100))%") }
-        if bpmDiff > 20 { reasons.append("BPM ±\(Int(bpmDiff))") }
-        if harmonic.compatibility == .tense { reasons.append("tension tonal") }
-        if harmonic.compatibility == .clash { reasons.append("clash tonal") }
+        if hasVocals { reasons.append("voces") }
+        if abs(profile.energyGap) > 0.3 { reasons.append("energia \(Int(abs(profile.energyGap) * 100))%") }
+        if profile.bpmDiff > 20 { reasons.append("BPM ±\(Int(profile.bpmDiff))") }
+        if profile.harmonic.compatibility == .tense { reasons.append("tension tonal") }
+        if profile.harmonic.compatibility == .clash { reasons.append("clash tonal") }
+        if profile.bassConflictRisk { reasons.append("bass conflict") }
         if isVeryShort { reasons.append("fade<3s") }
 
         let reason = useFilters ? "Filtros ON: \(reasons.joined(separator: ", "))" : "Filtros OFF: mezcla simple"
 
         return FilterDecisionResult(
             useFilters: useFilters, useAggressiveFilters: useAggressive,
-            energyDiff: energyDiff, bpmDiff: bpmDiff, reason: reason
+            energyDiff: abs(profile.energyGap), bpmDiff: profile.bpmDiff, reason: reason
         )
     }
 
@@ -922,21 +1187,17 @@ enum DJMixingService {
         let reason: String
     }
 
-    /// Decides whether to activate mid-range scoop and high-shelf cut on A.
-    /// - Mid scoop: activated when A has vocals in its outro AND B has vocals in its intro.
-    ///   This prevents the "vocal trainwreck" muddiness without cutting to a hard CUT transition.
-    /// - High-shelf: activated when A has moderate-to-high energy (>0.45), indicating
-    ///   hi-hats/cymbals that would clash with B's transients during overlap.
+    /// Refined DJ filter decisions using actual fade zone (entry point + fade duration known).
+    /// The profile provides the initial vocal assessment; this refines with precise zone info.
     static func decideDJFilters(
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis?,
+        profile: TransitionProfile,
         fadeDuration: Double,
         entryPoint: Double,
         bufferADuration: Double
     ) -> DJFilterResult {
-        let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError != true
-        let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
-        guard hasCurrent || hasNext else {
+        guard currentAnalysis != nil || nextAnalysis != nil else {
             return DJFilterResult(useMidScoop: false, useHighShelfCut: false, reason: "Sin analisis")
         }
 
@@ -944,67 +1205,44 @@ enum DJMixingService {
         var useHighShelf = false
         var reasons: [String] = []
 
-        // ── Mid Scoop: vocal overlap detection ──
-        // Priority: backend flags (definitive) → speechSegments (precise) → vocalStartTime (fallback).
+        // ── Mid Scoop: refine vocal overlap with actual crossfade zone ──
         if let current = currentAnalysis, let next = nextAnalysis {
             let crossfadeStartA = bufferADuration - fadeDuration
             let bOverlapEnd = entryPoint + fadeDuration
 
-            // Detect vocals in A's outro (crossfade zone)
-            let aHasVocalsInOutro: Bool
-            if current.hasOutroVocals {
-                // Backend flag is definitive — vocals confirmed in outro section
-                aHasVocalsInOutro = true
+            // Detect A vocals in crossfade zone (precise)
+            let aVocalsInZone: Bool
+            if current.hasVocalData && current.hasOutroVocals {
+                aVocalsInZone = true
             } else if current.hasVocalEndData && current.lastVocalTime > crossfadeStartA {
-                // Instrumental outro detection: vocals end after crossfade starts
-                aHasVocalsInOutro = true
+                aVocalsInZone = true
             } else if !current.speechSegments.isEmpty {
-                // Precise: any speech segment overlaps with the crossfade zone
-                aHasVocalsInOutro = current.speechSegments.contains { $0.end > crossfadeStartA }
+                aVocalsInZone = current.speechSegments.contains { $0.end > crossfadeStartA }
             } else {
-                // Fallback: vocalStartTime > 0 means song has vocals, and outro isn't pure instrumental
-                aHasVocalsInOutro = current.vocalStartTime > 0 &&
+                aVocalsInZone = current.vocalStartTime > 0 &&
                     (current.outroStartTime <= 0 || current.outroStartTime > crossfadeStartA)
             }
 
-            // Detect vocals in B's intro (entry zone)
-            let bHasVocalsInIntro: Bool
-            if next.hasIntroVocals {
-                // Backend flag is definitive — vocals confirmed in intro section
-                bHasVocalsInIntro = true
+            // Detect B vocals in entry zone (precise)
+            let bVocalsInZone: Bool
+            if next.hasVocalData && next.hasIntroVocals {
+                bVocalsInZone = true
             } else if !next.speechSegments.isEmpty {
-                // Precise: B has speech in the entry zone (entryPoint to entryPoint + fadeDuration)
-                bHasVocalsInIntro = next.speechSegments.contains { $0.start < bOverlapEnd && $0.end > entryPoint }
+                bVocalsInZone = next.speechSegments.contains { $0.start < bOverlapEnd && $0.end > entryPoint }
             } else {
-                // Fallback: vocals start within the fade window
-                bHasVocalsInIntro = next.vocalStartTime > 0 && next.vocalStartTime < bOverlapEnd
+                bVocalsInZone = next.vocalStartTime > 0 && next.vocalStartTime < bOverlapEnd
             }
 
-            if aHasVocalsInOutro && bHasVocalsInIntro {
+            if aVocalsInZone && bVocalsInZone {
                 useMidScoop = true
                 reasons.append("mid scoop: voces solapadas")
             }
         }
 
         // ── High-Shelf: energy-based hi-hat detection ──
-        // Songs with energy > 0.45 typically have prominent hi-hats/cymbals.
-        // Cut highs on A to let B's transients breathe.
-        // Use per-section energy: outro of A, intro of B (the overlapping sections).
-        let energyA: Double
-        if let cur = currentAnalysis, cur.hasEnergyProfile {
-            energyA = cur.energyOutro
-        } else {
-            energyA = currentAnalysis?.energy ?? 0.5
-        }
-        let energyB: Double
-        if let nxt = nextAnalysis, nxt.hasEnergyProfile {
-            energyB = nxt.energyIntro
-        } else {
-            energyB = nextAnalysis?.energy ?? 0.5
-        }
-        if energyA > 0.45 && energyB > 0.35 {
+        if profile.energyA > 0.45 && profile.energyB > 0.35 {
             useHighShelf = true
-            reasons.append("hi-shelf: energia A=\(String(format: "%.2f", energyA)) B=\(String(format: "%.2f", energyB))")
+            reasons.append("hi-shelf: energia A=\(String(format: "%.2f", profile.energyA)) B=\(String(format: "%.2f", profile.energyB))")
         }
 
         let reason = reasons.isEmpty ? "DJ filters OFF" : "DJ filters ON: \(reasons.joined(separator: ", "))"
@@ -1037,6 +1275,87 @@ enum DJMixingService {
         }
     }
 
+    // MARK: - Trigger Bias (outro side of the A↔B relationship)
+
+    struct TriggerBiasResult {
+        let bias: Double    // negative = earlier, positive = later, 0 = default
+        let reason: String
+    }
+
+    /// Calculates how much earlier or later the crossfade should trigger on A,
+    /// based on the A↔B relationship. This is the "outro" side of the profile.
+    ///
+    /// Default trigger = "as late as possible so fade fits before A ends".
+    /// Bias shifts it: negative = start earlier (longer overlap), positive = start later (tighter).
+    private static func calculateTriggerBias(
+        profile: TransitionProfile,
+        fadeDuration: Double
+    ) -> TriggerBiasResult {
+        var bias: Double = 0
+        var reasons: [String] = []
+
+        switch profile.character {
+        case .minimal:
+            // Both low energy — start much earlier for invisible, extended blend.
+            // The listener shouldn't notice the transition at all.
+            bias -= min(5, fadeDuration * 0.4)
+            reasons.append("minimal: trigger \(String(format: "%.1f", abs(bias)))s antes")
+
+        case .smooth:
+            // Incompatible BPMs or low affinity — start a bit earlier.
+            // More overlap time helps mask the genre/tempo jump.
+            bias -= min(3, fadeDuration * 0.25)
+            reasons.append("smooth: trigger \(String(format: "%.1f", abs(bias)))s antes")
+
+        case .dramatic:
+            if profile.energyFlow == .energyDown {
+                // A is hot, B is chill — start earlier for graceful descent.
+                // A needs time to die while B creeps in underneath.
+                bias -= min(4, fadeDuration * 0.3)
+                reasons.append("dramatic DOWN: trigger \(String(format: "%.1f", abs(bias)))s antes")
+            } else if profile.energyFlow == .energyUp {
+                // A is chill, B is hot — trigger late for maximum impact.
+                // B should arrive like a surprise, not a slow build.
+                bias += min(2, fadeDuration * 0.15)
+                reasons.append("dramatic UP: trigger \(String(format: "%.1f", bias))s despues")
+            }
+            // steady + dramatic (harmonic clash): default timing, just get through it
+
+        case .punch:
+            // Compatible BPMs — default timing is fine.
+            // But adjust for vocal/bass situations:
+            break
+        }
+
+        // ── Bass conflict: start earlier so filters have time to separate the low end ──
+        if profile.bassConflictRisk && bias > -3 {
+            let bassAdj = min(2, fadeDuration * 0.15)
+            bias -= bassAdj
+            reasons.append("bass conflict: -\(String(format: "%.1f", bassAdj))s")
+        }
+
+        // ── Vocal overlap: if both songs have vocals, start earlier
+        // so A's vocals have time to fade before B's vocals enter ──
+        if profile.vocalOverlapRisk == .both && bias > -2 {
+            let vocalAdj = min(2, fadeDuration * 0.2)
+            bias -= vocalAdj
+            reasons.append("vocal overlap: -\(String(format: "%.1f", vocalAdj))s")
+        }
+
+        // ── High style affinity: can afford slightly later trigger (they blend naturally) ──
+        if profile.styleAffinity > 0.8 && profile.character == .punch {
+            bias += 1.0
+            reasons.append("alta afinidad: +1s")
+        }
+
+        let reason = reasons.isEmpty
+            ? "Trigger bias: 0 (default)"
+            : "Trigger bias: \(bias >= 0 ? "+" : "")\(String(format: "%.1f", bias))s (\(reasons.joined(separator: ", ")))"
+        print("[DJMixingService] \(reason)")
+
+        return TriggerBiasResult(bias: bias, reason: reason)
+    }
+
     // MARK: - Transition Type
 
     struct TransitionTypeResult {
@@ -1044,112 +1363,135 @@ enum DJMixingService {
         let reason: String
     }
 
+    /// Transition type — driven by profile relationship.
+    /// The character biases the selection: punch→BEAT_MATCH, smooth→NATURAL_BLEND, etc.
     static func decideTransitionType(
         currentAnalysis: SongAnalysis?,
         nextAnalysis: SongAnalysis?,
+        profile: TransitionProfile,
         entryPoint: Double,
         fadeDuration: Double,
         isBeatSynced: Bool,
         useFilters: Bool,
-        useAggressiveFilters: Bool,
-        needsAnticipation: Bool,
-        anticipationTime: Double,
-        bufferADuration: Double
+        bufferADuration: Double,
+        hasVocalOverlap: Bool = false
     ) -> TransitionTypeResult {
-        let hasCurrent = currentAnalysis != nil && currentAnalysis?.hasError != true
-        let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
-
-        // Determine if A ends abruptly.
-        // CRITICAL: only mark as abrupt when we have REAL outro data that confirms it.
-        // Without data (hasOutroData=false), assume normal ending (safe default).
+        // ── Abruptness detection ──
         var isAAbrupt = false
-        if hasCurrent, let current = currentAnalysis {
+        if let current = currentAnalysis, current.hasError != true {
             if current.hasOutroData {
-                // Abrupt = outro starts very late (within last 2s).
-                // outroStartTime <= 0 with hasOutroData=true is ambiguous (whole-song outro,
-                // ambient track) — NOT abrupt, treat as normal.
                 isAAbrupt = current.outroStartTime >= bufferADuration - 2 && current.outroStartTime > 0
             }
-            // No outro data → assume normal (not abrupt)
-        } else {
-            // No analysis at all → conservative: only abrupt if fade is very short
+        } else if currentAnalysis == nil {
             isAAbrupt = fadeDuration < 3
         }
 
-        // Determine if B starts abruptly.
-        // Same logic: only trust real intro data.
         var isBAbrupt = false
-        if hasNext, let next = nextAnalysis {
+        if let next = nextAnalysis, next.hasError != true {
             if next.hasIntroData {
-                // Abrupt = intro ends very quickly (< 2s) AND entry point is near it.
-                // If entry point is far past the intro (e.g., entryPoint=30, introEnd=1.5),
-                // the intro structure is irrelevant — we're entering mid-song, not at the start.
                 isBAbrupt = next.introEndTime < 2 && entryPoint < 5
             }
-            // No intro data → assume normal (not abrupt)
-        } else {
+        } else if nextAnalysis == nil {
             isBAbrupt = fadeDuration < 3
         }
+
+        let bpmCompatible = profile.bpmRelationship != .incompatible
 
         var type: TransitionType = .crossfade
         var reason = "Transicion normal"
 
-        // Very short fades (< 3s): hold→drop curves don't have time to develop.
-        // Force CUT — a clean quick switch sounds better than a rushed crossfade.
+        // Very short fades: force CUT
         if fadeDuration < 3 {
             type = .cut
             reason = "Fade muy corto (\(String(format: "%.1f", fadeDuration))s) → CUT directo"
-        } else if isBeatSynced && !isAAbrupt && !isBAbrupt {
-            type = .beatMatchBlend
-            reason = "Beats sincronizados → BEAT_MATCH_BLEND"
-        } else if isAAbrupt && isBAbrupt {
-            if fadeDuration < 4 {
-                type = .cut
-                reason = "Ambos abruptos + fade corto → CUT"
-            } else {
-                type = .eqMix
-                reason = "Ambos abruptos + fade mantenido ��� EQ_MIX"
+        }
+        // ── Character-biased selection ──
+        else {
+            switch profile.character {
+            case .minimal:
+                // Both low energy — gentle blend, no beat matching needed
+                type = .naturalBlend
+                reason = "Minimal (ambos baja energia) → NATURAL_BLEND suave"
+
+            case .smooth:
+                // Incompatible BPMs or low affinity — smooth crossfade
+                if profile.bpmRelationship == .incompatible {
+                    type = .naturalBlend
+                    reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff))) → NATURAL_BLEND"
+                } else {
+                    type = .crossfade
+                    reason = "Smooth blend (afinidad=\(String(format: "%.2f", profile.styleAffinity))) → CROSSFADE"
+                }
+
+            case .dramatic:
+                // Big energy change or harmonic clash
+                if profile.energyFlow == .energyUp && bpmCompatible && isBeatSynced {
+                    // Energy rising with compatible BPMs — can do an impactful beat-matched entry
+                    type = .beatMatchBlend
+                    reason = "Dramatic UP + BPMs compatibles → BEAT_MATCH_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
+                } else if profile.energyFlow == .energyDown {
+                    // Energy dropping — gentle fade, let A die gracefully
+                    type = .naturalBlend
+                    reason = "Dramatic DOWN → NATURAL_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
+                } else if profile.harmonic.compatibility == .clash {
+                    // Harmonic clash with steady energy — crossfade (shorter, from fade duration)
+                    type = .crossfade
+                    reason = "Clash armonico → CROSSFADE corto"
+                } else {
+                    type = .crossfade
+                    reason = "Dramatic steady → CROSSFADE"
+                }
+
+            case .punch:
+                // Compatible BPMs, good affinity — full DJ treatment
+                if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
+                    type = .stemMix
+                    reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))"
+                } else if isBeatSynced && !isAAbrupt && !isBAbrupt {
+                    type = .beatMatchBlend
+                    reason = "Punch + beats sync (diff=\(String(format: "%.1f", profile.bpmDiff))) → BEAT_MATCH_BLEND"
+                } else if isAAbrupt && isBAbrupt {
+                    if fadeDuration < 4 {
+                        type = .cut
+                        reason = "Ambos abruptos + fade corto → CUT"
+                    } else {
+                        type = .eqMix
+                        reason = "Ambos abruptos + fade largo → EQ_MIX"
+                    }
+                } else if isAAbrupt && !isBAbrupt {
+                    type = .cutAFadeInB
+                    reason = "A abrupto, B suave → CUT_A_FADE_IN_B"
+                } else if !isAAbrupt && isBAbrupt {
+                    type = .fadeOutACutB
+                    reason = "A suave, B abrupto → FADE_OUT_A_CUT_B"
+                } else {
+                    // Punch but not beat synced — still try to sound intentional
+                    type = .crossfade
+                    reason = "Punch sin beat sync → CROSSFADE"
+                }
             }
-        } else if isAAbrupt && !isBAbrupt {
-            type = .cutAFadeInB
-            reason = "A abrupto, B suave → CUT_A_FADE_IN_B"
-        } else if !isAAbrupt && isBAbrupt {
-            type = .fadeOutACutB
-            reason = "A suave, B abrupto → FADE_OUT_A_CUT_B"
-        } else {
-            type = .naturalBlend
-            reason = "Ambos suaves → NATURAL_BLEND"
         }
 
-        // Safety: extreme BPM jump (with harmonic BPM detection for half/double tempo)
-        let rawBpmA = currentAnalysis?.bpm ?? 120
-        let rawBpmB = nextAnalysis?.bpm ?? 120
-        let bpmB_normalized = harmonicBPM(rawBpmA, rawBpmB)
-        let effectiveBpmDiff = abs(rawBpmA - bpmB_normalized)
-        // Threshold is higher when filters are active (they mask rhythmic clashing)
+        // ── Safety: extreme BPM jump override ──
         let bpmCutThreshold: Double = useFilters ? 25 : 15
-        if effectiveBpmDiff > bpmCutThreshold && !isBeatSynced && fadeDuration > 3 {
+        if profile.bpmDiff > bpmCutThreshold && fadeDuration > 3 && type != .cut {
             type = .cut
-            let normalizedNote = bpmB_normalized != rawBpmB ? " (norm:\(Int(bpmB_normalized)))" : ""
-            reason = "Polirritmia evitada (A:\(Int(rawBpmA)) B:\(Int(rawBpmB))\(normalizedNote)) → CUT forzado"
+            let normalizedNote = profile.bpmBNormalized != profile.bpmB ? " (norm:\(Int(profile.bpmBNormalized)))" : ""
+            reason = "Polirritmia evitada (A:\(Int(profile.bpmA)) B:\(Int(profile.bpmB))\(normalizedNote) diff=\(String(format: "%.1f", profile.bpmDiff))) → CUT forzado"
         }
 
-        // Safety: vocal trainwreck detection
-        // Uses backend flags (definitive) → lastVocalTime → speechSegments → vocalStartTime fallback
-        if hasCurrent, hasNext, let current = currentAnalysis, let next = nextAnalysis {
-            // vocalBStart = how far into B's playback vocals begin (relative to entryPoint).
-            // Negative means vocals already started before our entry point → vocals from the start.
-            let vocalBStart = next.vocalStartTime - entryPoint
-            // negative = already singing at entry; only trust if vocalStartTime was actually set
-            let bHasVocalsInFade = next.vocalStartTime > 0 && vocalBStart < fadeDuration
+        // ── Safety: vocal trainwreck — refine with actual fade zone ──
+        if let current = currentAnalysis, current.hasError != true,
+           let next = nextAnalysis, next.hasError != true,
+           type != .cut && type != .stemMix {
 
-            // Also check via backend flag
+            let vocalBStart = next.vocalStartTime - entryPoint
+            let bHasVocalsInFade = next.vocalStartTime > 0 && vocalBStart < fadeDuration
             let bIntroVocalOverlap = next.hasIntroVocals || bHasVocalsInFade
 
             if bIntroVocalOverlap {
                 let safeOutroA = bufferADuration - fadeDuration
 
-                // Detect A vocals at crossfade zone — priority: flag → lastVocalTime → speechSegments → fallback
                 var aHasVocalsAtEnd = false
                 if current.hasOutroVocals {
                     aHasVocalsAtEnd = true
@@ -1158,17 +1500,13 @@ enum DJMixingService {
                 } else if !current.speechSegments.isEmpty {
                     aHasVocalsAtEnd = current.speechSegments.contains { $0.end > safeOutroA }
                 } else {
-                    aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA) && current.vocalStartTime > 0
+                    aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA)
+                        && current.vocalStartTime > 0
                 }
 
-                if aHasVocalsAtEnd && type != .cut {
-                    // Before forcing CUT, check if B has an instrumental intro before vocals.
-                    // If so, the crossfade can use the instrumental section cleanly and
-                    // A's volume will have faded before B's vocals start.
+                if aHasVocalsAtEnd {
                     let bInstrumentalWindow = next.vocalStartTime - entryPoint
                     if bInstrumentalWindow > fadeDuration * 0.6 {
-                        // B's vocals start after 60%+ of the fade — A will be mostly silent by then.
-                        // No trainwreck: keep current transition type, but ensure filters are active.
                         reason += " (vocal overlap OK: B vocals after \(String(format: "%.0f", bInstrumentalWindow))s)"
                     } else {
                         type = .cut
@@ -1190,15 +1528,10 @@ enum DJMixingService {
         let reason: String
     }
 
-    /// Decides whether to apply time-stretching during crossfade to match BPMs.
-    /// Only stretches when BPM difference is in the safe range (3-12 BPM).
-    /// Outside that range the quality loss isn't worth it.
     static func decideTimeStretch(
-        currentAnalysis: SongAnalysis?,
-        nextAnalysis: SongAnalysis?,
+        profile: TransitionProfile,
         transitionType: TransitionType
     ) -> TimeStretchResult {
-        // Only stretch on blend-type transitions — CUT transitions are too short
         switch transitionType {
         case .cut, .cutAFadeInB, .fadeOutACutB:
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
@@ -1206,74 +1539,127 @@ enum DJMixingService {
         default: break
         }
 
-        let bpmA = (currentAnalysis?.hasError != true) ? (currentAnalysis?.bpm ?? 0) : 0
-        let rawBpmB = (nextAnalysis?.hasError != true) ? (nextAnalysis?.bpm ?? 0) : 0
-
-        // Need valid BPMs from both songs
-        guard bpmA > 50 && bpmA < 250 && rawBpmB > 50 && rawBpmB < 250 else {
+        guard profile.bpmA > 50 && profile.bpmA < 250 &&
+              profile.bpmB > 50 && profile.bpmB < 250 else {
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
-                                     reason: "No stretch: BPM fuera de rango o desconocido")
+                                     reason: "No stretch: BPM fuera de rango")
         }
 
-        // Use harmonic BPM to detect half/double tempo (70 vs 140 = compatible)
-        let bpmB = harmonicBPM(bpmA, rawBpmB)
-        let diff = abs(bpmA - bpmB)
+        // Don't stretch when BPM confidence is low — stretching to a wrong BPM sounds terrible
+        if !profile.bpmTrusted {
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: BPM no confiable (confidence < 0.5)")
+        }
+
+        let diff = profile.bpmDiff
+        // Maximum allowed rate change — beyond this the pitch shift is audible
+        let maxRateChange: Float = 0.06  // 6%
 
         if diff < 3 {
-            // Close enough — no need to stretch
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: BPMs casi iguales (±\(String(format: "%.1f", diff)))")
         } else if diff <= 8 {
-            // Small difference — stretch B to match A (less noticeable)
-            let rateB = Float(bpmA / bpmB)
+            let rateB = Float(profile.bpmA / profile.bpmBNormalized)
+            if abs(rateB - 1.0) > maxRateChange {
+                return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                         reason: "No stretch: rate \(String(format: "%.1f", abs(rateB - 1.0) * 100))% > 6% (audible)")
+            }
             return TimeStretchResult(useTimeStretch: true, rateA: 1.0, rateB: rateB,
-                                     reason: "Stretch B→A: \(Int(bpmB))→\(Int(bpmA)) BPM (rate=\(String(format: "%.3f", rateB)))")
+                                     reason: "Stretch B→A: \(Int(profile.bpmBNormalized))→\(Int(profile.bpmA)) BPM (rate=\(String(format: "%.3f", rateB)))")
         } else if diff <= 12 {
-            // Medium difference — both stretch to midpoint
-            let mid = (bpmA + bpmB) / 2.0
-            let rateA = Float(mid / bpmA)
-            let rateB = Float(mid / bpmB)
+            let mid = (profile.bpmA + profile.bpmBNormalized) / 2.0
+            let rateA = Float(mid / profile.bpmA)
+            let rateB = Float(mid / profile.bpmBNormalized)
+            if abs(rateA - 1.0) > maxRateChange || abs(rateB - 1.0) > maxRateChange {
+                return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                         reason: "No stretch: rate change > 6% (A:\(String(format: "%.1f", abs(rateA - 1.0) * 100))% B:\(String(format: "%.1f", abs(rateB - 1.0) * 100))%)")
+            }
             return TimeStretchResult(useTimeStretch: true, rateA: rateA, rateB: rateB,
                                      reason: "Stretch ambos→\(Int(mid)) BPM: A=\(String(format: "%.3f", rateA)) B=\(String(format: "%.3f", rateB))")
         } else {
-            // >12 BPM — too much stretching, quality will suffer
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: diferencia demasiado grande (±\(Int(diff)) BPM)")
         }
     }
 
-    // MARK: - Harmonic Mixing (Camelot Wheel)
+    // MARK: - Instrumental Detection (refined with actual fade zone)
 
-    // MARK: - Harmonic BPM Normalization (double/half tempo detection)
+    /// Detect if A's outro is instrumental in the actual crossfade zone.
+    private static func detectOutroInstrumental(
+        currentAnalysis: SongAnalysis?,
+        profile: TransitionProfile,
+        bufferADuration: Double,
+        fadeDuration: Double
+    ) -> Bool {
+        guard let cur = currentAnalysis, cur.hasError != true else { return false }
+        let crossfadeStartA = bufferADuration - fadeDuration
 
-    /// Normalizes BPM of B to the harmonically closest ratio with A.
-    /// Detects half-time (70 vs 140), double-time (170 vs 85), and triplet/swing
-    /// relationships (e.g. 93 vs 140 ≈ 2/3 ratio).
-    /// Ratios: 1/3, 1/2, 2/3, 1, 3/2, 2, 3 — covers all common tempo relationships.
+        if cur.hasVocalEndData {
+            return cur.lastVocalTime < crossfadeStartA
+        } else if cur.hasVocalData && !cur.hasOutroVocals && cur.hasEnergyProfile {
+            if !cur.speechSegments.isEmpty {
+                let vocalsInOutro = cur.speechSegments.contains { $0.end > crossfadeStartA }
+                if vocalsInOutro {
+                    print("[DJMixingService] ⚠️ Backend says no outro vocals, but speechSegments disagree")
+                }
+                return !vocalsInOutro
+            }
+            return true
+        }
+        return false
+    }
+
+    /// Detect if B's intro is instrumental in the actual entry zone.
+    private static func detectIntroInstrumental(
+        nextAnalysis: SongAnalysis?,
+        profile: TransitionProfile,
+        entryPoint: Double,
+        fadeDuration: Double
+    ) -> Bool {
+        guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
+        let bEnd = entryPoint + fadeDuration
+
+        if nxt.hasVocalData && nxt.hasEnergyProfile && !nxt.hasIntroVocals {
+            if nxt.vocalStartTime > 0 && nxt.vocalStartTime <= bEnd {
+                print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalStart (\(String(format: "%.1f", nxt.vocalStartTime))s) is within fade zone")
+                return false
+            }
+            return true
+        } else if nxt.vocalStartTime > bEnd {
+            return true
+        } else if !nxt.speechSegments.isEmpty {
+            return !nxt.speechSegments.contains { $0.start < bEnd && $0.end > entryPoint }
+        }
+        return false
+    }
+
+    // MARK: - Harmonic BPM Normalization
+
     static func harmonicBPM(_ bpmA: Double, _ bpmB: Double) -> Double {
         guard bpmA > 0 && bpmB > 0 else { return bpmB }
-        let ratios: [Double] = [1.0/3, 0.5, 2.0/3, 1.0, 3.0/2, 2.0, 3.0]
+        // Only half-time and double-time are musically valid for beat matching.
+        // Ratios like 3:2 (e.g., 80→120) create false compatibles that require
+        // extreme time-stretch (>10%) and sound terrible in practice.
+        let ratios: [Double] = [0.5, 1.0, 2.0]
         let bestRatio = ratios.min(by: {
             abs(bpmB * $0 - bpmA) < abs(bpmB * $1 - bpmA)
         }) ?? 1.0
         let adjusted = bpmB * bestRatio
-        // Only apply if the adjusted BPM is actually closer to A
         return abs(adjusted - bpmA) < abs(bpmB - bpmA) ? adjusted : bpmB
     }
 
     // MARK: - Harmonic Mixing (Camelot Wheel)
 
     enum HarmonicCompatibility: Int {
-        case compatible = 0   // distance 0-1: perfect/excellent
-        case acceptable = 1   // distance 2: fine with filters
-        case tense = 2        // distance 3: needs aggressive filters
-        case clash = 3        // distance 4+: shorten fade, aggressive filters
+        case compatible = 0
+        case acceptable = 1
+        case tense = 2
+        case clash = 3
     }
 
     struct HarmonicPenalty {
         let distance: Int
         let compatibility: HarmonicCompatibility
-        /// Legacy convenience — true for tense and clash
         var isClash: Bool { compatibility == .tense || compatibility == .clash }
     }
 
