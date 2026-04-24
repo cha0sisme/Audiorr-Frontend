@@ -73,6 +73,7 @@ final class TransitionDiagnostics {
     var masterVolume: Float = 1.0
     var highpassFreqA: Float = 0
     var highpassFreqB: Float = 0
+    var filterTypeA: String = "hp"  // "hp" or "lp" (lowpass for energy-down)
     var lowshelfGainA: Float = 0
     var lowshelfGainB: Float = 0
     var panA: Float = 0
@@ -205,6 +206,7 @@ final class TransitionDiagnostics {
         masterVolume: Float,
         highpassFreqA: Float,
         highpassFreqB: Float,
+        filterTypeA: String = "hp",
         lowshelfGainA: Float,
         lowshelfGainB: Float,
         panA: Float,
@@ -219,6 +221,7 @@ final class TransitionDiagnostics {
             self.masterVolume = masterVolume
             self.highpassFreqA = highpassFreqA
             self.highpassFreqB = highpassFreqB
+            self.filterTypeA = filterTypeA
             self.lowshelfGainA = lowshelfGainA
             self.lowshelfGainB = lowshelfGainB
             self.panA = panA
@@ -226,7 +229,8 @@ final class TransitionDiagnostics {
             self.currentRateA = currentRateA
 
             // Buffer tick for log
-            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | hpA=%.0fHz hpB=%.0fHz | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
+            let label = filterTypeA == "lp" ? "lpA" : "hpA"
+            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz hpB=%.0fHz | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
                               elapsed, volumeA, volumeB, masterVolume,
                               highpassFreqA, highpassFreqB,
                               lowshelfGainA, lowshelfGainB,

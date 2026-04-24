@@ -431,10 +431,7 @@ enum DJMixingService {
         // ── 4. Filter decisions — driven by profile ──
         let filter = decideFilterUsage(profile: profile, fadeDuration: fade.duration)
 
-        // ── 5. Anticipation ──
-        let anticipation = decideAnticipation(fadeDuration: fade.duration, entryPoint: entry.entryPoint)
-
-        // ── 6. DJ-grade filters (mid scoop + high shelf) — refined with actual fade zone ──
+        // ── 5. DJ-grade filters (mid scoop + high shelf) — refined with actual fade zone ──
         let djFilters = decideDJFilters(
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
@@ -444,7 +441,7 @@ enum DJMixingService {
             bufferADuration: bufferADuration
         )
 
-        // ── 7. Transition type — driven by profile ──
+        // ── 6. Transition type — decided BEFORE anticipation so CUT can get its own tease ──
         let transition = decideTransitionType(
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
@@ -456,6 +453,9 @@ enum DJMixingService {
             bufferADuration: bufferADuration,
             hasVocalOverlap: djFilters.useMidScoop
         )
+
+        // ── 7. Anticipation — now CUT-aware, can "tease" B before the swap ──
+        let anticipation = decideAnticipation(fadeDuration: fade.duration, entryPoint: entry.entryPoint, transitionType: transition.type)
 
         // ── 8. Time-stretch ──
         let timeStretch = decideTimeStretch(profile: profile, transitionType: transition.type)
@@ -576,6 +576,17 @@ enum DJMixingService {
                 entryPoint = baseEntry
             }
             entryPoint = max(0, min(entryPoint, bufferDuration - 1))
+
+            // Vocal landmark alignment: if B enters after a clear vocal moment
+            // (chorusStart), shift entry back so B becomes audible (~3s fade lead
+            // time) right as the vocal hits. Creates a natural "reveal" — the
+            // incoming track's vocal is the moment the listener notices the new song.
+            if next.chorusStartTime > 5 && entryPoint > next.chorusStartTime {
+                let vocalAlignedEntry = max(0, next.chorusStartTime - 3.0)
+                print("[DJMixingService] 🎯 Smooth vocal alignment: entry \(String(format: "%.1f", entryPoint))s → \(String(format: "%.1f", vocalAlignedEntry))s (chorus at \(String(format: "%.1f", next.chorusStartTime))s)")
+                entryPoint = vocalAlignedEntry
+            }
+
             print("[DJMixingService] 🌊 Smooth: entry=\(String(format: "%.1f", entryPoint))s (introEnd=\(String(format: "%.1f", next.introEndTime))s, affinity=\(String(format: "%.2f", profile.styleAffinity)))")
             return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Smooth blend", usedFallback: false, isBeatSynced: false)
 
@@ -1217,8 +1228,9 @@ enum DJMixingService {
             } else if !current.speechSegments.isEmpty {
                 aVocalsInZone = current.speechSegments.contains { $0.end > crossfadeStartA }
             } else {
-                aVocalsInZone = current.vocalStartTime > 0 &&
-                    (current.outroStartTime <= 0 || current.outroStartTime > crossfadeStartA)
+                // No vocal data available — assume vocals present (safer for pop/hip-hop).
+                // outroInstrumental is a separate, more reliable signal that overrides later.
+                aVocalsInZone = true
             }
 
             // Detect B vocals in entry zone (precise)
@@ -1228,7 +1240,10 @@ enum DJMixingService {
             } else if !next.speechSegments.isEmpty {
                 bVocalsInZone = next.speechSegments.contains { $0.start < bOverlapEnd && $0.end > entryPoint }
             } else {
-                bVocalsInZone = next.vocalStartTime > 0 && next.vocalStartTime < bOverlapEnd
+                // No vocal data — assume vocals present in entry zone.
+                // Most songs have vocals starting early; false positives are harmless
+                // (mid scoop on instrumental just slightly reduces mids, barely noticeable).
+                bVocalsInZone = true
             }
 
             if aVocalsInZone && bVocalsInZone {
@@ -1238,7 +1253,10 @@ enum DJMixingService {
         }
 
         // ── High-Shelf: energy-based hi-hat detection ──
-        if profile.energyA > 0.45 && profile.energyB > 0.35 {
+        // Backend energy values are compressed (most music 0.05-0.42), so thresholds
+        // must be low enough to actually trigger. Hi-hat/cymbal cleanup is subtle and
+        // harmless even on false positives, so we err on the side of activating.
+        if profile.energyA > 0.20 && profile.energyB > 0.15 {
             useHighShelf = true
             reasons.append("hi-shelf: energia A=\(String(format: "%.2f", profile.energyA)) B=\(String(format: "%.2f", profile.energyB))")
         }
@@ -1255,10 +1273,18 @@ enum DJMixingService {
         let reason: String
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType) -> AnticipationResult {
         let hasEnoughIntro = entryPoint >= 5
-        let needs = fadeDuration < 8 && hasEnoughIntro
 
+        // CUT-specific: tease B filtered before the hard swap — this is how DJs
+        // preview the next track even when BPMs are incompatible.
+        if transitionType == .cut && hasEnoughIntro {
+            let time = min(4.0, max(2.5, entryPoint * 0.3))
+            return AnticipationResult(needsAnticipation: true, anticipationTime: time,
+                                      reason: "Anticipacion CUT: tease +\(String(format: "%.1f", time))s antes del swap")
+        }
+
+        let needs = fadeDuration < 8 && hasEnoughIntro
         if needs {
             let maxAnticipation = min(4, entryPoint * 0.3)
             let time = min(maxAnticipation, max(2, 10 - fadeDuration))
@@ -1474,7 +1500,7 @@ enum DJMixingService {
         }
 
         // ── Safety: extreme BPM jump override ──
-        let bpmCutThreshold: Double = useFilters ? 25 : 15
+        let bpmCutThreshold: Double = useFilters ? 35 : 20
         if profile.bpmDiff > bpmCutThreshold && fadeDuration > 3 && type != .cut {
             type = .cut
             let normalizedNote = profile.bpmBNormalized != profile.bpmB ? " (norm:\(Int(profile.bpmBNormalized)))" : ""
@@ -1554,7 +1580,7 @@ enum DJMixingService {
 
         let diff = profile.bpmDiff
         // Maximum allowed rate change — beyond this the pitch shift is audible
-        let maxRateChange: Float = 0.06  // 6%
+        let maxRateChange: Float = 0.08  // 8% — still inaudible with time-domain stretching
 
         if diff < 3 {
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
@@ -1563,17 +1589,17 @@ enum DJMixingService {
             let rateB = Float(profile.bpmA / profile.bpmBNormalized)
             if abs(rateB - 1.0) > maxRateChange {
                 return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
-                                         reason: "No stretch: rate \(String(format: "%.1f", abs(rateB - 1.0) * 100))% > 6% (audible)")
+                                         reason: "No stretch: rate \(String(format: "%.1f", abs(rateB - 1.0) * 100))% > 8% (audible)")
             }
             return TimeStretchResult(useTimeStretch: true, rateA: 1.0, rateB: rateB,
                                      reason: "Stretch B→A: \(Int(profile.bpmBNormalized))→\(Int(profile.bpmA)) BPM (rate=\(String(format: "%.3f", rateB)))")
-        } else if diff <= 12 {
+        } else if diff <= 15 {
             let mid = (profile.bpmA + profile.bpmBNormalized) / 2.0
             let rateA = Float(mid / profile.bpmA)
             let rateB = Float(mid / profile.bpmBNormalized)
             if abs(rateA - 1.0) > maxRateChange || abs(rateB - 1.0) > maxRateChange {
                 return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
-                                         reason: "No stretch: rate change > 6% (A:\(String(format: "%.1f", abs(rateA - 1.0) * 100))% B:\(String(format: "%.1f", abs(rateB - 1.0) * 100))%)")
+                                         reason: "No stretch: rate change > 8% (A:\(String(format: "%.1f", abs(rateA - 1.0) * 100))% B:\(String(format: "%.1f", abs(rateB - 1.0) * 100))%)")
             }
             return TimeStretchResult(useTimeStretch: true, rateA: rateA, rateB: rateB,
                                      reason: "Stretch ambos→\(Int(mid)) BPM: A=\(String(format: "%.3f", rateA)) B=\(String(format: "%.3f", rateB))")

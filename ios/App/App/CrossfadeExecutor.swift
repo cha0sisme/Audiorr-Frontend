@@ -193,8 +193,8 @@ class CrossfadeExecutor {
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -8),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
         lowpassA: nil,
-        midScoopA: nil,
-        highShelfA: nil
+        midScoopA: .init(frequency: 1500, bandwidth: 1.0, startGain: 0, endGain: -6),
+        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -4)
     )
 
     /// Stem-mix preset: B enters filtered to vocals/mids only, A stays full then exits via highpass.
@@ -343,6 +343,11 @@ class CrossfadeExecutor {
             let compensation = Float(1.0 + min(0.58, energyDiff * 0.8))
             self.maxVolumeB = min(1.0, maxVolumeB * compensation)
         }
+        // CUT-specific: rapid B entry makes energy drops more noticeable
+        if config.transitionType == .cut && energyDiff > 0.15 {
+            let cutBoost = Float(1.0 + min(0.3, (energyDiff - 0.15) * 0.6))
+            self.maxVolumeB = min(1.0, maxVolumeB * cutBoost)
+        }
 
         // Calcular timings (port exacto de CrossfadeEngine.calculateTimings líneas 244-289)
         timings = Self.calculateTimings(config: config)
@@ -350,6 +355,10 @@ class CrossfadeExecutor {
         // Compute beat-aligned bass swap point
         hasBeatData = config.beatIntervalA > 0 || config.beatIntervalB > 0
         bassSwapTime = Self.computeBassSwapTime(config: config, timings: timings)
+
+        // Pre-compute DJ filter flags so diagnostics reflect the final state
+        useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
+        useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
 
         // Log
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
@@ -477,7 +486,12 @@ class CrossfadeExecutor {
         // Instrumental outro: even earlier (15%) since A has no bass to clash with.
         // Stem mix: later (35%) — B's vocals need to be established before bass swap.
         let targetPercent: Double
-        if config.transitionType == .stemMix {
+        if config.transitionType == .cut || config.transitionType == .cutAFadeInB {
+            // CUT: bass swap when B actually enters — at ~75% of fade.
+            // A holds full volume until the last 3s, so swapping bass at 25%
+            // creates a bass-less hole. Align with B's entry.
+            targetPercent = 0.75
+        } else if config.transitionType == .stemMix {
             targetPercent = 0.35
         } else {
             targetPercent = config.isOutroInstrumental ? 0.15 : 0.25
@@ -502,9 +516,16 @@ class CrossfadeExecutor {
             for db in config.downbeatTimesB {
                 // Convert file-time to wall-clock
                 let wallTime = fadeStart + (db - bFileStart)
-                // Only consider downbeats within the early crossfade window (bass-first)
-                let minT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
-                let maxT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
+                // Downbeat window — CUT swaps late (near B's entry), others swap early
+                let minT: Double
+                let maxT: Double
+                if config.transitionType == .cut || config.transitionType == .cutAFadeInB {
+                    minT = fadeStart + fadeDur * 0.60
+                    maxT = fadeStart + fadeDur * 0.85
+                } else {
+                    minT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
+                    maxT = fadeStart + fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
+                }
                 guard wallTime >= minT && wallTime <= maxT else { continue }
                 let dist = abs(wallTime - targetTime)
                 if dist < bestDist {
@@ -518,8 +539,15 @@ class CrossfadeExecutor {
         // No downbeat array — snap to nearest beat grid of B
         let offsetInFade = fadeDur * targetPercent
         let nearestBeat = round(offsetInFade / beatInterval) * beatInterval
-        let minClamp = fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
-        let maxClamp = fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
+        let minClamp: Double
+        let maxClamp: Double
+        if config.transitionType == .cut || config.transitionType == .cutAFadeInB {
+            minClamp = fadeDur * 0.60
+            maxClamp = fadeDur * 0.85
+        } else {
+            minClamp = fadeDur * (config.isOutroInstrumental ? 0.05 : 0.10)
+            maxClamp = fadeDur * (config.isOutroInstrumental ? 0.35 : 0.45)
+        }
         let clampedBeat = max(minClamp, min(maxClamp, nearestBeat))
         return fadeStart + clampedBeat
     }
@@ -813,10 +841,9 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut, .cutAFadeInB:
-            // Hard cut: A stays full, then drops exponentially.
-            // Cap the cut zone to max 1.5s regardless of total fade duration,
-            // so long fades (e.g. 10s) don't keep both songs at full volume.
-            let cutDuration = min(1.5, duration)
+            // Hard cut: A stays full, then drops exponentially over 3s.
+            // Wider drop zone prevents the jarring "BAM" effect of 1.5s cuts.
+            let cutDuration = min(3.0, duration)
             let cutStart = max(0, 1.0 - cutDuration / duration)
             if progress < cutStart { return maxVolumeA }
             let cutP = Float((progress - cutStart) / (1.0 - cutStart))
@@ -922,12 +949,30 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut:
-            // Pure cut: B stays silent until the last 1.5s (matching A's cut zone),
-            // then ramps in fast (0.3s) so it's at full volume when A drops.
-            let cutZone = min(1.5, fadeInDuration)
+            // Cut: B enters during the last 3s (matching A's drop zone),
+            // ramping over 1.5s to avoid the jarring "BAM" effect.
+            // With anticipation, B was already teasing at 35% filtered.
+            let cutZone = min(3.0, fadeInDuration)
             let bRampStart = timings.fadeInEndTime - cutZone
-            if t < bRampStart { return 0 }
-            return maxVolumeB * Float(min(1.0, (t - bRampStart) / 0.3))
+            if t < bRampStart {
+                if config.needsAnticipation {
+                    // Don't freeze B at a flat level for long fades.
+                    // Gradually creep from 0.35 → 0.45 over max 4s, then hold at 0.45.
+                    let holdStart = timings.fadeInStartTime
+                    let holdDur = bRampStart - holdStart
+                    if holdDur > 0 {
+                        let elapsed = t - holdStart
+                        let creepDur = min(4.0, holdDur)
+                        let creepP = Float(min(1.0, elapsed / creepDur))
+                        return maxVolumeB * (0.35 + 0.10 * creepP)
+                    }
+                    return maxVolumeB * 0.35
+                }
+                return 0
+            }
+            let startLevel: Float = config.needsAnticipation ? 0.45 : 0.0
+            let rampP = Float(min(1.0, (t - bRampStart) / 1.5))
+            return maxVolumeB * (startLevel + (1.0 - startLevel) * rampP)
 
         case .fadeOutACutB:
             // A fades out gradually → B should wait until A is low enough (~60% of fade),
@@ -1121,7 +1166,8 @@ class CrossfadeExecutor {
             let vol = getMasterVolume?() ?? 1.0
             let freqA = eqA.bands[0].frequency
             let freqB = eqB.bands[0].frequency
-            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA * vol)) hp=\(String(format: "%.0f", freqA))Hz | B: vol=\(String(format: "%.3f", gB * vol)) hp=\(String(format: "%.0f", freqB))Hz | master=\(String(format: "%.2f", vol))")
+            let filterLabelA = useLowpassA ? "lp" : "hp"
+            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA * vol)) \(filterLabelA)=\(String(format: "%.0f", freqA))Hz | B: vol=\(String(format: "%.3f", gB * vol)) hp=\(String(format: "%.0f", freqB))Hz | master=\(String(format: "%.2f", vol))")
 
             // Publish real-time tick to diagnostics
             let lsGainA = eqA.bands[1].gain
@@ -1133,6 +1179,7 @@ class CrossfadeExecutor {
                 masterVolume: vol,
                 highpassFreqA: freqA,
                 highpassFreqB: freqB,
+                filterTypeA: useLowpassA ? "lp" : "hp",
                 lowshelfGainA: lsGainA,
                 lowshelfGainB: lsGainB,
                 panA: mixerA.pan,
@@ -1146,6 +1193,14 @@ class CrossfadeExecutor {
 
     private func applyFiltersA(at t: Double) {
         guard t >= timings.filterStartTime else { return }
+
+        // Short CUT: highpass ramp is pointless — the quick fade handles separation.
+        // Skip the entire filter sweep so A stays full-spectrum until the volume drop.
+        // (Lowshelf/bass swap still applies via applyBassSwap.)
+        if (config.transitionType == .cut || config.transitionType == .cutAFadeInB),
+           config.fadeDuration < 5.0 {
+            return
+        }
 
         // ── Filter pivot aligned with hold→drop ──
         // During A's "hold" phase (~first 60%), filters are gentle (A sounds mostly natural).
