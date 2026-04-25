@@ -101,6 +101,8 @@ class AudioEngineManager {
 
     private var progressTimer: Timer?
     private let progressInterval: TimeInterval = 0.25 // 4Hz
+    private var lastReportedTime: Double = 0
+    private var stalledTickCount: Int = 0
 
     // MARK: - Streaming mode (AVPlayer para canciones no cacheadas)
     // Cuando una canción no está en caché, usamos AVPlayer con la URL HTTP directamente
@@ -1413,6 +1415,8 @@ class AudioEngineManager {
         let start = { [weak self] in
             guard let self = self else { return }
             self.stopProgressTimer()
+            self.stalledTickCount = 0
+            self.lastReportedTime = 0
             self.progressTimer = Timer.scheduledTimer(withTimeInterval: self.progressInterval, repeats: true) { [weak self] _ in
                 guard let self = self, self.isPlaying else { return }
                 self.updateNowPlayingProgress()
@@ -1473,19 +1477,34 @@ class AudioEngineManager {
             }
         }
 
-        // SAFETY NET 2: if the player finished its segment but no completion handler fired
-        // (e.g., after crossfade swap where the handler was invalidated), detect stalled
-        // progress. After crossfade, the new playerA's scheduled segment ends silently —
-        // the CrossfadeExecutor's handler has isCancelled=true, and playSequence was incremented.
-        // Without this, the song stops and nothing ever advances.
-        if isPlaying && !isCrossfading && !isStreamMode && currentSongDuration > 0 {
-            if !playerA.isPlaying && rawTime > 0 {
-                print("[AudioEngineManager] ⚠️ SAFETY NET 2: playerA stopped but isPlaying=true (post-crossfade stall) — forcing advance at \(String(format: "%.1f", rawTime))s")
-                isPlaying = false
-                stopProgressTimer()
-                updateNowPlayingPlaybackState()
-                delegate?.audioEngineDidFinishSong()
+        // SAFETY NET 2: detect stalled playback — progress not advancing for 3+ seconds
+        // while isPlaying is true. This catches post-crossfade stalls where:
+        // - The new playerA's segment ended but the completion handler was discarded
+        //   (CrossfadeExecutor cancelled, playSequence incremented)
+        // - currentSongDuration is 0 so SAFETY NET 1 can't fire
+        // - Any other case where the engine thinks it's playing but audio stopped
+        if isPlaying && !isCrossfading && rawTime > 0 {
+            if abs(rawTime - lastReportedTime) < 0.01 {
+                // Time hasn't changed since last tick
+                stalledTickCount += 1
+                // 3s / 0.25s (progressInterval) = 12 ticks
+                if stalledTickCount >= 12 {
+                    print("[AudioEngineManager] ⚠️ SAFETY NET 2: progress stalled at \(String(format: "%.1f", rawTime))s for \(stalledTickCount) ticks — forcing advance")
+                    stalledTickCount = 0
+                    isPlaying = false
+                    stopProgressTimer()
+                    stopStreamPlayer()
+                    playerA.stop()
+                    updateNowPlayingPlaybackState()
+                    delegate?.audioEngineDidFinishSong()
+                }
+            } else {
+                stalledTickCount = 0
             }
+            lastReportedTime = rawTime
+        } else {
+            stalledTickCount = 0
+            lastReportedTime = rawTime
         }
 
         // SAFETY NET 3: if crossfade has been "in progress" for > 30s, it's stuck.
