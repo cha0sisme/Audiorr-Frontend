@@ -117,34 +117,18 @@ struct PlaylistsView: View {
     @State private var showSettings = false
     @State private var showCreateSheet = false
     @State private var newPlaylistName = ""
-    @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
     @State private var cachedSongCount = 0
     @State private var navigationPath = NavigationPath()
 
-    private let collapseThreshold: CGFloat = 44
-
-    private var stickyOpacity: CGFloat {
-        min(max((scrollY - collapseThreshold * 0.4) / (collapseThreshold * 0.6), 0), 1)
-    }
-    private var largeTitleOpacity: CGFloat {
-        1 - min(max(scrollY / collapseThreshold, 0), 1)
-    }
-
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    largeHeader
-                    content
-                }
-            }
-            .ignoresSafeArea(edges: .top)
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-                scrollY = y
+                content
             }
             .background(Color(.systemBackground))
-            .toolbarBackground(stickyOpacity > 0.5 ? .visible : .hidden, for: .navigationBar)
+            .navigationTitle(L.playlists)
+            .navigationBarTitleDisplayMode(.large)
             .task {
                 await vm.loadIfNeeded()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
@@ -163,12 +147,6 @@ struct PlaylistsView: View {
                 SettingsView()
             }
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text(L.playlists)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .opacity(stickyOpacity)
-                }
                 if vm.isConfigured {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -196,22 +174,6 @@ struct PlaylistsView: View {
                 Text(L.newPlaylistPrompt)
             }
         }
-    }
-
-    // MARK: - Large title header
-
-    private var largeHeader: some View {
-        HStack(alignment: .bottom) {
-            Text(L.playlists)
-                .font(.system(size: 34, weight: .bold))
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
-        .padding(.top, UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.windows.first?.safeAreaInsets.top ?? 59)
-        .opacity(largeTitleOpacity)
     }
 
     @ViewBuilder

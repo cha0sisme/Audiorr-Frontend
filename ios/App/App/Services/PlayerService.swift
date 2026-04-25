@@ -128,7 +128,16 @@ final class PlayerService {
 
     @MainActor
     func playSmartMix(playlistId: String) {
-        SmartMixManager.shared.playGenerated()
+        let mix = SmartMixManager.shared.generatedMix
+        guard !mix.isEmpty else { return }
+
+        if NowPlayingState.shared.isRemote {
+            ConnectService.shared.sendRemotePlaylist(mix, startIndex: 0)
+            return
+        }
+        currentContextUri = "smartmix:\(playlistId)"
+        currentContextName = "SmartMix"
+        QueueManager.shared.play(songs: mix, startIndex: 0)
     }
 
     func updateSmartMixStatus(playlistId: String, status: String) {

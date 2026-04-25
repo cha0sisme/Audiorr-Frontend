@@ -19,6 +19,13 @@ struct CanvasView: View {
             .onChange(of: url) { _, newUrl in
                 replaceItem(with: newUrl)
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                // AVPlayer pauses video rendering when the app enters background.
+                // On return, resume if music is still playing.
+                if NowPlayingState.shared.isPlaying {
+                    player?.play()
+                }
+            }
     }
 
     private func setupPlayer() {

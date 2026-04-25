@@ -26,11 +26,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         configureIOBufferForRoute()
 
-        // Restore persisted theme preference
-        if UserDefaults.standard.object(forKey: "audiorr_isDark") != nil {
-            AppTheme.shared.isDark = UserDefaults.standard.bool(forKey: "audiorr_isDark")
-        }
-        // Apply to windows once scene is connected (didSet fires before windows exist)
+        // Apply persisted theme once scene is connected (didSet fires before windows exist)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             AppTheme.shared.applyToWindows()
         }
@@ -150,10 +146,17 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         })
         let hostVC = UIHostingController(rootView: AnyView(
             loginView
-                .preferredColorScheme(AppTheme.shared.isDark ? .dark : .light)
+                .preferredColorScheme(AppTheme.shared.colorScheme)
         ))
         hostVC.view.translatesAutoresizingMaskIntoConstraints = false
-        hostVC.view.overrideUserInterfaceStyle = AppTheme.shared.isDark ? .dark : .light
+        let uiStyle: UIUserInterfaceStyle = {
+            switch AppTheme.shared.mode {
+            case .system: return .unspecified
+            case .light:  return .light
+            case .dark:   return .dark
+            }
+        }()
+        hostVC.view.overrideUserInterfaceStyle = uiStyle
 
         guard let rootVC = win.rootViewController else { return }
         rootVC.addChild(hostVC)

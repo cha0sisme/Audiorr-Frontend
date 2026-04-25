@@ -1,29 +1,32 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║                                                                      ║
-// ║   SmartMix Algorithm v3.0 — "Harmonic Flow"                          ║
+// ║   SmartMix Algorithm v4.0 — "Deep Flow"                              ║
 // ║                                                                      ║
 // ║   Audiorr — Audiophile-grade music player                            ║
 // ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
 // ║                                                                      ║
-// ║   Intelligent playlist reordering using Camelot harmonic analysis,   ║
-// ║   BPM arc shaping, energy flow optimization, vocal clash avoidance,  ║
-// ║   and greedy sequencing with local 2-opt refinement.                  ║
+// ║   Transition-quality-aware playlist reordering using DJMixingService  ║
+// ║   grade analysis: multi-layer vocal clash detection (speechSegments   ║
+// ║   fallback chain), BPM confidence gating, structural compatibility   ║
+// ║   (instrumental intro/outro pairing), style affinity scoring,         ║
+// ║   Essentia BPM cross-validation, cuePoint/fade-aware estimation.     ║
 // ║                                                                      ║
 // ║   v1.0 — JS smartMixUtils.ts (basic Camelot + BPM sorting)           ║
 // ║   v2.0 — Native Swift port (greedy + swap optimization)              ║
-// ║   v3.0 — Harmonic Flow: harmonicBPM, energy boost key jumps,         ║
-// ║          smooth energy valley detection, vocal trainwreck scoring,    ║
-// ║          closing song selection, BPM arc shaping, robust caching,    ║
-// ║          balanced scoring weights, efficient 2-opt with windowing    ║
+// ║   v3.0 — Harmonic Flow: harmonicBPM, energy boost, vocal scoring     ║
+// ║   v4.0 — Deep Flow: full backend analysis, structural compatibility, ║
+// ║          multi-layer vocal clash, BPM confidence, style affinity      ║
 // ║                                                                      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
 import Foundation
 import CryptoKit
 
-/// SmartMix v3.0 "Harmonic Flow" — intelligent playlist reordering for optimal DJ flow.
-/// Analyzes songs via Audiorr Backend, sorts them using harmonic compatibility,
-/// energy arc shaping, BPM progression, and vocal clash avoidance.
+/// SmartMix v4.0 "Deep Flow" — transition-quality-aware playlist reordering.
+/// Analyzes songs via Audiorr Backend, sorts them using the full analysis data
+/// that DJMixingService uses for crossfade decisions: harmonic compatibility,
+/// structural intro/outro pairing, multi-layer vocal clash detection,
+/// BPM confidence gating, style affinity, and energy arc shaping.
 @MainActor @Observable
 final class SmartMixManager {
 
@@ -60,7 +63,7 @@ final class SmartMixManager {
         progress = (0, songs.count)
 
         let signature = Self.signature(songs)
-        let cacheKey = "\(playlistId)_\(signature)"
+        let cacheKey = "\(playlistId)_v4_\(signature)"
 
         // Check cache
         if let cached = cache[cacheKey] {
@@ -151,10 +154,75 @@ final class SmartMixManager {
         let song: NavidromeSong
         let analysis: AnalysisCacheService.AnalysisResult?
 
+        // ── Core (v3.0) ──
         var bpm: Double { analysis?.bpm ?? 120 }
         var energy: Double { analysis?.energy ?? 0.5 }
         var key: String? { analysis?.key }
         var danceability: Double { analysis?.danceability ?? 0.5 }
+
+        // ── Energy profile (3-part) ──
+        var energyProfile: AnalysisCacheService.AnalysisResult.EnergyProfile? { analysis?.energyProfile }
+        var energyIntro: Double { energyProfile?.intro ?? energy }
+        var energyMain: Double { energyProfile?.main ?? energy }
+        var energyOutro: Double { energyProfile?.outro ?? energy }
+        var hasOutroVocals: Bool { energyProfile?.outroVocals ?? false }
+        var hasIntroVocals: Bool { energyProfile?.introVocals ?? false }
+
+        // ── Structural boundaries ──
+        var outroStartTime: Double? { analysis?.outroStartTime }
+        var introEndTime: Double? { analysis?.introEndTime }
+        var duration: Double { song.duration ?? 240 }
+
+        // ── Vocal timing ──
+        var vocalStartTime: Double? { analysis?.vocalStartTime }
+        var lastVocalTime: Double? { analysis?.lastVocalTime }
+        var speechSegments: [AnalysisCacheService.AnalysisResult.SpeechSegment] { analysis?.speechSegments ?? [] }
+
+        // ── Transition quality ──
+        var cuePoint: Double? { analysis?.cuePoint }
+        var fadeInDuration: Double? { analysis?.fadeInDuration }
+        var fadeOutDuration: Double? { analysis?.fadeOutDuration }
+
+        // ── BPM confidence ──
+        var bpmConfidence: Double { analysis?.bpmConfidence ?? 1.0 }
+        var bpmEssentia: Double? { analysis?.bpmEssentia }
+
+        // ── Structure ──
+        var chorusStructure: [AnalysisCacheService.AnalysisResult.StructureSegment]? { analysis?.chorusStructure ?? analysis?.structure }
+
+        // ── Pre-computed: instrumental lengths (cached for hot loop performance) ──
+        let cachedInstrumentalOutro: Double
+        let cachedInstrumentalIntro: Double
+
+        init(song: NavidromeSong, analysis: AnalysisCacheService.AnalysisResult?) {
+            self.song = song
+            self.analysis = analysis
+            let dur = song.duration ?? 240
+
+            // Instrumental outro length
+            if let lvt = analysis?.lastVocalTime, lvt > 0 {
+                cachedInstrumentalOutro = max(0, dur - lvt)
+            } else if analysis?.energyProfile?.outroVocals == true {
+                cachedInstrumentalOutro = 0
+            } else if let outro = analysis?.outroStartTime, outro > 0 {
+                cachedInstrumentalOutro = dur - outro
+            } else {
+                cachedInstrumentalOutro = 15 // unknown, assume moderate
+            }
+
+            // Instrumental intro length
+            if analysis?.energyProfile?.introVocals == true {
+                cachedInstrumentalIntro = 0
+            } else if let vs = analysis?.vocalStartTime, vs > 0 {
+                cachedInstrumentalIntro = vs
+            } else if let segs = analysis?.speechSegments, let first = segs.first {
+                cachedInstrumentalIntro = first.start
+            } else if let introEnd = analysis?.introEndTime, introEnd > 0 {
+                cachedInstrumentalIntro = introEnd
+            } else {
+                cachedInstrumentalIntro = 10 // unknown, assume moderate
+            }
+        }
     }
 
     private func sortSongs(songs: [NavidromeSong], analysisMap: [String: AnalysisCacheService.AnalysisResult]) -> [NavidromeSong] {
@@ -215,25 +283,23 @@ final class SmartMixManager {
         var bestScore = -Double.infinity
 
         for (i, song) in songs.enumerated() {
-            guard let ana = song.analysis else { continue }
+            guard song.analysis != nil else { continue }
             var score: Double = 0
 
             // Comfortable BPM
-            let bpm = ana.bpm ?? 120
+            let bpm = song.bpm
             if bpm >= 80 && bpm <= 120 { score += 5 }
             if bpm >= 90 && bpm <= 110 { score += 3 }
 
             // Moderate energy
-            let energy = ana.energy ?? 0.5
-            if energy < 0.45 { score += 4 }
-            if energy > 0.85 { score -= 25 }
+            if song.energy < 0.45 { score += 4 }
+            if song.energy > 0.85 { score -= 25 }
 
             // Moderate danceability
-            let dance = ana.danceability ?? 0.5
-            if dance >= 0.35 && dance <= 0.70 { score += 3 }
+            if song.danceability >= 0.35 && song.danceability <= 0.70 { score += 3 }
 
-            // Energy profile
-            if let profile = ana.energyProfile {
+            // Energy profile: gentle intro that builds
+            if let profile = song.energyProfile {
                 let intro = profile.intro ?? 0.5
                 let main = profile.main ?? 0.5
                 if intro < 0.40 { score += 5 }
@@ -242,6 +308,20 @@ final class SmartMixManager {
                 if let slope = profile.introSlope, slope > 0.05 { score += 4 }
             }
 
+            // v4.0: Instrumental intro — good opener has space to breathe
+            if song.cachedInstrumentalIntro > 12 { score += 6 }
+            else if song.cachedInstrumentalIntro > 6 { score += 3 }
+
+            // v4.0: BPM confidence — reliable BPM for building the arc
+            if song.bpmConfidence >= 0.7 { score += 3 }
+
+            // v4.0: Structural intro section
+            if let structure = song.chorusStructure,
+               let introSeg = structure.first(where: { $0.label.lowercased().contains("intro") }) {
+                let introLength = introSeg.endTime - introSeg.startTime
+                if introLength > 10 { score += 5 }
+            }
+
             if score > bestScore {
                 bestScore = score
                 bestIdx = i
@@ -250,40 +330,49 @@ final class SmartMixManager {
         return bestIdx
     }
 
-    // MARK: - Closing Song Selection (#6)
+    // MARK: - Closing Song Selection
 
-    /// Picks the best song to end the set: low energy, gentle outro, comfortable BPM.
     private func bestClosingIndex(_ songs: [AnalyzedSong]) -> Int {
         var bestIdx = 0
         var bestScore = -Double.infinity
 
         for (i, song) in songs.enumerated() {
-            guard let ana = song.analysis else { continue }
+            guard song.analysis != nil else { continue }
             var score: Double = 0
 
-            let energy = ana.energy ?? 0.5
-            let bpm = ana.bpm ?? 120
-
             // Prefer low energy
-            if energy < 0.40 { score += 8 }
-            if energy < 0.55 { score += 4 }
-            if energy > 0.80 { score -= 20 }
+            if song.energy < 0.40 { score += 8 }
+            if song.energy < 0.55 { score += 4 }
+            if song.energy > 0.80 { score -= 20 }
 
             // Comfortable/slow BPM
-            if bpm >= 70 && bpm <= 110 { score += 5 }
-            if bpm < 90 { score += 3 }
+            if song.bpm >= 70 && song.bpm <= 110 { score += 5 }
+            if song.bpm < 90 { score += 3 }
 
             // Low danceability is fine for closing
-            let dance = ana.danceability ?? 0.5
-            if dance < 0.50 { score += 3 }
+            if song.danceability < 0.50 { score += 3 }
 
             // Good outro (energy fades out)
-            if let profile = ana.energyProfile {
+            if let profile = song.energyProfile {
                 let outro = profile.outro ?? 0.5
                 if outro < 0.40 { score += 6 }
                 if let slope = profile.outroSlope, slope < -0.03 { score += 5 }
-                // Avoid songs with vocals at the very end (awkward cut)
-                if profile.outroVocals == true { score -= 4 }
+            }
+
+            // v4.0: Precise instrumental outro detection
+            let outroLen = song.cachedInstrumentalOutro
+            if outroLen > 20 { score += 8 }
+            else if outroLen > 10 { score += 5 }
+            else if outroLen < 3 { score -= 6 }
+
+            // v4.0: Natural fade-out
+            if let fadeOut = song.fadeOutDuration, fadeOut > 5 { score += 4 }
+
+            // v4.0: Precise vocal end vs coarse boolean
+            if let lvt = song.lastVocalTime {
+                if lvt < song.duration - 20 { score += 6 }
+            } else if song.hasOutroVocals {
+                score -= 4
             }
 
             if score > bestScore {
@@ -294,71 +383,96 @@ final class SmartMixManager {
         return bestIdx
     }
 
-    // MARK: - Compatibility Score
+    // MARK: - Compatibility Score (v4.0 — 9 dimensions)
 
     private func compatibility(_ a: AnalyzedSong, _ b: AnalyzedSong, history: [AnalyzedSong],
                                position: Int = 0, total: Int = 0) -> Double {
-        guard let anaA = a.analysis, let anaB = b.analysis else { return .infinity }
+        guard a.analysis != nil, b.analysis != nil else { return .infinity }
 
-        let bpmA = anaA.bpm ?? 120
-        let bpmB = anaB.bpm ?? 120
-        let energyA = anaA.energy ?? 0.5
-        let energyB = anaB.energy ?? 0.5
+        let bpmA = a.bpm
+        let bpmB = b.bpm
+        let energyA = a.energy
+        let energyB = b.energy
 
-        // ── Key penalty ──
-        let keyA = Self.camelotKey(anaA.key)
-        let keyB = Self.camelotKey(anaB.key)
-        var keyPenalty: Double = 15
-        if let kA = keyA, let kB = keyB {
-            keyPenalty = Self.camelotDistanceWeighted(kA, kB, energyA: energyA, energyB: energyB)
+        // ── 1. Key penalty — delegates to DJMixingService ──
+        let camelotA = Self.camelotKey(a.key)
+        let camelotB = Self.camelotKey(b.key)
+        let harmonic = DJMixingService.harmonicPenalty(keyA: camelotA, keyB: camelotB)
+        var keyPenalty: Double
+        switch harmonic.compatibility {
+        case .compatible: keyPenalty = 0
+        case .acceptable: keyPenalty = 5
+        case .tense:      keyPenalty = 12
+        case .clash:      keyPenalty = 20
+        }
+        // Energy boost discount: rising energy + large key jump = valid DJ energy boost
+        if energyB > energyA + 0.1 && harmonic.distance >= 5 {
+            keyPenalty *= 0.6
         }
 
         // Key fatigue: penalize repeating the same key 3+ times in recent history
         var keyFatiguePenalty: Double = 0
-        if history.count >= 3, let kB = keyB {
-            let recentKeys = history.suffix(3).compactMap { Self.camelotKey($0.analysis?.key) }
+        if history.count >= 3, let kB = camelotB {
+            let recentKeys = history.suffix(3).compactMap { Self.camelotKey($0.key) }
             if recentKeys.filter({ $0 == kB }).count >= 2 { keyFatiguePenalty = 8 }
         }
 
-        // ── BPM penalty — uses harmonicBPM for half/double tempo detection (#1) ──
+        // ── 2. BPM penalty — confidence-gated, Essentia cross-validated ──
         let harmonicB = DJMixingService.harmonicBPM(bpmA, bpmB)
         let bpmDiff = abs(bpmA - harmonicB)
-        let bpmPenalty = pow(bpmDiff, 1.4) / 8
+        var bpmPenalty = pow(bpmDiff, 1.4) / 8
 
-        // ── Energy penalty — smooth gradient, no cliff (#3) ──
+        // Reduce penalty when BPM is unreliable
+        let minConf = min(a.bpmConfidence, b.bpmConfidence)
+        if minConf < 0.5 {
+            bpmPenalty *= minConf / 0.5
+        }
+        // Essentia cross-validation: disagreement = less trust in BPM
+        if let essA = a.bpmEssentia, abs(essA - bpmA) / bpmA > 0.10 { bpmPenalty *= 0.7 }
+        if let essB = b.bpmEssentia, abs(essB - bpmB) / bpmB > 0.10 { bpmPenalty *= 0.7 }
+
+        // ── 3. Energy penalty (unchanged from v3.0) ──
         let energyDiff = abs(energyA - energyB)
         var energyPenalty = pow(energyDiff, 2) * 15
-        // Progressive energy valley penalty: the lower both are, the bigger the penalty
         let minEnergy = min(energyA, energyB)
         if minEnergy < 0.45 {
-            // 0.44 → small penalty, 0.20 → big penalty (smooth ramp)
             energyPenalty += pow(0.45 - minEnergy, 1.5) * 60
         }
 
-        // ── Transition penalty — vocal clash detection (#4) ──
+        // ── 4. Transition quality penalty (v4.0 — multi-layer) ──
         var transitionPenalty: Double = 12
-        if let profA = anaA.energyProfile, let profB = anaB.energyProfile {
+        if let profA = a.energyProfile, let profB = b.energyProfile {
             let outroA = profA.outro ?? 0.5
             let introB = profB.intro ?? 0.5
-            let profileDiff = abs(outroA - introB)
-            transitionPenalty = pow(profileDiff, 2) * 40
+            transitionPenalty = pow(abs(outroA - introB), 2) * 40
 
-            // Bonus for natural energy flow (A descending → B ascending)
+            // Layer 1: Energy slope continuity
             if let slopeA = profA.outroSlope, let slopeB = profB.introSlope {
                 if slopeA < -0.05 && slopeB > 0.05 { transitionPenalty -= 8 }
+                if slopeA > 0.05 && slopeB > 0.05 { transitionPenalty += 5 }
             }
 
-            // Vocal trainwreck: graduated penalty based on vocal overlap risk
-            let outroVocals = profA.outroVocals == true
-            let introVocals = profB.introVocals == true
-            if outroVocals && introVocals {
-                transitionPenalty += 18  // high risk — both have vocals at transition point
-            } else if outroVocals || introVocals {
-                transitionPenalty += 5   // moderate risk — one side has vocals
+            // Layer 2: Vocal clash (multi-level detection)
+            transitionPenalty += vocalClashPenalty(a, b)
+
+            // Layer 3: Structural compatibility (instrumental outro↔intro pairing)
+            let overlapRoom = min(a.cachedInstrumentalOutro, b.cachedInstrumentalIntro)
+            if overlapRoom > 15 { transitionPenalty -= 10 }
+            else if overlapRoom > 8 { transitionPenalty -= 5 }
+            else if overlapRoom < 3 { transitionPenalty += 8 }
+
+            // Layer 4: CuePoint alignment
+            if let cue = b.cuePoint, let introEnd = b.introEndTime {
+                if abs(cue - introEnd) < 3 { transitionPenalty -= 3 }
+            }
+
+            // Layer 5: Fade duration compatibility
+            if let fadeOut = a.fadeOutDuration, let fadeIn = b.fadeInDuration {
+                if fadeOut > 3 && fadeIn > 3 { transitionPenalty -= 4 }
             }
         }
 
-        // ── Artist penalty — normalized to same scale as other penalties (#2) ──
+        // ── 5. Artist penalty (unchanged) ──
         var artistPenalty: Double = 0
         if a.song.artist == b.song.artist {
             artistPenalty = 10
@@ -370,39 +484,46 @@ final class SmartMixManager {
             }
         }
 
-        // ── Danceability penalty ──
-        let danceDiff = abs((anaA.danceability ?? 0.5) - (anaB.danceability ?? 0.5))
-        let dancePenalty = pow(danceDiff, 2) * 15
+        // ── 6. Danceability penalty (unchanged) ──
+        let dancePenalty = pow(abs(a.danceability - b.danceability), 2) * 15
 
-        // ── BPM arc penalty — favor gradual BPM progression (#10) ──
+        // ── 7. BPM arc penalty (unchanged) ──
         var bpmArcPenalty: Double = 0
         if total > 4 && position > 0 {
             let progress = Double(position) / Double(total)
-            // Ideal BPM arc: start moderate, peak at 60-70%, descend
             let idealBpmFactor: Double
-            if progress < 0.15 {
-                idealBpmFactor = 0.4  // start moderate
-            } else if progress < 0.65 {
-                idealBpmFactor = 0.3 + progress  // ramp up
-            } else {
-                idealBpmFactor = max(0.3, 1.0 - (progress - 0.65) * 1.5)  // descend
-            }
-            // Penalize large BPM deviations from the arc's expected direction
+            if progress < 0.15 { idealBpmFactor = 0.4 }
+            else if progress < 0.65 { idealBpmFactor = 0.3 + progress }
+            else { idealBpmFactor = max(0.3, 1.0 - (progress - 0.65) * 1.5) }
+
             if history.count >= 2 {
                 let prevBpm = history.last!.bpm
                 let bpmDirection = harmonicB - prevBpm
-                // In the ascending phase, penalize going slower
                 if progress < 0.6 && bpmDirection < -8 {
                     bpmArcPenalty = abs(bpmDirection) * 0.3 * idealBpmFactor
                 }
-                // In the descending phase, penalize going much faster
                 if progress > 0.75 && bpmDirection > 10 {
                     bpmArcPenalty = bpmDirection * 0.4 * (1.0 - idealBpmFactor)
                 }
             }
         }
 
-        // ── Weighted sum — all penalties are on comparable scales (#2) ──
+        // ── 8. Style affinity bonus (v4.0 — rewards same-world adjacency) ──
+        let bpmAffinity = max(0, 1.0 - abs(bpmA - harmonicB) / 30.0)
+        let energyAffinity = max(0, 1.0 - abs(energyA - energyB) / 0.6)
+        let danceAffinity = max(0, 1.0 - abs(a.danceability - b.danceability) / 0.5)
+        let harmonicAffinity: Double
+        switch harmonic.compatibility {
+        case .compatible: harmonicAffinity = 1.0
+        case .acceptable: harmonicAffinity = 0.7
+        case .tense:      harmonicAffinity = 0.4
+        case .clash:      harmonicAffinity = 0.1
+        }
+        let styleAffinity = bpmAffinity * 0.35 + energyAffinity * 0.25
+                          + harmonicAffinity * 0.25 + danceAffinity * 0.15
+        let affinityBonus = -styleAffinity * 12
+
+        // ── Weighted sum ──
         return keyPenalty * 3.5
              + bpmPenalty * 2.0
              + energyPenalty * 1.2
@@ -411,6 +532,59 @@ final class SmartMixManager {
              + keyFatiguePenalty
              + dancePenalty * 0.8
              + bpmArcPenalty
+             + affinityBonus
+    }
+
+    // MARK: - Vocal Clash Detection (multi-layer fallback)
+
+    /// Multi-layer vocal overlap risk assessment.
+    /// Returns 0 (no risk) to ~16 (vocal trainwreck certain).
+    /// Mirrors DJMixingService's VocalOverlapRisk detection hierarchy.
+    private func vocalClashPenalty(_ a: AnalyzedSong, _ b: AnalyzedSong) -> Double {
+        // Detect A outro vocals (fallback chain: speechSegments > lastVocalTime > outroVocals)
+        let aOutroVocal: Bool
+        let aConfidence: Double
+
+        if !a.speechSegments.isEmpty {
+            let outroZone = a.duration - 20
+            aOutroVocal = a.speechSegments.contains { $0.end > outroZone }
+            aConfidence = 0.9
+        } else if let lvt = a.lastVocalTime {
+            aOutroVocal = lvt > a.duration - 20
+            aConfidence = 0.8
+        } else if a.hasOutroVocals {
+            aOutroVocal = true
+            aConfidence = 0.6
+        } else {
+            aOutroVocal = false
+            aConfidence = 0.4
+        }
+
+        // Detect B intro vocals (fallback chain: speechSegments > vocalStartTime > introVocals)
+        let bIntroVocal: Bool
+        let bConfidence: Double
+
+        if !b.speechSegments.isEmpty {
+            bIntroVocal = b.speechSegments.contains { $0.start < 20 }
+            bConfidence = 0.9
+        } else if let vs = b.vocalStartTime, vs > 0 {
+            bIntroVocal = vs < 20
+            bConfidence = 0.8
+        } else if b.hasIntroVocals {
+            bIntroVocal = true
+            bConfidence = 0.6
+        } else {
+            bIntroVocal = false
+            bConfidence = 0.4
+        }
+
+        let avgConfidence = (aConfidence + bConfidence) / 2
+        if aOutroVocal && bIntroVocal {
+            return 18 * avgConfidence   // both have vocals in transition zone
+        } else if aOutroVocal || bIntroVocal {
+            return 5 * (aOutroVocal ? aConfidence : bConfidence)
+        }
+        return 0
     }
 
     // MARK: - Swap Optimization (#5 — limited 2-opt for efficiency)
@@ -529,52 +703,6 @@ final class SmartMixManager {
     private static func camelotKey(_ key: String?) -> String? {
         guard let key else { return nil }
         return keyToCamelot[key]
-    }
-
-    /// Camelot distance with energy boost recognition (#7).
-    /// A +7 semitone jump (e.g. 5B→12B) is a valid energy boost move in DJ sets,
-    /// so it gets a reduced penalty when energy is rising.
-    private static func camelotDistanceWeighted(_ a: String, _ b: String,
-                                                 energyA: Double, energyB: Double) -> Double {
-        guard a.count >= 2, b.count >= 2 else { return 15 }
-        let numA = Int(a.dropLast()) ?? 0
-        let modeA = a.last!
-        let numB = Int(b.dropLast()) ?? 0
-        let modeB = b.last!
-
-        if a == b { return 0 }
-        if numA == numB { return 1 }  // same number, different mode = relative major/minor
-
-        var diff = abs(numA - numB)
-        if diff > 6 { diff = 12 - diff }
-        if modeA != modeB { diff += 1 }
-
-        // Energy boost: +7 semitone jump (diff=5 after wrapping) is a valid DJ move
-        // when transitioning to higher energy. Reduce penalty.
-        let rawDiff = abs(numA - numB)
-        let wrappedDiff = min(rawDiff, 12 - rawDiff)
-        if wrappedDiff >= 5 && wrappedDiff <= 7 && modeA == modeB && energyB > energyA + 0.1 {
-            return Double(diff) * 0.6  // 40% discount for energy boost moves
-        }
-
-        return Double(diff)
-    }
-
-    /// Legacy distance (unweighted) for cases where energy context isn't available.
-    private static func camelotDistance(_ a: String, _ b: String) -> Int {
-        guard a.count >= 2, b.count >= 2 else { return 15 }
-        let keyA = Int(a.dropLast()) ?? 0
-        let keyB = Int(b.dropLast()) ?? 0
-        let modeA = a.last!
-        let modeB = b.last!
-
-        if a == b { return 0 }
-        if keyA == keyB { return 1 }
-
-        var diff = abs(keyA - keyB)
-        if diff > 6 { diff = 12 - diff }
-        if modeA != modeB { diff += 1 }
-        return diff
     }
 
     // MARK: - Cache Signature (#9 — robust hash of all song IDs)

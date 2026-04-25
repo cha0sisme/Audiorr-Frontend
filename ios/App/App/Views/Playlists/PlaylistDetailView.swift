@@ -375,29 +375,21 @@ struct PlaylistDetailView: View {
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
 
         return HStack(spacing: 12) {
-            // Play
+            // Play — primary action, capsule with text
             Button {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
-                if BackendState.shared.isAvailable {
+                HStack(spacing: 7) {
                     Image(systemName: "play.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(labelColor)
-                        .frame(width: 40, height: 40)
-                        .background(fillColor, in: Circle())
-                } else {
-                    HStack(spacing: 7) {
-                        Image(systemName: "play.fill")
-                        Text(L.play)
-                            .fontWeight(.semibold)
-                    }
-                    .font(.system(size: 15))
-                    .foregroundStyle(labelColor)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 10)
-                    .background(fillColor, in: Capsule())
+                    Text(L.play)
+                        .fontWeight(.semibold)
                 }
+                .font(.system(size: 15))
+                .foregroundStyle(labelColor)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 10)
+                .background(fillColor, in: Capsule())
             }
 
             // Shuffle
@@ -405,79 +397,84 @@ struct PlaylistDetailView: View {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
-                if BackendState.shared.isAvailable {
-                    Image(systemName: "shuffle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(labelColor)
-                        .frame(width: 40, height: 40)
-                        .background(fillColor, in: Circle())
-                } else {
-                    HStack(spacing: 7) {
-                        Image(systemName: "shuffle")
-                        Text(L.shuffle)
-                            .fontWeight(.semibold)
-                    }
-                    .font(.system(size: 15))
+                Image(systemName: "shuffle")
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(labelColor)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 10)
-                    .background(fillColor, in: Capsule())
-                }
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
             }
 
-            // Download — only for user playlists (not editorial/smart/spotify)
-            if !vm.songs.isEmpty && !vm.displayPlaylist.isSystemPlaylist {
-                DownloadButton(
-                    groupId: vm.displayPlaylist.id,
-                    groupType: "playlist",
-                    title: vm.displayPlaylist.name,
-                    songs: vm.songs,
-                    fillColor: fillColor,
-                    labelColor: labelColor
-                )
-            }
-
-            // SmartMix + Star + More (only when backend is available)
+            // SmartMix (only when backend is available)
             if BackendState.shared.isAvailable {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
-
-                Button {
-                    vm.togglePinned()
-                } label: {
-                    Image(systemName: vm.isPinned ? "star.fill" : "star")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(vm.isPinned ? .yellow : labelColor)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            fillColor.opacity(vm.isPinned ? 0.85 : 1),
-                            in: Circle()
-                        )
-                }
-
-                // Context menu (ellipsis) — delete for user playlists
-                if !vm.displayPlaylist.isSystemPlaylist {
-                    Menu {
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label(L.deletePlaylist, systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(labelColor)
-                            .frame(width: 40, height: 40)
-                            .background(fillColor, in: Circle())
-                    }
-                }
             }
+
+            // Context menu — Download, Pin, Delete
+            overflowMenu(fillColor: fillColor, labelColor: labelColor)
         }
         .disabled(vm.isLoading)
     }
 
     @ViewBuilder
+    private func overflowMenu(fillColor: Color, labelColor: Color) -> some View {
+        let pl = vm.displayPlaylist
+        let hasSongs = !vm.songs.isEmpty
+        let hasMenuItems = hasSongs || BackendState.shared.isAvailable || !pl.isSystemPlaylist
+
+        if hasMenuItems {
+            Menu {
+                // Download (user playlists only)
+                if hasSongs && !pl.isSystemPlaylist {
+                    Button {
+                        DownloadManager.shared.downloadPlaylist(
+                            playlistId: pl.id,
+                            title: pl.name,
+                            songs: vm.songs,
+                            pin: false
+                        )
+                    } label: {
+                        Label(L.downloads, systemImage: "arrow.down.circle")
+                    }
+                }
+
+                // Pin / Unpin (backend only)
+                if BackendState.shared.isAvailable {
+                    Button {
+                        vm.togglePinned()
+                    } label: {
+                        Label(
+                            vm.isPinned ? L.unpin : L.pin,
+                            systemImage: vm.isPinned ? "star.slash" : "star"
+                        )
+                    }
+                }
+
+                // Delete (user playlists only)
+                if !pl.isSystemPlaylist {
+                    Divider()
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label(L.deletePlaylist, systemImage: "trash")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
+            }
+        }
+    }
+
+    /// SmartMix button — follows the App Store GET → ● → OPEN pattern:
+    /// idle (generate) → analyzing (spinner) → ready (play) → error (retry).
+    /// Each state changes the icon to communicate the *action*, not just status.
+    @ViewBuilder
     private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
         let status = vm.smartMixStatus
+        let isReady = status == .ready
 
         Button {
             switch status {
@@ -489,39 +486,51 @@ struct PlaylistDetailView: View {
             case .ready:
                 PlayerService.shared.playSmartMix(playlistId: vm.initialPlaylist.id)
             case .analyzing:
-                break // disabled
+                break
             }
         } label: {
             ZStack {
+                // Background — accent when ready, default otherwise
+                Circle()
+                    .fill(isReady ? Color.accentColor : fillColor)
+
                 switch status {
-                case .idle, .ready:
+                case .idle:
+                    // "Tap to generate" — the wand represents SmartMix
                     Image(systemName: "wand.and.stars")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(labelColor)
+                        .transition(.scale.combined(with: .opacity))
+
                 case .analyzing:
+                    // "Working…"
                     ProgressView()
                         .controlSize(.small)
                         .tint(labelColor)
-                case .error:
-                    Image(systemName: "wand.and.stars")
+                        .transition(.opacity)
+
+                case .ready:
+                    // "Tap to play your SmartMix" — play icon on accent background
+                    Image(systemName: "play.fill")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(labelColor.opacity(0.5))
+                        .foregroundStyle(.white)
+                        .transition(.scale.combined(with: .opacity))
+
+                case .error:
+                    // "Tap to retry"
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(labelColor.opacity(0.6))
+                        .transition(.scale.combined(with: .opacity))
                 }
             }
             .frame(width: 40, height: 40)
-            .background(fillColor, in: Circle())
+            .animation(.smooth(duration: 0.35), value: status)
         }
         .disabled(status == .analyzing || vm.songs.isEmpty)
+        .sensoryFeedback(.success, trigger: isReady)
     }
 
-    private func smartMixLabel(for status: SmartMixStatus) -> String {
-        switch status {
-        case .idle:      return "SmartMix"
-        case .analyzing: return L.analyzing
-        case .ready:     return "SmartMix"
-        case .error:     return L.retry
-        }
-    }
 
     // MARK: - Song list
 

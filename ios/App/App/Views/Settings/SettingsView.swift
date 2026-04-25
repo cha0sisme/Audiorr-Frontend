@@ -159,41 +159,37 @@ struct SettingsView: View {
     @State private var showSaveAlert = false
     @State private var showProfile = false
     @State private var alertMessage = ""
-    @State private var scrollY: CGFloat = 0
     @State private var backendURLOverride: String = ""
-
-    private let collapseThreshold: CGFloat = 44
-
-    private var stickyOpacity: CGFloat {
-        min(max((scrollY - collapseThreshold * 0.4) / (collapseThreshold * 0.6), 0), 1)
-    }
-    private var largeTitleOpacity: CGFloat {
-        1 - min(max(scrollY / collapseThreshold, 0), 1)
-    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                largeHeader
-                settingsContent
-            }
-        }
-        .ignoresSafeArea(edges: .top)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-            scrollY = y
+            settingsContent
         }
         .background(Color(.systemBackground))
-        .overlay(alignment: .top) {
-            stickyTitleBar
+        .navigationTitle(L.settings)
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            if !username.isEmpty && BackendState.shared.isAvailable {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showProfile = true } label: {
+                        ZStack {
+                            Circle()
+                                .fill(avatarColor(for: username))
+                            Text(avatarInitial(for: username))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 30, height: 30)
+                    }
+                }
+            }
         }
-        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showProfile) {
             UserProfileSheet(username: username)
         }
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
             vm.load()
-            // Restore diagnostics toggle state
             if UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
                 TransitionDiagnostics.debugModeEnabled = UserDefaults.standard.bool(forKey: "audiorr_diagnostics_enabled")
             }
@@ -216,80 +212,10 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Sticky title bar (replaces toolbar to avoid touch interception)
-
-    private var stickyTitleBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
-
-            Spacer()
-
-            Text(L.settings)
-                .font(.headline)
-                .lineLimit(1)
-                .opacity(stickyOpacity)
-
-            Spacer()
-
-            if !username.isEmpty && BackendState.shared.isAvailable {
-                Button { showProfile = true } label: {
-                    ZStack {
-                        Circle()
-                            .fill(avatarColor(for: username))
-                        Text(avatarInitial(for: username))
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(width: 30, height: 30)
-                }
-                .opacity(stickyOpacity)
-            } else {
-                Color.clear.frame(width: 30, height: 30)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.windows.first?.safeAreaInsets.top ?? 59)
-        .padding(.bottom, 10)
-        .background(.bar.opacity(stickyOpacity))
-    }
-
-    // MARK: - Large header
+    // MARK: - Helpers
 
     private var username: String {
         NavidromeService.shared.credentials?.username ?? ""
-    }
-
-    private var largeHeader: some View {
-        HStack(alignment: .bottom) {
-            Text(L.settings)
-                .font(.system(size: 34, weight: .bold))
-            Spacer()
-            if !username.isEmpty && BackendState.shared.isAvailable {
-                Button { showProfile = true } label: {
-                    ZStack {
-                        Circle()
-                            .fill(avatarColor(for: username))
-                        Text(avatarInitial(for: username))
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(width: 36, height: 36)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
-        .padding(.top, UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.windows.first?.safeAreaInsets.top ?? 59)
-        .opacity(largeTitleOpacity)
     }
 
     // MARK: - Settings content
@@ -299,10 +225,15 @@ struct SettingsView: View {
             // ── Apariencia ──
             settingsSection(header: L.appearance) {
                 settingsRow {
-                    Label(L.darkMode, systemImage: "moon.fill")
+                    Label(L.appearance, systemImage: "circle.lefthalf.filled")
                     Spacer()
-                    Toggle("", isOn: $theme.isDark)
-                    .labelsHidden()
+                    Picker("", selection: $theme.mode) {
+                        Text(L.systemMode).tag(AppTheme.Mode.system)
+                        Text(L.lightMode).tag(AppTheme.Mode.light)
+                        Text(L.darkModeShort).tag(AppTheme.Mode.dark)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 200)
                 }
             }
 
@@ -314,13 +245,12 @@ struct SettingsView: View {
                 // DJ Mode toggle (only when backend is available)
                 if BackendState.shared.isAvailable {
                     settingsRow {
-                        Label(L.djMode, systemImage: "dial.medium.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { vm.isDjMode },
                             set: { _ in vm.toggleDjMode() }
-                        ))
-                        .labelsHidden()
+                        )) {
+                            Label(L.djMode, systemImage: "dial.medium.fill")
+                        }
                     }
                     Divider().padding(.leading, 16)
                 }
@@ -328,13 +258,12 @@ struct SettingsView: View {
                 // Crossfade toggle (only when backend is unavailable — with backend, crossfade is always on)
                 if !BackendState.shared.isAvailable {
                     settingsRow {
-                        Label("Crossfade", systemImage: "arrow.triangle.swap")
-                        Spacer()
-                        Toggle("", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { vm.crossfadeEnabled },
                             set: { _ in vm.toggleCrossfade() }
-                        ))
-                        .labelsHidden()
+                        )) {
+                            Label("Crossfade", systemImage: "arrow.triangle.swap")
+                        }
                     }
                     if vm.crossfadeEnabled {
                         Divider().padding(.leading, 16)
@@ -370,13 +299,12 @@ struct SettingsView: View {
 
                 Divider().padding(.leading, 16)
                 settingsRow {
-                    Label(L.replayGain, systemImage: "speaker.wave.2.fill")
-                    Spacer()
-                    Toggle("", isOn: Binding(
+                    Toggle(isOn: Binding(
                         get: { vm.useReplayGain },
                         set: { _ in vm.toggleReplayGain() }
-                    ))
-                    .labelsHidden()
+                    )) {
+                        Label(L.replayGain, systemImage: "speaker.wave.2.fill")
+                    }
                 }
             }
 
@@ -389,13 +317,12 @@ struct SettingsView: View {
                         : nil
                 ) {
                     settingsRow {
-                        Label(L.scrobbling, systemImage: "arrow.up.right.circle.fill")
-                        Spacer()
-                        Toggle("", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { vm.scrobbleEnabled },
                             set: { vm.toggleScrobble($0) }
-                        ))
-                        .labelsHidden()
+                        )) {
+                            Label(L.scrobbling, systemImage: "arrow.up.right.circle.fill")
+                        }
                     }
                     if vm.scrobbleEnabled {
                         Divider().padding(.leading, 16)

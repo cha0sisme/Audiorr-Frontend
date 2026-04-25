@@ -112,19 +112,9 @@ final class SearchViewModel: ObservableObject {
 struct SearchView: View {
     @ObservedObject private var vm = SearchViewModel.shared
     @FocusState private var searchFocused: Bool
-    @State private var scrollY: CGFloat = 0
     @Namespace private var heroNS
 
     var onPlaySong: ((NavidromeSong) -> Void)?
-
-    private let collapseThreshold: CGFloat = 44
-
-    private var stickyOpacity: CGFloat {
-        min(max((scrollY - collapseThreshold * 0.4) / (collapseThreshold * 0.6), 0), 1)
-    }
-    private var largeTitleOpacity: CGFloat {
-        1 - min(max(scrollY / collapseThreshold, 0), 1)
-    }
 
     private var hasQuery: Bool {
         !vm.query.trimmingCharacters(in: .whitespaces).isEmpty
@@ -134,7 +124,6 @@ struct SearchView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    largeHeader
                     searchBar
                         .padding(.horizontal, 16)
                         .padding(.bottom, 16)
@@ -156,15 +145,9 @@ struct SearchView: View {
                     Spacer(minLength: 80)
                 }
             }
-            .ignoresSafeArea(edges: .top)
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-                scrollY = y
-            }
             .background(Color(.systemBackground))
-            .overlay(alignment: .top) {
-                stickyTitleBar
-            }
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle(L.search)
+            .navigationBarTitleDisplayMode(.large)
             .onChange(of: vm.query) { _, newValue in
                 vm.onQueryChange(newValue)
             }
@@ -184,38 +167,6 @@ struct SearchView: View {
                     .navigationTransition(.zoom(sourceID: playlist.id, in: heroNS))
             }
         }
-    }
-
-    // MARK: - Sticky title bar (replaces toolbar to avoid touch interception)
-
-    private var stickyTitleBar: some View {
-        Text(L.search)
-            .font(.headline)
-            .lineLimit(1)
-            .frame(maxWidth: .infinity)
-            .padding(.top, UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.windows.first?.safeAreaInsets.top ?? 59)
-            .padding(.bottom, 10)
-            .background(.bar.opacity(stickyOpacity))
-            .opacity(stickyOpacity)
-            .allowsHitTesting(false)
-    }
-
-    // MARK: - Large title header
-
-    private var largeHeader: some View {
-        HStack(alignment: .bottom) {
-            Text(L.search)
-                .font(.system(size: 34, weight: .bold))
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-        .padding(.top, UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.windows.first?.safeAreaInsets.top ?? 59)
-        .opacity(largeTitleOpacity)
     }
 
     // MARK: - Search bar

@@ -197,6 +197,9 @@ enum L {
     static var settings: String { isEn ? "Settings" : "Configuración" }
     static var appearance: String { isEn ? "Appearance" : "Apariencia" }
     static var darkMode: String { isEn ? "Dark mode" : "Modo oscuro" }
+    static var lightMode: String { isEn ? "Light" : "Claro" }
+    static var darkModeShort: String { isEn ? "Dark" : "Oscuro" }
+    static var systemMode: String { isEn ? "System" : "Sistema" }
     static var playback: String { isEn ? "Playback" : "Reproducción" }
     static var djMode: String { isEn ? "DJ Mode" : "Modo DJ" }
     static var crossfade: String { isEn ? "Crossfade" : "Crossfade" }
