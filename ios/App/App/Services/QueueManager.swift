@@ -547,12 +547,16 @@ final class QueueManager: AudioEngineDelegate {
                 persistState()
                 syncNowPlayingState()
 
-                // Push high-res artwork for the new song
+                // Push high-res artwork for the new song.
+                // CRITICAL: use self.duration (computed above from engine/metadata)
+                // NOT newSong.duration — metadata can be 0 for TopWeekly, etc.
+                // Passing 0 overwrites engine.currentSongDuration, breaking the
+                // safety net and progress timer → song stops with no recovery.
                 if let newSong = currentSong {
                     let artworkUrl = NavidromeService.shared.coverURL(id: newSong.coverArt, size: 1024)?.absoluteString
                     AudioEngineManager.shared?.updateNowPlayingMetadata(
                         title: newSong.title, artist: newSong.artist, album: newSong.album,
-                        duration: newSong.duration, artworkUrl: artworkUrl
+                        duration: self.duration, artworkUrl: artworkUrl
                     )
                 }
 

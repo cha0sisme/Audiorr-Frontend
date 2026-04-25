@@ -1473,7 +1473,22 @@ class AudioEngineManager {
             }
         }
 
-        // SAFETY NET 2: if crossfade has been "in progress" for > 30s, it's stuck.
+        // SAFETY NET 2: if the player finished its segment but no completion handler fired
+        // (e.g., after crossfade swap where the handler was invalidated), detect stalled
+        // progress. After crossfade, the new playerA's scheduled segment ends silently —
+        // the CrossfadeExecutor's handler has isCancelled=true, and playSequence was incremented.
+        // Without this, the song stops and nothing ever advances.
+        if isPlaying && !isCrossfading && !isStreamMode && currentSongDuration > 0 {
+            if !playerA.isPlaying && rawTime > 0 {
+                print("[AudioEngineManager] ⚠️ SAFETY NET 2: playerA stopped but isPlaying=true (post-crossfade stall) — forcing advance at \(String(format: "%.1f", rawTime))s")
+                isPlaying = false
+                stopProgressTimer()
+                updateNowPlayingPlaybackState()
+                delegate?.audioEngineDidFinishSong()
+            }
+        }
+
+        // SAFETY NET 3: if crossfade has been "in progress" for > 30s, it's stuck.
         // Cancel it and force advance.
         if isCrossfading && crossfadeStartedAt > 0 {
             let elapsed = CFAbsoluteTimeGetCurrent() - crossfadeStartedAt
@@ -1700,7 +1715,12 @@ class AudioEngineManager {
             self.currentSongTitle = title
             self.currentSongArtist = artist
             self.currentSongAlbum = album
-            self.currentSongDuration = duration
+            // Only update duration if the new value is valid — passing 0 kills
+            // the safety net (guard currentSongDuration > 0) and progress timer,
+            // leaving playback stuck with no recovery after crossfade.
+            if duration > 0 {
+                self.currentSongDuration = duration
+            }
 
             self.localNowPlayingInfo[MPMediaItemPropertyTitle] = title
             self.localNowPlayingInfo[MPMediaItemPropertyArtist] = artist
