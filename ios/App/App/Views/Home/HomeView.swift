@@ -76,14 +76,20 @@ final class HomeViewModel: ObservableObject {
         lastLoadedAt = Date()
 
         // Load backend-dependent sections (BackendState already checked centrally)
-        if BackendState.shared.isAvailable {
-            async let topTask: Void = loadTopWeekly()
-            async let recentCtxTask: Void = loadRecentContexts()
-            async let mixesTask: Void = loadDailyMixes()
-            async let pinnedTask: Void = loadPinnedPlaylists()
-            async let statsTask: Void = loadWeeklyStats()
-            _ = await (topTask, recentCtxTask, mixesTask, pinnedTask, statsTask)
-        }
+        await loadBackendSections()
+    }
+
+    /// Load only backend-dependent sections. Called from load() and also reactively
+    /// when BackendState.isAvailable transitions to true (initial check may complete
+    /// after the Navidrome sections are already loaded).
+    func loadBackendSections() async {
+        guard BackendState.shared.isAvailable else { return }
+        async let topTask: Void = loadTopWeekly()
+        async let recentCtxTask: Void = loadRecentContexts()
+        async let mixesTask: Void = loadDailyMixes()
+        async let pinnedTask: Void = loadPinnedPlaylists()
+        async let statsTask: Void = loadWeeklyStats()
+        _ = await (topTask, recentCtxTask, mixesTask, pinnedTask, statsTask)
     }
 
     // MARK: - Section loaders
@@ -304,6 +310,11 @@ struct HomeView: View {
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
+            .onChange(of: BackendState.shared.isAvailable) { _, available in
+                if available {
+                    Task { await vm.loadBackendSections() }
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .audiorrDidLogin)) { _ in
                 Task { await vm.load() }
             }
