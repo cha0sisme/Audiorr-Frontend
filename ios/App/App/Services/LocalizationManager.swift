@@ -104,7 +104,14 @@ enum L {
 
     // MARK: - Home
 
+    static var goodMorning: String { isEn ? "Good morning" : "Buenos días" }
+    static var goodAfternoon: String { isEn ? "Good afternoon" : "Buenas tardes" }
+    static var goodEvening: String { isEn ? "Good evening" : "Buenas noches" }
     static var mostPlayed: String { isEn ? "Most played" : "Lo más escuchado" }
+    static var heavyRotation: String { isEn ? "Heavy rotation" : "En rotación" }
+    static var discoverSomethingNew: String { isEn ? "Discover something new" : "Descubre algo nuevo" }
+    static var pinnedPlaylists: String { isEn ? "Pinned playlists" : "Playlists fijadas" }
+    static var yourWeek: String { isEn ? "Your week" : "Tu semana" }
     static var yourDailyMixes: String { isEn ? "Your daily mixes" : "Tus mixes diarios" }
     static var generatingMixes: String { isEn ? "Generating mixes..." : "Generando mixes..." }
     static var generateMixesFirstTime: String { isEn ? "Generate mixes for the first time" : "Generar mixes por primera vez" }
@@ -114,6 +121,8 @@ enum L {
     static var listenAgain: String { isEn ? "Listen again" : "Volver a escuchar" }
     static var recentReleases: String { isEn ? "Recent releases" : "Lanzamientos recientes" }
     static var latestAlbums: String { isEn ? "Latest albums" : "Últimos álbumes añadidos" }
+    static var songs: String { isEn ? "songs" : "canciones" }
+    static var hours: String { isEn ? "hours" : "horas" }
 
     // MARK: - Artists
 

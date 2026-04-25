@@ -13,6 +13,11 @@ final class HomeViewModel: ObservableObject {
     @Published var dailyMixes: [DailyMix] = []
     @Published var dailyMixPlaylists: [NavidromePlaylist] = []
     @Published var latestAlbums: [NavidromeAlbum] = []
+    @Published var frequentAlbums: [NavidromeAlbum] = []
+    @Published var randomAlbums: [NavidromeAlbum] = []
+    @Published var recentlyPlayedAlbums: [NavidromeAlbum] = []
+    @Published var pinnedPlaylists: [NavidromePlaylist] = []
+    @Published var weeklyStats: WeeklyStats?
 
     @Published var isLoading = true
     @Published var isGeneratingMixes = false
@@ -20,6 +25,21 @@ final class HomeViewModel: ObservableObject {
     private var lastLoadedAt: Date?
     /// Cache TTL — skip network if loaded less than 2 minutes ago.
     private let cacheTTL: TimeInterval = 120
+
+    /// Parsed weekly stats for the mini card.
+    struct WeeklyStats {
+        let totalPlays: Int
+        let topGenre: String?
+        let totalMinutes: Int
+    }
+
+    /// Time-based greeting.
+    var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        if hour < 12 { return L.goodMorning }
+        if hour < 18 { return L.goodAfternoon }
+        return L.goodEvening
+    }
 
     /// Load only if cache is stale or empty. Pass `force: true` for pull-to-refresh.
     func loadIfNeeded() async {
@@ -30,7 +50,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     /// True only on the very first load (no data yet).
-    private var hasData: Bool { !latestAlbums.isEmpty || !recentReleases.isEmpty }
+    private var hasData: Bool { !latestAlbums.isEmpty || !recentReleases.isEmpty || !frequentAlbums.isEmpty }
 
     func load() async {
         // Only show skeleton on first load — subsequent refreshes keep existing data visible
@@ -43,10 +63,13 @@ final class HomeViewModel: ObservableObject {
             return
         }
 
-        // Load Navidrome-only sections
+        // Load Navidrome-only sections (work without backend)
         async let releasesTask: Void = loadRecentReleases()
         async let latestTask: Void = loadLatestAlbums()
-        _ = await (releasesTask, latestTask)
+        async let frequentTask: Void = loadFrequentAlbums()
+        async let randomTask: Void = loadRandomAlbums()
+        async let recentPlayedTask: Void = loadRecentlyPlayed()
+        _ = await (releasesTask, latestTask, frequentTask, randomTask, recentPlayedTask)
 
         // Navidrome content is ready — show it immediately
         isLoading = false
@@ -57,7 +80,9 @@ final class HomeViewModel: ObservableObject {
             async let topTask: Void = loadTopWeekly()
             async let recentCtxTask: Void = loadRecentContexts()
             async let mixesTask: Void = loadDailyMixes()
-            _ = await (topTask, recentCtxTask, mixesTask)
+            async let pinnedTask: Void = loadPinnedPlaylists()
+            async let statsTask: Void = loadWeeklyStats()
+            _ = await (topTask, recentCtxTask, mixesTask, pinnedTask, statsTask)
         }
     }
 
@@ -98,7 +123,7 @@ final class HomeViewModel: ObservableObject {
 
     private func loadRecentContexts() async {
         guard BackendState.shared.isAvailable else { return }
-        var contexts = Array(await api.getRecentContexts().prefix(6))
+        var contexts = Array(await api.getRecentContexts().prefix(12))
 
         // Enrich playlist/smartmix contexts with real name, song count, and cover from Navidrome
         let playlistIndices = contexts.enumerated().compactMap { (i, ctx) -> (Int, String)? in
@@ -166,6 +191,50 @@ final class HomeViewModel: ObservableObject {
     private func loadLatestAlbums() async {
         latestAlbums = await api.getAlbumList(type: "newest", size: 50)
     }
+
+    private func loadFrequentAlbums() async {
+        frequentAlbums = await api.getAlbumList(type: "frequent", size: 10)
+    }
+
+    private func loadRandomAlbums() async {
+        randomAlbums = await api.getAlbumList(type: "random", size: 8)
+    }
+
+    private func loadRecentlyPlayed() async {
+        recentlyPlayedAlbums = await api.getAlbumList(type: "recent", size: 6)
+    }
+
+    private func loadPinnedPlaylists() async {
+        guard BackendState.shared.isAvailable,
+              let creds = CredentialsStore.shared.load() else { return }
+        do {
+            let pinned = try await BackendService.shared.getPinnedPlaylists(username: creds.username)
+            guard !pinned.isEmpty else { pinnedPlaylists = []; return }
+
+            // Resolve to NavidromePlaylist for cards
+            if let all = try? await api.getPlaylists() {
+                // Keep pinned order
+                let lookup = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+                pinnedPlaylists = pinned.compactMap { lookup[$0.id] }
+            }
+        } catch {
+            pinnedPlaylists = []
+        }
+    }
+
+    private func loadWeeklyStats() async {
+        guard BackendState.shared.isAvailable,
+              let creds = CredentialsStore.shared.load() else { return }
+        do {
+            let dict = try await BackendService.shared.getUserStats(username: creds.username, period: "week")
+            let plays = dict["total_plays"] as? Int ?? 0
+            let genre = (dict["top_genres"] as? [[String: Any]])?.first?["genre"] as? String
+            let minutes = dict["total_minutes"] as? Int ?? 0
+            weeklyStats = WeeklyStats(totalPlays: plays, topGenre: genre, totalMinutes: minutes)
+        } catch {
+            weeklyStats = nil
+        }
+    }
 }
 
 // MARK: - HomeView
@@ -187,18 +256,30 @@ struct HomeView: View {
                     } else if vm.isLoading {
                         loadingSkeleton
                     } else {
+                        // Personal sections first
+                        quickPlayGrid
                         topWeeklySection
                         jumpBackInSection
+                        pinnedPlaylistsSection
+
+                        // Discovery
+                        heavyRotationSection
                         recentReleasesSection
                         dailyMixSection
+                        randomDiscoverySection
+
+                        // Catalog
                         latestAlbumsSection
+
+                        // Stats
+                        weeklyStatsCard
                     }
 
                     Spacer(minLength: 80)
                 }
             }
             .background(Color(.systemBackground))
-            .navigationTitle(L.home)
+            .navigationTitle(vm.greeting)
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -228,6 +309,89 @@ struct HomeView: View {
             }
             .preferredColorScheme(theme.colorScheme)
         }
+    }
+
+    // MARK: - Quick Play Grid (2-column compact tiles)
+
+    @ViewBuilder
+    private var quickPlayGrid: some View {
+        // Use backend contexts if available, otherwise recently played from Navidrome
+        let hasBackendContexts = BackendState.shared.isAvailable && !vm.recentContexts.isEmpty
+        let hasNavidromeRecent = !vm.recentlyPlayedAlbums.isEmpty
+
+        if hasBackendContexts || hasNavidromeRecent {
+            let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                if hasBackendContexts {
+                    ForEach(vm.recentContexts.prefix(6)) { ctx in
+                        quickPlayTile(ctx)
+                    }
+                } else {
+                    ForEach(vm.recentlyPlayedAlbums.prefix(6)) { album in
+                        NavigationLink(value: album) {
+                            quickPlayAlbumTile(album)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func quickPlayTile(_ ctx: RecentContext) -> some View {
+        let isAlbum = ctx.type == "album"
+        let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
+
+        return Button {
+            if isAlbum {
+                navigationPath.append(NavidromeAlbum(
+                    id: ctx.id, name: ctx.title, artist: ctx.artist,
+                    coverArt: ctx.coverArtId, songCount: nil, duration: nil,
+                    year: nil, genre: nil, explicitStatus: nil
+                ))
+            } else if isPlaylist {
+                navigationPath.append(NavidromePlaylist(
+                    id: ctx.id, name: ctx.title, comment: nil,
+                    songCount: ctx.songCount ?? 0, duration: 0,
+                    owner: nil, coverArt: ctx.coverArtId, changed: nil
+                ))
+            } else if ctx.type == "artist" {
+                navigationPath.append(NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil))
+            }
+        } label: {
+            HStack(spacing: 10) {
+                CachedCoverView(coverArt: ctx.coverArtId, size: 44, cornerRadius: 6)
+                Text(ctx.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func quickPlayAlbumTile(_ album: NavidromeAlbum) -> some View {
+        HStack(spacing: 10) {
+            CachedCoverView(coverArt: album.coverArt, size: 44, cornerRadius: 6)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(album.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(album.artist)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Top Weekly
@@ -395,13 +559,15 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Jump Back In (Recent Contexts)
+    // MARK: - Jump Back In (Recent Contexts — overflow beyond quick-play grid)
 
     @ViewBuilder
     private var jumpBackInSection: some View {
-        if BackendState.shared.isAvailable && network.isConnected && !vm.recentContexts.isEmpty {
+        // Show as carousel only if there are more than 6 contexts (grid already shows first 6)
+        let overflow = Array(vm.recentContexts.dropFirst(6))
+        if BackendState.shared.isAvailable && network.isConnected && !overflow.isEmpty {
             HorizontalScrollSection(title: L.listenAgain) {
-                ForEach(vm.recentContexts) { ctx in
+                ForEach(overflow) { ctx in
                     let isAlbum = ctx.type == "album"
                     let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
 
@@ -551,6 +717,113 @@ struct HomeView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Heavy Rotation (Navidrome frequent)
+
+    @ViewBuilder
+    private var heavyRotationSection: some View {
+        if !vm.frequentAlbums.isEmpty {
+            HorizontalScrollSection(title: L.heavyRotation) {
+                ForEach(vm.frequentAlbums) { album in
+                    NavigationLink(value: album) {
+                        AlbumCardView(album: album, size: 170, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: - Random Discovery (Navidrome random)
+
+    @ViewBuilder
+    private var randomDiscoverySection: some View {
+        if !vm.randomAlbums.isEmpty {
+            HorizontalScrollSection(title: L.discoverSomethingNew) {
+                ForEach(vm.randomAlbums) { album in
+                    NavigationLink(value: album) {
+                        AlbumCardView(album: album, subtitle: .year, size: 140, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: - Pinned Playlists (backend)
+
+    @ViewBuilder
+    private var pinnedPlaylistsSection: some View {
+        if BackendState.shared.isAvailable && !vm.pinnedPlaylists.isEmpty {
+            HorizontalScrollSection(title: L.pinnedPlaylists) {
+                ForEach(vm.pinnedPlaylists) { playlist in
+                    NavigationLink(value: playlist) {
+                        PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: - Weekly Stats Card (backend)
+
+    @ViewBuilder
+    private var weeklyStatsCard: some View {
+        if BackendState.shared.isAvailable, let stats = vm.weeklyStats, stats.totalPlays > 0 {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(L.yourWeek)
+                    .font(.system(size: 22, weight: .bold))
+                    .padding(.horizontal, 16)
+
+                HStack(spacing: 0) {
+                    statPill(
+                        value: "\(stats.totalPlays)",
+                        label: L.songs,
+                        icon: "music.note",
+                        color: .pink
+                    )
+                    if stats.totalMinutes > 0 {
+                        statPill(
+                            value: String(format: "%.1f", Double(stats.totalMinutes) / 60.0),
+                            label: L.hours,
+                            icon: "clock.fill",
+                            color: .orange
+                        )
+                    }
+                    if let genre = stats.topGenre {
+                        statPill(
+                            value: genre,
+                            label: L.topGenre,
+                            icon: "guitars.fill",
+                            color: .purple
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+
+    private func statPill(value: String, label: String, icon: String, color: Color) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     // MARK: - Loading skeleton

@@ -464,7 +464,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 : String(format: "%@ · %d:%02d", song.artist, dur / 60, dur % 60)
 
             let item = CPListItem(
-                text: song.title,
+                text: self.carPlayTitle(song.title, isExplicit: song.isExplicit),
                 detailText: detail,
                 image: UIImage(systemName: "music.note"),
                 accessoryImage: nil,
@@ -480,6 +480,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
 
         songsTemplate.updateSections([CPListSection(items: songItems)])
         interfaceController?.pushTemplate(songsTemplate, animated: true, completion: nil)
+    }
+
+    // MARK: - Helpers
+
+    /// Prepend explicit badge to title for CarPlay song lists.
+    private func carPlayTitle(_ title: String, isExplicit: Bool) -> String {
+        isExplicit ? "🅴 \(title)" : title
     }
 
     // MARK: - Cover Art
@@ -555,7 +562,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                         : String(format: "%@ · %d:%02d", song.artist, mins, secs)
 
                     let item = CPListItem(
-                        text: song.title,
+                        text: carPlayTitle(song.title, isExplicit: song.isExplicit),
                         detailText: detail,
                         image: UIImage(systemName: "music.note"),
                         accessoryImage: nil,
@@ -616,7 +623,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                         : String(format: "%@ · %d:%02d", song.artist, mins, secs)
 
                     let item = CPListItem(
-                        text: song.title,
+                        text: self.carPlayTitle(song.title, isExplicit: song.isExplicit),
                         detailText: detail,
                         image: UIImage(systemName: "music.note"),
                         accessoryImage: nil,
@@ -1219,7 +1226,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 : String(format: "%@ · %d:%02d", song.artist, dur / 60, dur % 60)
 
             let item = CPListItem(
-                text: song.title,
+                text: self.carPlayTitle(song.title, isExplicit: song.isExplicit),
                 detailText: detail,
                 image: UIImage(systemName: "music.note"),
                 accessoryImage: nil,

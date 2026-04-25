@@ -491,9 +491,39 @@ struct SettingsView: View {
                     }
                 }
             }
+            // ── Credits ──
+            creditsFooter
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 100)
+    }
+
+    // MARK: - Credits footer
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    private var creditsFooter: some View {
+        VStack(spacing: 6) {
+            Image("AudiorrTabIcon")
+                .resizable()
+                .scaledToFit()
+                .frame(height: 28)
+                .opacity(0.4)
+
+            Text("Audiorr v\(appVersion)")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+
+            Link(destination: URL(string: "https://github.com/cha0sisme")!) {
+                Text("cha0sisme")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 16)
     }
 
     // MARK: - Dynamic footers
