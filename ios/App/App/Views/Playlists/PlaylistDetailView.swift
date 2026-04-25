@@ -233,6 +233,9 @@ struct PlaylistDetailView: View {
                     .lineLimit(1)
                     .opacity(stickyOpacity)
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                toolbarMenu
+            }
         }
         .confirmationDialog(
             L.deleteConfirm(vm.displayPlaylist.name),
@@ -408,15 +411,12 @@ struct PlaylistDetailView: View {
             if BackendState.shared.isAvailable {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
             }
-
-            // Context menu — Download, Pin, Delete
-            overflowMenu(fillColor: fillColor, labelColor: labelColor)
         }
         .disabled(vm.isLoading)
     }
 
     @ViewBuilder
-    private func overflowMenu(fillColor: Color, labelColor: Color) -> some View {
+    private var toolbarMenu: some View {
         let pl = vm.displayPlaylist
         let hasSongs = !vm.songs.isEmpty
         let hasMenuItems = hasSongs || BackendState.shared.isAvailable || !pl.isSystemPlaylist
@@ -444,26 +444,26 @@ struct PlaylistDetailView: View {
                     } label: {
                         Label(
                             vm.isPinned ? L.unpin : L.pin,
-                            systemImage: vm.isPinned ? "star.slash" : "star"
+                            systemImage: vm.isPinned ? "star.slash.fill" : "star.fill"
                         )
                     }
                 }
 
                 // Delete (user playlists only)
                 if !pl.isSystemPlaylist {
-                    Divider()
-                    Button(role: .destructive) {
-                        showDeleteConfirm = true
-                    } label: {
-                        Label(L.deletePlaylist, systemImage: "trash")
+                    Section {
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label(L.deletePlaylist, systemImage: "trash")
+                        }
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(labelColor)
-                    .frame(width: 40, height: 40)
-                    .background(fillColor, in: Circle())
+                Image(systemName: "ellipsis.circle.fill")
+                    .font(.system(size: 22))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isLight ? Color.accentColor : .white)
             }
         }
     }

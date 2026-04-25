@@ -131,13 +131,22 @@ final class PlayerService {
         let mix = SmartMixManager.shared.generatedMix
         guard !mix.isEmpty else { return }
 
+        // Find the currently playing song in the SmartMix order so playback
+        // continues from the same track instead of restarting from the top.
+        var startIdx = 0
+        if let currentId = QueueManager.shared.currentSong?.id {
+            if let idx = mix.firstIndex(where: { $0.id == currentId }) {
+                startIdx = idx
+            }
+        }
+
         if NowPlayingState.shared.isRemote {
-            ConnectService.shared.sendRemotePlaylist(mix, startIndex: 0)
+            ConnectService.shared.sendRemotePlaylist(mix, startIndex: startIdx)
             return
         }
         currentContextUri = "smartmix:\(playlistId)"
         currentContextName = "SmartMix"
-        QueueManager.shared.play(songs: mix, startIndex: 0)
+        QueueManager.shared.play(songs: mix, startIndex: startIdx)
     }
 
     func updateSmartMixStatus(playlistId: String, status: String) {

@@ -613,25 +613,25 @@ class CrossfadeExecutor {
         mixerB.pan = 0
         resetTimeStretch()
 
-        // Dispatch nuclear reconnect to automationQueue — serializes AFTER any
-        // in-flight filterTick() that may have already passed the isCancelled guard.
+        // Dispatch backstop reset + nuclear reconnect on IDLE player (B, just stopped)
+        // to automationQueue — serializes AFTER any in-flight filterTick().
+        // IMPORTANT: Do NOT nuclear reconnect A (active, playing) — disconnecting a
+        // playing node breaks the audio pipeline and causes silence on real devices.
         let eng = self.engine
         let eqA = self.eqA, eqB = self.eqB
         let mA = self.mixerA, mB = self.mixerB
-        let pA = self.playerA, pB = self.playerB
+        let pB = self.playerB
         let tpA = self.timePitchA, tpB = self.timePitchB
         Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
-            // Nuclear reconnect: disconnect/reconnect forces CoreAudio to rebuild
-            // render pipeline with fresh IIR coefficients
-            if let tpA {
-                Self.reconnectChain(engine: eng, player: pA, timePitch: tpA,
-                                    eq: eqA, mixer: mA, label: "cancel-A")
-            }
+            // Backstop reset on A (active) — parameter reset only, no disconnect
+            Self.resetBandsStatic(eqA)
+            if let tpA { Self.resetTimePitchStatic(tpA) }
+            mA.pan = 0
+            // Nuclear reconnect on B (stopped) — safe to disconnect
             if let tpB {
                 Self.reconnectChain(engine: eng, player: pB, timePitch: tpB,
                                     eq: eqB, mixer: mB, label: "cancel-B")
             }
-            mA.pan = 0
             mB.pan = 0
             Self.auditEQState(source: "cancel+nuclear", eqA: eqA, eqB: eqB,
                               mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
@@ -1548,18 +1548,16 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
-        // Nuclear reconnect: disconnect/reconnect nodes to force CoreAudio to rebuild
-        // render pipeline with fresh IIR coefficients. This is the definitive fix for
-        // "stuck filters" on real devices where parameter resets look CLEAN in audits
-        // but the render thread continues using stale coefficients.
-        if let tpB = self.timePitchB {
-            Self.reconnectChain(engine: engine, player: playerB, timePitch: tpB,
-                                eq: eqB, mixer: mixerB, label: "complete-B")
-        }
-        // A gets reconnected in onComplete (AudioEngineManager) after the swap
+        // IMPORTANT: Do NOT nuclear reconnect the active player (B) here.
+        // disconnectNodeOutput on a playing AVAudioPlayerNode breaks the audio
+        // pipeline on real devices, causing complete silence after crossfade.
+        // resetBandsStatic + AudioUnitReset (called above) is sufficient for the
+        // active chain. Nuclear reconnect only happens on IDLE nodes — playerA
+        // (stopped) gets reconnected in onComplete, and playerB (idle) gets
+        // reconnected before the NEXT crossfade in startCrossfade().
 
-        // Audit after nuclear reconnect
-        Self.auditEQState(source: "completeCrossfade+nuclear", eqA: eqA, eqB: eqB,
+        // Audit after reset
+        Self.auditEQState(source: "completeCrossfade", eqA: eqA, eqB: eqB,
                           mixerA: mixerA, mixerB: mixerB,
                           timePitchA: timePitchA, timePitchB: timePitchB)
 
