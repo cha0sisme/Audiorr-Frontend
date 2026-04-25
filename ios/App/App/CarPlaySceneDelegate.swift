@@ -718,7 +718,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             if SmartMixManager.shared.status == .ready {
-                SmartMixManager.shared.playGenerated()
+                PlayerService.shared.playSmartMix(playlistId: playlistId)
             } else {
                 // Fallback: play in original order
                 PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(playlistId)", contextName: playlistName)
