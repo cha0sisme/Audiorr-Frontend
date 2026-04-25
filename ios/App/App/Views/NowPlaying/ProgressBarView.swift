@@ -8,14 +8,6 @@ struct ProgressBarView: View {
     @State private var isDragging = false
     @State private var dragFraction: CGFloat = 0
 
-    // Local interpolation: smooths the 2s sync jumps from React
-    // Initialize from live state so reopening the viewer doesn't flash "0:00"
-    // (the viewer is inside `if viewerIsOpen` so @State resets on every open)
-    @State private var interpolatedProgress: Double = NowPlayingState.shared.progress
-    @State private var lastSyncTime: Date = .now
-    @State private var lastSyncProgress: Double = NowPlayingState.shared.progress
-    @State private var interpolationTimer: Timer?
-
     var body: some View {
         VStack(spacing: 8) {
             // Track
@@ -59,11 +51,6 @@ struct ProgressBarView: View {
 
                             PlayerService.shared.seekTo(seekTime)
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-
-                            // Update local interpolation to the seek position
-                            interpolatedProgress = seekTime
-                            lastSyncProgress = seekTime
-                            lastSyncTime = .now
                         }
                 )
                 .animation(Anim.micro, value: isDragging)
@@ -91,63 +78,24 @@ struct ProgressBarView: View {
             }
             .animation(Anim.content, value: state.isCrossfading)
         }
-        .onAppear { startInterpolation() }
-        .onDisappear { stopInterpolation() }
-        .onChange(of: state.progress) { _, newProgress in
-            // React synced a new progress value — reset interpolation anchor
-            lastSyncProgress = newProgress
-            lastSyncTime = .now
-            interpolatedProgress = newProgress
-        }
-        .onChange(of: state.songId) { _, _ in
-            // Song changed (crossfade completed or track advanced) — hard-reset interpolation
-            // to prevent stale values from old song bleeding through
-            interpolatedProgress = state.progress
-            lastSyncProgress = state.progress
-            lastSyncTime = .now
-        }
-    }
-
-    // MARK: - Interpolation
-
-    /// Smoothly advance progress between 2s React syncs
-    private func startInterpolation() {
-        interpolatedProgress = state.progress
-        lastSyncProgress = state.progress
-        lastSyncTime = .now
-
-        interpolationTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
-            Task { @MainActor in
-                guard state.isPlaying, !isDragging else { return }
-                let elapsed = Date.now.timeIntervalSince(lastSyncTime)
-                interpolatedProgress = min(lastSyncProgress + elapsed, state.duration)
-            }
-        }
-    }
-
-    private func stopInterpolation() {
-        interpolationTimer?.invalidate()
-        interpolationTimer = nil
     }
 
     // MARK: - Helpers
 
-    /// Current progress source: use live state until interpolation timer starts,
-    /// then switch to interpolated value for smooth 4Hz updates.
-    private var currentProgress: Double {
-        interpolationTimer != nil ? interpolatedProgress : state.progress
-    }
-
+    /// Progress fraction for the bar. Reads directly from NowPlayingState (updated at 4Hz
+    /// by AudioEngineManager). No local @State interpolation needed — the native timer
+    /// already provides smooth updates, and using @State caused time resets when the
+    /// viewer was destroyed/recreated (inside `if viewerIsOpen`).
     private var smoothFraction: CGFloat {
         guard state.duration > 0 else { return 0 }
-        return min(max(CGFloat(currentProgress / state.duration), 0), 1)
+        return min(max(CGFloat(state.progress / state.duration), 0), 1)
     }
 
     private var displayedTime: Double {
         if isDragging {
             return Double(dragFraction) * state.duration
         }
-        return min(max(currentProgress, 0), state.duration)
+        return min(max(state.progress, 0), state.duration)
     }
 
     private func formatTime(_ seconds: Double) -> String {
