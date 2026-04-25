@@ -348,8 +348,10 @@ final class TransitionDiagnostics {
         var dspBandsB: [DSPBandSnapshot] = []
         let panA: Float
         let panB: Float
-        let rateA: Float
-        let rateB: Float
+        let rateA: Float            // Swift property
+        let rateB: Float            // Swift property
+        var dspRateA: Float = 1.0   // AudioUnitGetParameter
+        var dspRateB: Float = 1.0   // AudioUnitGetParameter
     }
 
     /// Whether the last audit detected stuck filters (non-neutral values).
@@ -391,6 +393,15 @@ final class TransitionDiagnostics {
         checkDivergence(label: "A-", swift: audit.bandsA, dsp: audit.dspBandsA)
         checkDivergence(label: "B-", swift: audit.bandsB, dsp: audit.dspBandsB)
 
+        // Check TimePitch rate divergence (Swift .rate vs AudioUnitGetParameter)
+        let rateThreshold: Float = 0.01
+        if abs(audit.rateA - audit.dspRateA) > rateThreshold {
+            dspDivergences.append("TimePitch-A rate: swift=\(String(format: "%.3f", audit.rateA)) DSP=\(String(format: "%.3f", audit.dspRateA))")
+        }
+        if abs(audit.rateB - audit.dspRateB) > rateThreshold {
+            dspDivergences.append("TimePitch-B rate: swift=\(String(format: "%.3f", audit.rateB)) DSP=\(String(format: "%.3f", audit.dspRateB))")
+        }
+
         let hasDivergence = !dspDivergences.isEmpty
         let isClean = stuckBands.isEmpty && !hasDivergence && abs(audit.panA) < 0.01 && abs(audit.panB) < 0.01
 
@@ -427,8 +438,8 @@ final class TransitionDiagnostics {
             }
         }
 
-        line += String(format: "\n    pan: A=%.3f B=%.3f  rate: A=%.3f B=%.3f",
-                       audit.panA, audit.panB, audit.rateA, audit.rateB)
+        line += String(format: "\n    pan: A=%.3f B=%.3f  rate(Swift): A=%.3f B=%.3f  rate(DSP): A=%.3f B=%.3f",
+                       audit.panA, audit.panB, audit.rateA, audit.rateB, audit.dspRateA, audit.dspRateB)
 
         if hasDivergence {
             line += "\n    🔴 DSP DIVERGENCE DETECTED (Swift says neutral but AudioUnit disagrees):"
@@ -547,7 +558,7 @@ final class TransitionDiagnostics {
         appendToLog(block)
     }
 
-    private func appendToLog(_ text: String) {
+    private nonisolated func appendToLog(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
         if let handle = try? FileHandle(forWritingTo: logFileURL) {
             handle.seekToEndOfFile()
@@ -573,6 +584,13 @@ final class TransitionDiagnostics {
     /// Copy log contents to clipboard.
     func copyLogToClipboard() {
         UIPasteboard.general.string = readLog()
+    }
+
+    /// Append a raw line to the diagnostics log (for nuclear reconnect events, etc.)
+    /// nonisolated because this is called from automationQueue and other non-main contexts.
+    nonisolated func logEvent(_ text: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        appendToLog("[\(timestamp)] \(text)\n")
     }
 
     /// Update backend status.

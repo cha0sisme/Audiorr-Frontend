@@ -606,43 +606,34 @@ class CrossfadeExecutor {
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
 
-        // Immediate reset on calling thread (best-effort)
+        // Immediate parameter reset on calling thread (best-effort)
         resetCrossfadeBands(eqA)
         resetCrossfadeBands(eqB)
         mixerA.pan = 0
         mixerB.pan = 0
         resetTimeStretch()
 
-        // Dispatch a second reset to automationQueue — this serializes AFTER any
-        // in-flight filterTick() that may have already passed the isCancelled guard
-        // and is about to write EQ values. DispatchSource.cancel() does NOT stop
-        // an already-executing handler, so without this the filterTick can overwrite
-        // the reset above. This is the root cause of the "stuck filter on playerB" bug.
+        // Dispatch nuclear reconnect to automationQueue — serializes AFTER any
+        // in-flight filterTick() that may have already passed the isCancelled guard.
+        let eng = self.engine
         let eqA = self.eqA, eqB = self.eqB
         let mA = self.mixerA, mB = self.mixerB
+        let pA = self.playerA, pB = self.playerB
         let tpA = self.timePitchA, tpB = self.timePitchB
-        Self.automationQueue.async {
-            Self.resetBandsStatic(eqA)
-            Self.resetBandsStatic(eqB)
-            mA.pan = 0
-            mB.pan = 0
-            tpA?.rate = 1.0
-            tpB?.rate = 1.0
-            // Audit after serialized reset
-            Self.auditEQState(source: "cancel+async", eqA: eqA, eqB: eqB,
-                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
-        }
-        // Delayed backstop: 150ms later, reset again in case a stale timer event
-        // was queued before cancel() invalidated the source.
         Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
-            Self.resetBandsStatic(eqA)
-            Self.resetBandsStatic(eqB)
+            // Nuclear reconnect: disconnect/reconnect forces CoreAudio to rebuild
+            // render pipeline with fresh IIR coefficients
+            if let tpA {
+                Self.reconnectChain(engine: eng, player: pA, timePitch: tpA,
+                                    eq: eqA, mixer: mA, label: "cancel-A")
+            }
+            if let tpB {
+                Self.reconnectChain(engine: eng, player: pB, timePitch: tpB,
+                                    eq: eqB, mixer: mB, label: "cancel-B")
+            }
             mA.pan = 0
             mB.pan = 0
-            tpA?.rate = 1.0
-            tpB?.rate = 1.0
-            // Final audit — this is the last chance to catch stuck filters
-            Self.auditEQState(source: "cancel+150ms", eqA: eqA, eqB: eqB,
+            Self.auditEQState(source: "cancel+nuclear", eqA: eqA, eqB: eqB,
                               mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
         }
     }
@@ -662,8 +653,8 @@ class CrossfadeExecutor {
     }
 
     private func resetTimeStretch() {
-        timePitchA?.rate = 1.0
-        timePitchB?.rate = 1.0
+        if let tpA = timePitchA { Self.resetTimePitchStatic(tpA) }
+        if let tpB = timePitchB { Self.resetTimePitchStatic(tpB) }
     }
 
     /// Resets crossfade bands (0-3) to neutral: bypass + neutral parameters.
@@ -718,6 +709,47 @@ class CrossfadeExecutor {
         AudioUnitReset(au, kAudioUnitScope_Global, 0)
     }
 
+    /// Resets a TimePitch node to neutral (rate 1.0) and flushes its CoreAudio DSP state.
+    /// Same pattern as resetBandsStatic: Swift property + AudioUnitReset to prevent
+    /// the DSP from continuing to time-stretch with stale rate values.
+    static func resetTimePitchStatic(_ tp: AVAudioUnitTimePitch) {
+        tp.rate = 1.0
+        tp.pitch = 0       // semitones
+        tp.overlap = 8.0   // default
+        let au = tp.audioUnit
+        AudioUnitReset(au, kAudioUnitScope_Global, 0)
+    }
+
+    /// Nuclear DSP reset: disconnects and reconnects processing nodes in the audio graph.
+    /// Forces CoreAudio to rebuild the render pipeline with fresh IIR coefficients.
+    /// On real devices, AudioUnitReset + parameter writes update the parameter tree but
+    /// the render thread may keep using stale coefficients — especially in background.
+    static func reconnectChain(
+        engine: AVAudioEngine,
+        player: AVAudioPlayerNode,
+        timePitch: AVAudioUnitTimePitch,
+        eq: AVAudioUnitEQ,
+        mixer: AVAudioMixerNode,
+        label: String
+    ) {
+        // Reset parameters
+        resetBandsStatic(eq)
+        resetTimePitchStatic(timePitch)
+
+        // Disconnect: player → timePitch → eq → mixer
+        engine.disconnectNodeOutput(player)
+        engine.disconnectNodeOutput(timePitch)
+        engine.disconnectNodeOutput(eq)
+
+        // Reconnect: forces render resource reallocation
+        engine.connect(player, to: timePitch, format: nil)
+        engine.connect(timePitch, to: eq, format: nil)
+        engine.connect(eq, to: mixer, format: nil)
+
+        print("[CrossfadeExecutor] 🔄 Nuclear reconnect (\(label))")
+        TransitionDiagnostics.shared.logEvent("🔄 NUCLEAR RECONNECT (\(label))")
+    }
+
     // MARK: - Post-reset audit
 
     /// Reads the REAL current values from AVAudioUnitEQ bands and publishes to diagnostics.
@@ -758,6 +790,14 @@ class CrossfadeExecutor {
             }
         }
 
+        // Read DSP-level rate from TimePitch AudioUnit (kNewTimePitchParam_Rate = 0)
+        func dspRate(_ tp: AVAudioUnitTimePitch?) -> Float {
+            guard let tp else { return 1.0 }
+            var rate: Float = 1.0
+            AudioUnitGetParameter(tp.audioUnit, 0, kAudioUnitScope_Global, 0, &rate)
+            return rate
+        }
+
         let audit = TransitionDiagnostics.PostResetAudit(
             source: source,
             bandsA: snapshot(eqA),
@@ -767,7 +807,9 @@ class CrossfadeExecutor {
             panA: mixerA.pan,
             panB: mixerB.pan,
             rateA: timePitchA?.rate ?? 1.0,
-            rateB: timePitchB?.rate ?? 1.0
+            rateB: timePitchB?.rate ?? 1.0,
+            dspRateA: dspRate(timePitchA),
+            dspRateB: dspRate(timePitchB)
         )
         TransitionDiagnostics.shared.publishPostResetAudit(audit)
     }
@@ -1494,15 +1536,11 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
-        // Reset crossfade EQ (bands 0-3) to neutral
+        // Reset crossfade EQ (bands 0-3) to neutral + reset time-stretch
         resetCrossfadeBands(eqA)
         resetCrossfadeBands(eqB)
-
-        // Reset stereo pan — both players back to center
         mixerA.pan = 0
         mixerB.pan = 0
-
-        // Reset time-stretch rates — B continues at normal speed after crossfade
         resetTimeStretch()
 
         let vol = getMasterVolume?() ?? 1.0
@@ -1510,19 +1548,20 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
-        // Audit: verify EQ bands are truly neutral after reset
-        Self.auditEQState(source: "completeCrossfade", eqA: eqA, eqB: eqB,
+        // Nuclear reconnect: disconnect/reconnect nodes to force CoreAudio to rebuild
+        // render pipeline with fresh IIR coefficients. This is the definitive fix for
+        // "stuck filters" on real devices where parameter resets look CLEAN in audits
+        // but the render thread continues using stale coefficients.
+        if let tpB = self.timePitchB {
+            Self.reconnectChain(engine: engine, player: playerB, timePitch: tpB,
+                                eq: eqB, mixer: mixerB, label: "complete-B")
+        }
+        // A gets reconnected in onComplete (AudioEngineManager) after the swap
+
+        // Audit after nuclear reconnect
+        Self.auditEQState(source: "completeCrossfade+nuclear", eqA: eqA, eqB: eqB,
                           mixerA: mixerA, mixerB: mixerB,
                           timePitchA: timePitchA, timePitchB: timePitchB)
-
-        // Backstop audit 200ms later — catches any race where stale writes land after reset
-        let eqACopy = self.eqA, eqBCopy = self.eqB
-        let mA = self.mixerA, mB = self.mixerB
-        let tpA = self.timePitchA, tpB = self.timePitchB
-        Self.automationQueue.asyncAfter(deadline: .now() + 0.2) {
-            Self.auditEQState(source: "completeCrossfade+200ms", eqA: eqACopy, eqB: eqBCopy,
-                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
-        }
 
         TransitionDiagnostics.shared.publishCompletion()
 
