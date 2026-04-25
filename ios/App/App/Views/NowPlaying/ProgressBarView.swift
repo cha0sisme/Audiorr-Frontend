@@ -8,6 +8,11 @@ struct ProgressBarView: View {
     @State private var isDragging = false
     @State private var dragFraction: CGFloat = 0
 
+    // After a seek, state.progress takes ~100-250ms to reflect the new position
+    // (seek → engine → timer → delegate → NowPlayingState). Without this override,
+    // the bar flashes back to the old position then jumps forward — jarring.
+    @State private var seekOverride: Double?
+
     var body: some View {
         VStack(spacing: 8) {
             // Track
@@ -49,6 +54,10 @@ struct ProgressBarView: View {
                             let seekTime = seekFraction * state.duration
                             isDragging = false
 
+                            // Hold the seek position locally so the bar doesn't flash
+                            // back to the old state.progress while the engine processes.
+                            seekOverride = seekTime
+
                             PlayerService.shared.seekTo(seekTime)
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         }
@@ -78,24 +87,33 @@ struct ProgressBarView: View {
             }
             .animation(Anim.content, value: state.isCrossfading)
         }
+        .onChange(of: state.progress) { _, newProgress in
+            // Clear seek override once the engine confirms the new position
+            if let target = seekOverride, abs(newProgress - target) < 1.0 {
+                seekOverride = nil
+            }
+        }
     }
 
     // MARK: - Helpers
 
-    /// Progress fraction for the bar. Reads directly from NowPlayingState (updated at 4Hz
-    /// by AudioEngineManager). No local @State interpolation needed — the native timer
-    /// already provides smooth updates, and using @State caused time resets when the
-    /// viewer was destroyed/recreated (inside `if viewerIsOpen`).
+    /// The progress value to display. Uses seekOverride (if active) to bridge the
+    /// ~100-250ms gap between releasing a seek drag and the engine confirming the
+    /// new position. Otherwise reads state.progress directly (4Hz native updates).
+    private var effectiveProgress: Double {
+        seekOverride ?? state.progress
+    }
+
     private var smoothFraction: CGFloat {
         guard state.duration > 0 else { return 0 }
-        return min(max(CGFloat(state.progress / state.duration), 0), 1)
+        return min(max(CGFloat(effectiveProgress / state.duration), 0), 1)
     }
 
     private var displayedTime: Double {
         if isDragging {
             return Double(dragFraction) * state.duration
         }
-        return min(max(state.progress, 0), state.duration)
+        return min(max(effectiveProgress, 0), state.duration)
     }
 
     private func formatTime(_ seconds: Double) -> String {
