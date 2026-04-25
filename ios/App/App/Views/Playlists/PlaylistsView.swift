@@ -32,8 +32,11 @@ final class PlaylistsViewModel: ObservableObject {
         await load()
     }
 
+    private var hasData: Bool { !playlists.isEmpty }
+
     func load() async {
-        isLoading = true
+        // Only show skeleton on first load — subsequent refreshes keep existing data visible
+        if !hasData { isLoading = true }
 
         api.reloadCredentials()
         guard api.isConfigured else {
@@ -179,9 +182,7 @@ struct PlaylistsView: View {
     @ViewBuilder
     private var content: some View {
         if vm.isLoading {
-            ProgressView()
-                .frame(maxWidth: .infinity)
-                .padding(.top, 48)
+            playlistSkeleton
         } else if !vm.isConfigured {
             notConfiguredView
         } else if vm.playlists.isEmpty {
@@ -302,6 +303,31 @@ struct PlaylistsView: View {
             }
         }
         .padding(.bottom, 100)
+    }
+
+    // MARK: - Loading skeleton
+
+    private var playlistSkeleton: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Grid skeleton: 2 columns of playlist cards
+            let columns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
+            LazyVGrid(columns: columns, spacing: 20) {
+                ForEach(0..<6, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 6) {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color(.tertiarySystemFill))
+                            .aspectRatio(1, contentMode: .fit)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(height: 14)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(width: 80, height: 12)
+                    }
+                }
+            }
+            .padding(16)
+        }
     }
 
     // MARK: - Sin backend: grid 2 columnas

@@ -847,7 +847,27 @@ struct HomeView: View {
 
     private var loadingSkeleton: some View {
         VStack(alignment: .leading, spacing: 24) {
-            ForEach(0..<3, id: \.self) { _ in
+            // Quick Play Grid skeleton (2 columns, compact tiles with cover + text)
+            let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(0..<6, id: \.self) { _ in
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(width: 44, height: 44)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color(.tertiarySystemFill))
+                            .frame(height: 14)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+            .padding(.horizontal, 16)
+
+            // Horizontal album rows skeleton (matches actual section layout)
+            ForEach(0..<2, id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 12) {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color(.tertiarySystemFill))

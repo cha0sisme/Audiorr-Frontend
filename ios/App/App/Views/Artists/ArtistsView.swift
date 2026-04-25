@@ -46,8 +46,11 @@ final class ArtistsViewModel: ObservableObject {
         await load()
     }
 
+    private var hasData: Bool { !allArtists.isEmpty }
+
     func load() async {
-        isLoading = true
+        // Only show skeleton on first load — subsequent refreshes keep existing data visible
+        if !hasData { isLoading = true }
         defer {
             isLoading = false
             lastLoadedAt = Date()
