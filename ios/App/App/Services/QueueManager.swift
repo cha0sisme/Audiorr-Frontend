@@ -93,6 +93,9 @@ final class QueueManager: AudioEngineDelegate {
     private var crossfadePreparationTask: Task<Void, Never>?
     private let maxHistorySize = 500
 
+    /// Tracks the songId whose background download is in progress so we can cancel it on skip.
+    private var activeDownloadSongId: String?
+
     private init() {
         restoreState()
     }
@@ -1137,6 +1140,27 @@ final class QueueManager: AudioEngineDelegate {
 
     private func playCurrentSong() {
         guard let song = currentSong else { return }
+
+        // Fix 2: Cancel any in-flight download from the previous song.
+        // During rapid skips, old downloads pile up wasting bandwidth.
+        if let oldId = activeDownloadSongId, oldId != song.id {
+            AudioFileLoader.shared.cancelDownload(songId: oldId)
+        }
+        activeDownloadSongId = nil
+
+        // Fix 3: Offline proactive check — skip uncached songs immediately.
+        // Without this, the engine waits 2-3s for a network timeout before failing.
+        if !NetworkMonitor.shared.isConnected
+            && !AudioFileLoader.shared.isCached(song.id) {
+            print("[QueueManager] Offline & not cached — skipping \(song.title)")
+            // Try to find the next cached song
+            if advanceToNextCachedSong() { return }
+            // No cached songs left — stop playback
+            isPlaying = false
+            syncNowPlayingState()
+            return
+        }
+
         guard let streamURL = api.streamURL(songId: song.id) else {
             print("[QueueManager] No stream URL for \(song.id)")
             return
@@ -1196,14 +1220,20 @@ final class QueueManager: AudioEngineDelegate {
                 artist: song.artist,
                 album: song.album
             )
-            // Download in background for cache (handoff will validate before switching)
+            // Download in background for cache. The songId capture prevents stale handoffs:
+            // if the user skips to another song before download completes, the songId check
+            // ensures we don't apply song B's file while playing song D.
+            let downloadSongId = song.id
+            activeDownloadSongId = downloadSongId
             Task {
                 guard let fileURL = try? await AudioFileLoader.shared.load(
                     remoteURL: streamURL,
-                    songId: song.id
+                    songId: downloadSongId
                 ) else { return }
                 await MainActor.run {
                     guard engine.isStreamMode else { return }
+                    // Only handoff if we're still playing the same song
+                    guard self.currentSong?.id == downloadSongId else { return }
                     engine.handoffStreamToEngine(fileURL: fileURL)
                 }
             }
@@ -1239,6 +1269,34 @@ final class QueueManager: AudioEngineDelegate {
 
         // Pre-cache next 3 songs in queue for offline (priority 1)
         preCacheUpcoming()
+    }
+
+    /// Advance through the queue to find the next cached song (for offline playback).
+    /// Returns true if a cached song was found and playback started, false if none remain.
+    private func advanceToNextCachedSong() -> Bool {
+        let startIdx = currentIndex + 1
+        for i in startIdx..<queue.count {
+            if AudioFileLoader.shared.isCached(queue[i].id) {
+                if let song = currentSong { appendToHistory(song) }
+                currentIndex = i
+                persistState()
+                playCurrentSong()
+                return true
+            }
+        }
+        // Wrap around if repeat-all
+        if repeatMode == .all {
+            for i in 0..<startIdx {
+                if AudioFileLoader.shared.isCached(queue[i].id) {
+                    if let song = currentSong { appendToHistory(song) }
+                    currentIndex = i
+                    persistState()
+                    playCurrentSong()
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Pre-cache the next 3 songs in the queue via DownloadManager.
