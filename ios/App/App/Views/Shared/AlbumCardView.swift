@@ -192,60 +192,28 @@ extension View {
 /// Apple Music-style 4-bar equalizer. Each bar animates independently with
 /// randomized target heights that change at different rates, producing an
 /// organic "audio visualization" feel rather than a mechanical loop.
+/// Native SF Symbol equalizer indicator — uses the system `waveform` symbol
+/// with `symbolEffect(.variableColor)` for a lightweight, accessibility-aware
+/// animation that matches the Apple Music / Dynamic Island style.
+/// No Timer, no manual state — fully rendered by the system.
 struct NowPlayingIndicator: View {
     var isPlaying: Bool
     var color: Color = .accentColor
-    var barWidth: CGFloat = 3
+    var barWidth: CGFloat = 3   // ignored — kept for call-site compat
     var height: CGFloat = 14
-    var spacing: CGFloat = 1.5
-
-    /// Each bar gets its own random height factor (0…1) updated on a timer.
-    @State private var levels: [CGFloat] = [0.4, 0.6, 0.3, 0.5]
-    @State private var timer: Timer?
-
-    private let barCount = 4
-    /// How often each bar picks a new random height (seconds).
-    private let tickInterval: TimeInterval = 0.28
+    var spacing: CGFloat = 1.5  // ignored — kept for call-site compat
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: spacing) {
-            ForEach(0..<barCount, id: \.self) { i in
-                RoundedRectangle(cornerRadius: barWidth / 2)
-                    .fill(color)
-                    .frame(width: barWidth, height: barHeight(for: i))
-            }
-        }
-        .frame(height: height, alignment: .bottom)
-        .onChange(of: isPlaying, initial: true) { _, playing in
-            if playing { startTimer() } else { stopTimer() }
-        }
-        .onDisappear { stopTimer() }
-    }
-
-    private func barHeight(for index: Int) -> CGFloat {
-        let minH: CGFloat = height * 0.15
-        return minH + levels[index] * (height - minH)
-    }
-
-    private func startTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { _ in
-            withAnimation(.easeInOut(duration: tickInterval * 1.6)) {
-                for i in 0..<barCount {
-                    levels[i] = CGFloat.random(in: 0.1...1.0)
-                }
-            }
-        }
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-        withAnimation(Anim.content) {
-            for i in 0..<barCount {
-                levels[i] = 0.15
-            }
-        }
+        Image(systemName: "waveform")
+            .font(.system(size: height, weight: .medium))
+            .foregroundStyle(color)
+            .symbolEffect(
+                .variableColor.iterative.reversing,
+                options: .repeating.speed(0.7),
+                isActive: isPlaying
+            )
+            .contentTransition(.symbolEffect(.replace))
+            .frame(height: height)
     }
 }
 
