@@ -36,6 +36,7 @@ final class HomeViewModel: ObservableObject {
     /// Time-based greeting.
     var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
+        if hour < 6  { return L.goodEvening }
         if hour < 12 { return L.goodMorning }
         if hour < 18 { return L.goodAfternoon }
         return L.goodEvening
@@ -793,7 +794,7 @@ struct HomeView: View {
                     .font(.system(size: 22, weight: .bold))
                     .padding(.horizontal, 16)
 
-                HStack(spacing: 0) {
+                HStack(spacing: 10) {
                     statPill(
                         value: "\(stats.totalPlays)",
                         label: L.songs,

@@ -148,6 +148,7 @@ struct SearchView: View {
             .background(Color(.systemBackground))
             .navigationTitle(L.search)
             .navigationBarTitleDisplayMode(.large)
+            .onAppear { searchFocused = true }
             .onChange(of: vm.query) { _, newValue in
                 vm.onQueryChange(newValue)
             }
