@@ -220,10 +220,12 @@ private struct SongRowView: View {
         .padding(.vertical, showCover ? 6 : 10)
         .task { await checkCacheState() }
         .task(id: cacheState) {
-            // Poll progress while downloading
-            guard case .downloading = cacheState else { return }
+            // Poll while not yet cached: detect download start (none→downloading)
+            // and track progress (downloading→cached). Cached songs stop polling.
+            guard cacheState != .cached else { return }
+            let interval: UInt64 = cacheState == .none ? 2_000_000_000 : 800_000_000
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 800_000_000)
+                try? await Task.sleep(nanoseconds: interval)
                 await checkCacheState()
             }
         }

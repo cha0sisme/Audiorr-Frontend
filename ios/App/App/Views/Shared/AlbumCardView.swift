@@ -189,31 +189,38 @@ extension View {
 
 // MARK: - Animated equalizer bars (now-playing indicator)
 
-/// Apple Music-style 4-bar equalizer. Each bar animates independently with
-/// randomized target heights that change at different rates, producing an
-/// organic "audio visualization" feel rather than a mechanical loop.
-/// Native SF Symbol equalizer indicator — uses the system `waveform` symbol
-/// with `symbolEffect(.variableColor)` for a lightweight, accessibility-aware
-/// animation that matches the Apple Music / Dynamic Island style.
-/// No Timer, no manual state — fully rendered by the system.
+/// Apple Music-style animated equalizer. Three bars animate independently
+/// with staggered phase offsets, producing organic-looking bouncing bars.
+/// Uses a single TimelineView (no Timer, no manual state management) —
+/// the system drives the animation at display refresh rate.
+/// When paused, bars smoothly animate down to a low resting height.
 struct NowPlayingIndicator: View {
     var isPlaying: Bool
     var color: Color = .accentColor
-    var barWidth: CGFloat = 3   // ignored — kept for call-site compat
+    var barWidth: CGFloat = 3
     var height: CGFloat = 14
-    var spacing: CGFloat = 1.5  // ignored — kept for call-site compat
+    var spacing: CGFloat = 1.5
+
+    // Phase offsets per bar (radians) — staggered for organic feel
+    private let phases: [Double] = [0, 2.1, 4.2]
 
     var body: some View {
-        Image(systemName: "waveform")
-            .font(.system(size: height, weight: .medium))
-            .foregroundStyle(color)
-            .symbolEffect(
-                .variableColor.iterative.reversing,
-                options: .repeating.speed(0.7),
-                isActive: isPlaying
-            )
-            .contentTransition(.symbolEffect(.replace))
-            .frame(height: height)
+        TimelineView(.animation(minimumInterval: nil, paused: !isPlaying)) { timeline in
+            let t = isPlaying ? timeline.date.timeIntervalSinceReferenceDate : 0
+            HStack(alignment: .bottom, spacing: spacing) {
+                ForEach(0..<3, id: \.self) { i in
+                    let speed = 1.6 + Double(i) * 0.4
+                    let fraction = isPlaying
+                        ? 0.3 + 0.7 * (0.5 + 0.5 * sin(t * speed + phases[i]))
+                        : 0.15
+                    RoundedRectangle(cornerRadius: barWidth / 2)
+                        .fill(color)
+                        .frame(width: barWidth, height: height * fraction)
+                        .animation(.easeInOut(duration: isPlaying ? 0.2 : 0.4), value: fraction)
+                }
+            }
+            .frame(height: height, alignment: .bottom)
+        }
     }
 }
 

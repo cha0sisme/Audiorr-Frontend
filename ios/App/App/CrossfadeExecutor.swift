@@ -653,8 +653,11 @@ class CrossfadeExecutor {
     }
 
     private func resetTimeStretch() {
+        // A (outgoing, about to be stopped) — full reset is safe
         if let tpA = timePitchA { Self.resetTimePitchStatic(tpA) }
-        if let tpB = timePitchB { Self.resetTimePitchStatic(tpB) }
+        // B (active, will become playerA after swap) — soft reset only!
+        // AudioUnitReset on a rendering chain permanently breaks playerTime(forNodeTime:)
+        if let tpB = timePitchB { Self.resetTimePitchSoft(tpB) }
     }
 
     /// Resets crossfade bands (0-3) to neutral: bypass + neutral parameters.
@@ -712,12 +715,24 @@ class CrossfadeExecutor {
     /// Resets a TimePitch node to neutral (rate 1.0) and flushes its CoreAudio DSP state.
     /// Same pattern as resetBandsStatic: Swift property + AudioUnitReset to prevent
     /// the DSP from continuing to time-stretch with stale rate values.
+    /// ⚠️ ONLY safe on IDLE (stopped) players — AudioUnitReset permanently breaks
+    /// playerTime(forNodeTime:) on active (rendering) chains.
     static func resetTimePitchStatic(_ tp: AVAudioUnitTimePitch) {
         tp.rate = 1.0
         tp.pitch = 0       // semitones
         tp.overlap = 8.0   // default
         let au = tp.audioUnit
         AudioUnitReset(au, kAudioUnitScope_Global, 0)
+    }
+
+    /// Soft reset: sets TimePitch parameters to neutral WITHOUT AudioUnitReset.
+    /// Safe for actively-rendering chains — preserves playerTime(forNodeTime:)
+    /// mapping which AudioUnitReset would permanently destroy on a playing node.
+    static func resetTimePitchSoft(_ tp: AVAudioUnitTimePitch) {
+        tp.rate = 1.0
+        tp.pitch = 0       // semitones
+        tp.overlap = 8.0   // default
+        // NO AudioUnitReset — the node continues rendering normally
     }
 
     /// Nuclear DSP reset: disconnects and reconnects processing nodes in the audio graph.

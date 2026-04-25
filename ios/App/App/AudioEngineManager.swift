@@ -104,6 +104,15 @@ class AudioEngineManager {
     private var lastReportedTime: Double = 0
     private var stalledTickCount: Int = 0
 
+    // Wall-clock fallback for currentTime() after crossfade.
+    // When AudioUnitReset (or any DSP disruption) breaks playerTime(forNodeTime:),
+    // this provides a smooth time estimate until playerTime recovers.
+    private var postCrossfadeWallTime: Double = 0   // CACurrentMediaTime() when set
+    private var postCrossfadeOffset: Double = 0     // song position at that moment
+
+    // Grace period: SAFETY NET 2 ignores stalled progress for 5s after crossfade
+    private var crossfadeCompletedAt: CFAbsoluteTime = 0
+
     // MARK: - Streaming mode (AVPlayer para canciones no cacheadas)
     // Cuando una canción no está en caché, usamos AVPlayer con la URL HTTP directamente
     // para arrancar en ~500ms (como Spotify). La descarga continúa en background para
@@ -296,6 +305,8 @@ class AudioEngineManager {
             replayGainMultiplierA = replayGainMultiplier
             playStartOffset = startAt
             pauseSampleTime = 0
+            postCrossfadeWallTime = 0
+            postCrossfadeOffset = 0
 
             // Aplicar ReplayGain via mixerA
             mixerA.outputVolume = replayGainMultiplier
@@ -580,6 +591,8 @@ class AudioEngineManager {
 
         playStartOffset = time
         pauseSampleTime = 0 // Reset: nuevo segmento, sampleTime empieza desde 0
+        postCrossfadeWallTime = 0
+        postCrossfadeOffset = 0
 
         let activePlayer = playerA
         playerA.scheduleSegment(file, startingFrame: startFrame, frameCount: framesToPlay, at: nil) { [weak self] in
@@ -640,6 +653,8 @@ class AudioEngineManager {
         nextFile = nil
         playStartOffset = 0
         nextStreamURL = nil
+        postCrossfadeWallTime = 0
+        postCrossfadeOffset = 0
 
         stopProgressTimer()
         clearNowPlaying()
@@ -860,6 +875,14 @@ class AudioEngineManager {
             // pero playStartOffset ya incluye ese tiempo. Solo contar samples nuevos.
             let deltaSamples = playerTime.sampleTime - pauseSampleTime
             raw = playStartOffset + Double(deltaSamples) / playerTime.sampleRate
+            // playerTime succeeded — clear wall-clock fallback (no longer needed)
+            if postCrossfadeWallTime > 0 { postCrossfadeWallTime = 0 }
+        } else if postCrossfadeWallTime > 0 {
+            // Wall-clock fallback: playerTime(forNodeTime:) returns nil (broken by
+            // AudioUnitReset or DSP disruption), but we know the position at crossfade
+            // completion + elapsed wall time. Provides smooth progress until recovery.
+            let elapsed = CACurrentMediaTime() - postCrossfadeWallTime
+            raw = postCrossfadeOffset + elapsed
         } else {
             raw = playStartOffset
         }
@@ -983,8 +1006,11 @@ class AudioEngineManager {
             swap(&self.timePitchA, &self.timePitchB)
             swap(&self.mixerA, &self.mixerB)
 
-            // Ensure time-stretch rates are back to 1.0 after swap — flush DSP state
-            CrossfadeExecutor.resetTimePitchStatic(self.timePitchA)
+            // Ensure time-stretch rates are back to 1.0 after swap.
+            // timePitchA (active, playing) — soft reset only! AudioUnitReset
+            // permanently breaks playerTime(forNodeTime:) on rendering chains.
+            // timePitchB (idle, stopped) — full reset is safe.
+            CrossfadeExecutor.resetTimePitchSoft(self.timePitchA)
             CrossfadeExecutor.resetTimePitchStatic(self.timePitchB)
 
             self.currentFile = nextFile
@@ -1063,6 +1089,29 @@ class AudioEngineManager {
                                                    timePitchA: bsTpA, timePitchB: bsTpB)
                 }
             }
+
+            // Layer 4: Reset stalled-progress counters so SAFETY NET 2 doesn't
+            // fire on the first few ticks after crossfade (time may jump).
+            self.stalledTickCount = 0
+            self.lastReportedTime = 0
+
+            // Layer 1: Set wall-clock fallback so currentTime() keeps advancing
+            // even if playerTime(forNodeTime:) returns nil after DSP reset.
+            // Compute B's actual position: startOffset + time elapsed during crossfade.
+            let bPosition: Double
+            if let nodeTime = self.playerA.lastRenderTime,
+               nodeTime.isSampleTimeValid,
+               let pTime = self.playerA.playerTime(forNodeTime: nodeTime) {
+                let delta = pTime.sampleTime - 0  // pauseSampleTime was just reset to 0
+                bPosition = self.playStartOffset + Double(delta) / pTime.sampleRate
+            } else {
+                bPosition = startOffset
+            }
+            self.postCrossfadeWallTime = CACurrentMediaTime()
+            self.postCrossfadeOffset = bPosition
+
+            // Layer 5: Mark crossfade completion time for SAFETY NET 2 grace period
+            self.crossfadeCompletedAt = CFAbsoluteTimeGetCurrent()
 
             self.isCrossfading = false
             self.crossfadeExecutor = nil
@@ -1484,7 +1533,15 @@ class AudioEngineManager {
         // - currentSongDuration is 0 so SAFETY NET 1 can't fire
         // - Any other case where the engine thinks it's playing but audio stopped
         if isPlaying && !isCrossfading && rawTime > 0 {
-            if abs(rawTime - lastReportedTime) < 0.01 {
+            // Grace period: skip stalled-progress detection for 5s after crossfade.
+            // playerTime(forNodeTime:) may return nil briefly after the swap/DSP reset,
+            // causing currentTime() to use the wall-clock fallback. During this window
+            // the stall detector must not fire.
+            let timeSinceCrossfade = CFAbsoluteTimeGetCurrent() - crossfadeCompletedAt
+            if crossfadeCompletedAt > 0 && timeSinceCrossfade < 5.0 {
+                stalledTickCount = 0
+                lastReportedTime = rawTime
+            } else if abs(rawTime - lastReportedTime) < 0.01 {
                 // Time hasn't changed since last tick
                 stalledTickCount += 1
                 // 3s / 0.25s (progressInterval) = 12 ticks

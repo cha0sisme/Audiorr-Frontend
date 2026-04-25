@@ -466,9 +466,8 @@ struct PlaylistDetailView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 22))
-                    .symbolRenderingMode(.hierarchical)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(isLight ? Color.accentColor : .white)
             }
         }

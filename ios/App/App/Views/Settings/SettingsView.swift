@@ -270,8 +270,8 @@ struct SettingsView: View {
                     }
                 }
 
-                // Crossfade duration slider (shown when crossfade is active)
-                if BackendState.shared.isAvailable || vm.crossfadeEnabled {
+                // Crossfade duration slider (only without backend + crossfade enabled)
+                if !BackendState.shared.isAvailable && vm.crossfadeEnabled {
                     settingsRow {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
