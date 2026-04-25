@@ -144,6 +144,11 @@ struct AlbumDetailView: View {
                     .lineLimit(1)
                     .opacity(stickyOpacity)
             }
+            if !vm.songs.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    toolbarMenu
+                }
+            }
         }
     }
 
@@ -353,19 +358,31 @@ struct AlbumDetailView: View {
                     .frame(width: 40, height: 40)
                     .background(fillColor, in: Circle())
             }
-
-            if !vm.songs.isEmpty {
-                DownloadButton(
-                    groupId: vm.displayAlbum.id,
-                    groupType: "album",
-                    title: vm.displayAlbum.name,
-                    songs: vm.songs,
-                    fillColor: fillColor,
-                    labelColor: labelColor
-                )
-            }
         }
         .disabled(vm.isLoading)
+    }
+
+    // MARK: - Toolbar Menu
+
+    @ViewBuilder
+    private var toolbarMenu: some View {
+        Menu {
+            Button {
+                DownloadManager.shared.downloadAlbum(
+                    albumId: vm.displayAlbum.id,
+                    title: vm.displayAlbum.name,
+                    songs: vm.songs,
+                    pin: false
+                )
+            } label: {
+                Label(L.download, systemImage: "arrow.down.circle")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 22))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isLight ? Color.accentColor : .white)
+        }
     }
 
     // MARK: - Song list

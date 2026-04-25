@@ -130,7 +130,13 @@ private struct SongRowView: View {
     var showArtist: Bool = true
     var showCover: Bool = false
 
-    @State private var isCached = false
+    private enum CacheState: Equatable {
+        case none
+        case downloading(Double)
+        case cached
+    }
+
+    @State private var cacheState: CacheState = .none
     private let nowPlaying = NowPlayingState.shared
 
     private var isLight: Bool { palette.isPrimaryLight }
@@ -201,11 +207,7 @@ private struct SongRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isCached {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isLight ? Color.black.opacity(0.3) : Color.white.opacity(0.3))
-            }
+            cacheIndicator
 
             if let dur = song.duration, dur > 0 {
                 Text(formatSeconds(dur))
@@ -216,8 +218,63 @@ private struct SongRowView: View {
         .padding(.leading, 16)
         .padding(.trailing, 4)
         .padding(.vertical, showCover ? 6 : 10)
-        .task {
-            isCached = await OfflineStorageManager.shared.isCached(songId: song.id)
+        .task { await checkCacheState() }
+        .task(id: cacheState) {
+            // Poll progress while downloading
+            guard case .downloading = cacheState else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                await checkCacheState()
+            }
+        }
+    }
+
+    // MARK: - Cache indicator (Apple-native micro animation)
+
+    @ViewBuilder
+    private var cacheIndicator: some View {
+        switch cacheState {
+        case .none:
+            EmptyView()
+
+        case .downloading(let progress):
+            ZStack {
+                Circle()
+                    .stroke(tertiaryText.opacity(0.3), lineWidth: 1.5)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(tertiaryText, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 14, height: 14)
+            .transition(.scale(scale: 0.5).combined(with: .opacity))
+
+        case .cached:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(isLight ? Color.black.opacity(0.3) : Color.white.opacity(0.3))
+                .transition(.scale(scale: 0.1).combined(with: .opacity))
+                .symbolEffect(.bounce, value: cacheState)
+        }
+    }
+
+    // MARK: - State
+
+    private func checkCacheState() async {
+        let cached = await OfflineStorageManager.shared.isCached(songId: song.id)
+        if cached {
+            if cacheState != .cached {
+                withAnimation(Anim.moderate) { cacheState = .cached }
+            }
+            return
+        }
+
+        if let progress = DownloadManager.shared.downloadProgress(songId: song.id) {
+            withAnimation(Anim.micro) { cacheState = .downloading(progress) }
+        } else if DownloadManager.shared.isSongQueued(songId: song.id) {
+            withAnimation(Anim.micro) { cacheState = .downloading(0) }
+        } else if cacheState != .none {
+            withAnimation(Anim.small) { cacheState = .none }
         }
     }
 
