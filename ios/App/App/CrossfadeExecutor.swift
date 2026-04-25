@@ -613,27 +613,27 @@ class CrossfadeExecutor {
         mixerB.pan = 0
         resetTimeStretch()
 
-        // Dispatch backstop reset + nuclear reconnect on IDLE player (B, just stopped)
-        // to automationQueue — serializes AFTER any in-flight filterTick().
-        // IMPORTANT: Do NOT nuclear reconnect A (active, playing) — disconnecting a
-        // playing node breaks the audio pipeline and causes silence on real devices.
+        // Dispatch backstop to automationQueue — serializes AFTER any in-flight filterTick().
+        // A (active): best-effort parameter reset only. EQ node replacement happens in
+        // AudioEngineManager.cancelCrossfade() where we have mutable references.
+        // B (stopped): nuclear reconnect is safe on idle players.
         let eng = self.engine
         let eqA = self.eqA, eqB = self.eqB
         let mA = self.mixerA, mB = self.mixerB
         let pB = self.playerB
         let tpA = self.timePitchA, tpB = self.timePitchB
         Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
-            // Backstop reset on A (active) — parameter reset only, no disconnect
+            // A (active): parameter reset only — node replacement in cancelCrossfade()
             Self.resetBandsStatic(eqA)
             if let tpA { Self.resetTimePitchStatic(tpA) }
             mA.pan = 0
-            // Nuclear reconnect on B (stopped) — safe to disconnect
+            // B (stopped): nuclear reconnect — safe to disconnect idle player
             if let tpB {
                 Self.reconnectChain(engine: eng, player: pB, timePitch: tpB,
                                     eq: eqB, mixer: mB, label: "cancel-B")
             }
             mB.pan = 0
-            Self.auditEQState(source: "cancel+nuclear", eqA: eqA, eqB: eqB,
+            Self.auditEQState(source: "cancel+reconnect", eqA: eqA, eqB: eqB,
                               mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
         }
     }
@@ -724,6 +724,7 @@ class CrossfadeExecutor {
     /// Forces CoreAudio to rebuild the render pipeline with fresh IIR coefficients.
     /// On real devices, AudioUnitReset + parameter writes update the parameter tree but
     /// the render thread may keep using stale coefficients — especially in background.
+    /// ⚠️ ONLY safe on IDLE (stopped) players — disconnecting a playing player breaks audio.
     static func reconnectChain(
         engine: AVAudioEngine,
         player: AVAudioPlayerNode,
@@ -748,6 +749,72 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] 🔄 Nuclear reconnect (\(label))")
         TransitionDiagnostics.shared.logEvent("🔄 NUCLEAR RECONNECT (\(label))")
+    }
+
+    /// Replaces an EQ node with a brand-new instance, guaranteeing zero stale IIR
+    /// coefficients. The old EQ is detached (triggers CoreAudio's CleanupMemory,
+    /// destroying all internal filter state). A fresh AVAudioUnitEQ is created,
+    /// configured with neutral crossfade bands + the user's global EQ, and connected.
+    ///
+    /// **Why disconnect/reconnect is not enough:**
+    /// `disconnectNodeOutput` is a routing operation — it does NOT reset AudioUnit
+    /// internal state (confirmed by Infinum's symbolic breakpoint analysis: only
+    /// `engine.detach()` triggers `CleanupMemory`/`InitializeMemory`).
+    /// `AudioUnitReset` + parameter writes update the parameter tree (audits read CLEAN)
+    /// but the render thread may keep using stale biquad coefficients on real devices.
+    ///
+    /// A new AudioUnit instance has zero history — impossible to have stale coefficients.
+    ///
+    /// **Safe on ACTIVE chains:** only the EQ node is swapped. The player → timePitch
+    /// connection is untouched, so audio keeps flowing. Dynamic reconnection upstream
+    /// of a mixer is supported (WWDC 2014 Session 502). Worst case: ~1 render buffer
+    /// gap (~5ms), inaudible right after a crossfade.
+    ///
+    /// - Returns: The new AVAudioUnitEQ. Caller must update its stored reference.
+    @discardableResult
+    static func replaceEQNode(
+        engine: AVAudioEngine,
+        oldEQ: AVAudioUnitEQ,
+        timePitch: AVAudioUnitTimePitch,
+        mixer: AVAudioMixerNode,
+        label: String
+    ) -> AVAudioUnitEQ {
+        let bandCount = oldEQ.bands.count
+        let newEQ = AVAudioUnitEQ(numberOfBands: bandCount)
+
+        // Crossfade bands (0-3): neutral state
+        resetBandsStatic(newEQ)
+
+        // Global EQ bands (4-7): copy from old node before detaching
+        for i in 4..<bandCount {
+            let src = oldEQ.bands[i]
+            let dst = newEQ.bands[i]
+            dst.filterType = src.filterType
+            dst.frequency = src.frequency
+            dst.gain = src.gain
+            dst.bandwidth = src.bandwidth
+            dst.bypass = src.bypass
+        }
+
+        // 1. Attach new EQ (not yet connected — no audio flows through it)
+        engine.attach(newEQ)
+
+        // 2. Connect newEQ → mixer (still no input, silent)
+        engine.connect(newEQ, to: mixer, format: nil)
+
+        // 3. Atomic switch: redirect timePitch output from oldEQ → newEQ
+        //    Apple docs: "If the node already has a connection on the output bus,
+        //    this method breaks the existing connection and creates a new one."
+        engine.connect(timePitch, to: newEQ, format: nil)
+
+        // 4. Detach old EQ — triggers CleanupMemory, destroys all internal state
+        engine.disconnectNodeOutput(oldEQ)
+        engine.detach(oldEQ)
+
+        print("[CrossfadeExecutor] ♻️ EQ replaced (\(label)) — fresh AudioUnit, zero stale state")
+        TransitionDiagnostics.shared.logEvent("♻️ EQ REPLACED (\(label))")
+
+        return newEQ
     }
 
     // MARK: - Post-reset audit
@@ -1548,13 +1615,9 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
-        // IMPORTANT: Do NOT nuclear reconnect the active player (B) here.
-        // disconnectNodeOutput on a playing AVAudioPlayerNode breaks the audio
-        // pipeline on real devices, causing complete silence after crossfade.
-        // resetBandsStatic + AudioUnitReset (called above) is sufficient for the
-        // active chain. Nuclear reconnect only happens on IDLE nodes — playerA
-        // (stopped) gets reconnected in onComplete, and playerB (idle) gets
-        // reconnected before the NEXT crossfade in startCrossfade().
+        // Note: EQ node replacement (detach old + attach fresh) happens in
+        // AudioEngineManager.onComplete where we have mutable references.
+        // resetCrossfadeBands above is best-effort for the brief window before onComplete.
 
         // Audit after reset
         Self.auditEQState(source: "completeCrossfade", eqA: eqA, eqB: eqB,

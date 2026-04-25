@@ -33,12 +33,27 @@ final class BackendState {
     }
 
     /// Trigger a fresh availability check. Safe to call from anywhere; coalesces concurrent calls.
+    /// Retries once after 3s on failure (transient network issues).
     func check() {
         guard checkTask == nil else { return }
         isChecking = true
         checkTask = Task {
             let result = await NavidromeService.shared.checkBackendAvailable()
-            self.isAvailable = result
+            // Bail early if cancelled (invalidateAndRecheck started a new task)
+            guard !Task.isCancelled else { return }
+            if result {
+                self.isAvailable = true
+            } else {
+                // Show unavailable immediately so UI doesn't wait for retry
+                self.isAvailable = false
+                // Retry once after 3s — handles transient timeouts on slow networks
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                NavidromeService.shared.invalidateBackendAvailableCache()
+                let retry = await NavidromeService.shared.checkBackendAvailable()
+                guard !Task.isCancelled else { return }
+                self.isAvailable = retry
+            }
             self.isChecking = false
             self.checkTask = nil
             // Re-observe network changes (withObservationTracking is one-shot)

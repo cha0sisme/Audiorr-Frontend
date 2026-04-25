@@ -171,6 +171,16 @@ actor AnalysisCacheService {
 
     // MARK: - Get Analysis
 
+    /// Instant cache-only lookup (memory + disk). No network requests.
+    func getCachedAnalysis(songId: String) -> AnalysisResult? {
+        if let cached = memoryCache[songId] { return cached }
+        if let disk = loadFromDisk(songId: songId) {
+            memoryCache[songId] = disk
+            return disk
+        }
+        return nil
+    }
+
     /// Get analysis for a song, fetching from backend if not cached.
     func getAnalysis(songId: String, streamURL: URL?) async -> AnalysisResult? {
         // Memory cache
@@ -205,6 +215,51 @@ actor AnalysisCacheService {
         }
 
         return result
+    }
+
+    /// Get analysis with a maximum wait time. Returns cached result instantly.
+    /// If not cached, starts a backend fetch and waits up to `timeout` seconds.
+    /// The fetch continues in background even if timeout fires — result is cached
+    /// for future calls or Phase 2 recalculation.
+    func getAnalysisWithTimeout(songId: String, streamURL: URL?, timeout: TimeInterval) async -> AnalysisResult? {
+        // Instant cache hit (memory + disk)
+        if let cached = getCachedAnalysis(songId: songId) { return cached }
+        guard let streamURL else { return nil }
+
+        // Ensure backend fetch is running (deduped via inFlightTasks).
+        // This unstructured Task continues even if our timeout fires.
+        if inFlightTasks[songId] == nil {
+            let sid = songId
+            let url = streamURL
+            inFlightTasks[sid] = Task<AnalysisResult?, Never> {
+                let result = await self.fetchFromBackend(songId: sid, streamURL: url)
+                if let result {
+                    self.memoryCache[sid] = result
+                    self.saveToDisk(songId: sid, result: result)
+                }
+                self.inFlightTasks[sid] = nil
+                return result
+            }
+        }
+
+        guard let fetchTask = inFlightTasks[songId] else { return nil }
+
+        // Race: await fetch vs timeout.
+        // cancelAll() only cancels the child wrapper tasks, NOT the underlying
+        // unstructured fetchTask which continues caching in background.
+        return await withTaskGroup(of: AnalysisResult?.self) { group in
+            group.addTask {
+                await fetchTask.value
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+
+            let first = await group.next()!
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Convert analysis result to DJMixingService.SongAnalysis for crossfade calculations.

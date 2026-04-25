@@ -9,12 +9,12 @@ struct ProgressBarView: View {
     @State private var dragFraction: CGFloat = 0
 
     // Local interpolation: smooths the 2s sync jumps from React
-    @State private var interpolatedProgress: Double = 0
+    // Initialize from live state so reopening the viewer doesn't flash "0:00"
+    // (the viewer is inside `if viewerIsOpen` so @State resets on every open)
+    @State private var interpolatedProgress: Double = NowPlayingState.shared.progress
     @State private var lastSyncTime: Date = .now
-    @State private var lastSyncProgress: Double = 0
+    @State private var lastSyncProgress: Double = NowPlayingState.shared.progress
     @State private var interpolationTimer: Timer?
-
-    init() {}
 
     var body: some View {
         VStack(spacing: 8) {
@@ -132,16 +132,22 @@ struct ProgressBarView: View {
 
     // MARK: - Helpers
 
+    /// Current progress source: use live state until interpolation timer starts,
+    /// then switch to interpolated value for smooth 4Hz updates.
+    private var currentProgress: Double {
+        interpolationTimer != nil ? interpolatedProgress : state.progress
+    }
+
     private var smoothFraction: CGFloat {
         guard state.duration > 0 else { return 0 }
-        return min(max(CGFloat(interpolatedProgress / state.duration), 0), 1)
+        return min(max(CGFloat(currentProgress / state.duration), 0), 1)
     }
 
     private var displayedTime: Double {
         if isDragging {
             return Double(dragFraction) * state.duration
         }
-        return min(max(interpolatedProgress, 0), state.duration)
+        return min(max(currentProgress, 0), state.duration)
     }
 
     private func formatTime(_ seconds: Double) -> String {

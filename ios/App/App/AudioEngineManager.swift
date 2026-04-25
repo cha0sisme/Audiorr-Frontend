@@ -746,11 +746,18 @@ class AudioEngineManager {
             return
         }
 
+        // Capture position from AVPlayer WHILE it's still playing
         let currentPos = currentTime()
         playSequence += 1
         let thisPlaySeq = playSequence
 
-        stopStreamPlayer()   // isStreamMode = false; AVPlayer detenido
+        // ═══ GAPLESS HANDOFF ═══
+        // Old order: stop AVPlayer → start engine → gap (~5-20ms, audible)
+        // New order: start engine → stop AVPlayer → overlap (~5ms, inaudible)
+        //
+        // Prepare and start AVAudioEngine BEFORE stopping AVPlayer.
+        // Both outputs overlap for ~1 render buffer (~5ms) playing the same
+        // audio at the same position — inaudible. A gap is audible.
 
         guard ensureEngineRunning() else {
             print("[AudioEngineManager] handoffStreamToEngine: engine no arrancó")
@@ -807,8 +814,14 @@ class AudioEngineManager {
             }
         }
 
+        // Start AVAudioEngine FIRST — audio begins flowing through the engine
         playerA.play()
-        print("[AudioEngineManager] Handoff stream→engine en \(String(format: "%.1f", currentPos))s, playSeq=\(thisPlaySeq)")
+
+        // THEN stop AVPlayer — brief overlap (~5ms) of same audio is inaudible,
+        // whereas the old gap (stop first, play after) was audible as a click/cut.
+        stopStreamPlayer()
+
+        print("[AudioEngineManager] Handoff stream→engine en \(String(format: "%.1f", currentPos))s (gapless), playSeq=\(thisPlaySeq)")
     }
 
     private func songIdFromURL(_ url: URL) -> String {
@@ -825,23 +838,31 @@ class AudioEngineManager {
     // MARK: - Tiempo actual
 
     func currentTime() -> Double {
+        let raw: Double
+
         // Modo streaming: leer posición directamente del AVPlayer
         if isStreamMode, let player = streamPlayer {
             let t = player.currentTime().seconds
-            return t.isNaN || t.isInfinite ? playStartOffset : t
-        }
-        guard isPlaying,
+            raw = t.isNaN || t.isInfinite ? playStartOffset : t
+        } else if isPlaying,
               let nodeTime = playerA.lastRenderTime,
               nodeTime.isSampleTimeValid,
-              let playerTime = playerA.playerTime(forNodeTime: nodeTime)
-        else {
-            return playStartOffset
+              let playerTime = playerA.playerTime(forNodeTime: nodeTime) {
+            // Restar pauseSampleTime para evitar double-counting tras pause/resume.
+            // Después de resume, sampleTime continúa desde donde estaba al pausar,
+            // pero playStartOffset ya incluye ese tiempo. Solo contar samples nuevos.
+            let deltaSamples = playerTime.sampleTime - pauseSampleTime
+            raw = playStartOffset + Double(deltaSamples) / playerTime.sampleRate
+        } else {
+            raw = playStartOffset
         }
-        // Restar pauseSampleTime para evitar double-counting tras pause/resume.
-        // Después de resume, sampleTime continúa desde donde estaba al pausar,
-        // pero playStartOffset ya incluye ese tiempo. Solo contar samples nuevos.
-        let deltaSamples = playerTime.sampleTime - pauseSampleTime
-        return playStartOffset + Double(deltaSamples) / playerTime.sampleRate
+
+        // Clamp to valid range [0, duration]. Prevents:
+        // - Negative values from rounding errors or stale deltaSamples
+        // - Overflow past duration during crossfade swap or stream mode fallback
+        // - Stale playStartOffset from previous song leaking through guard fallback
+        let clamped = max(0, currentSongDuration > 0 ? min(raw, currentSongDuration) : raw)
+        return clamped
     }
 
     // MARK: - Preparar siguiente canción
@@ -988,25 +1009,26 @@ class AudioEngineManager {
             // Asegurar que el master mixer tiene el volumen correcto post-crossfade
             self.engine.mainMixerNode.outputVolume = self.volume
 
-            // ═══ NUCLEAR DSP RESET ═══
-            // Disconnect and reconnect processing nodes to force CoreAudio to rebuild
-            // the render pipeline with fresh IIR coefficients. This is the definitive fix
-            // for "stuck filters" on real devices where AudioUnitReset + parameter writes
-            // update the parameter tree (audits show CLEAN) but the render thread continues
-            // using stale coefficients computed from previous crossfade values.
+            // ═══ DSP RESET ═══
+            // Two-tier reconnect to force CoreAudio to rebuild the render pipeline
+            // with fresh IIR coefficients on BOTH chains.
 
-            // Idle chain (playerB): safe to reconnect immediately (nothing playing)
+            // Active chain (playerA after swap): REPLACE EQ with fresh instance.
+            // disconnectNodeOutput is just routing — doesn't reset AudioUnit internal state.
+            // Only engine.detach() triggers CleanupMemory, destroying stale IIR coefficients.
+            // A new AVAudioUnitEQ has zero history — impossible to have stale coefficients.
+            // Player → timePitch connection is untouched, audio keeps flowing.
+            self.eqA = CrossfadeExecutor.replaceEQNode(
+                engine: self.engine, oldEQ: self.eqA,
+                timePitch: self.timePitchA, mixer: self.mixerA,
+                label: "onComplete-activeA"
+            )
+
+            // Idle chain (playerB after swap): full nuclear reconnect (nothing playing)
             self.reconnectProcessingChain(
                 player: self.playerB, timePitch: self.timePitchB,
                 eq: self.eqB, mixer: self.mixerB, label: "idle-B"
             )
-
-            // IMPORTANT: Do NOT nuclear reconnect the active player (playerA after swap).
-            // disconnectNodeOutput on a playing AVAudioPlayerNode breaks the audio
-            // pipeline on real devices, causing complete silence. resetBandsStatic +
-            // AudioUnitReset (already called) is sufficient for the active chain.
-            // The idle chain (playerB) was reconnected above. The active chain will
-            // get nuclear reconnected when it becomes idle in the NEXT crossfade cycle.
 
             // Audit post-swap
             CrossfadeExecutor.auditEQState(
@@ -1087,6 +1109,10 @@ class AudioEngineManager {
             self.currentFile = self.nextFile
             self.nextFile = nil
             self.replayGainMultiplierA = self.replayGainMultiplierB
+            // Reset time state for the new song — without this, currentTime() returns
+            // stale playStartOffset from the old song after the swap.
+            self.playStartOffset = 0
+            self.pauseSampleTime = 0
             if self.nextSongDuration > 0 { self.currentSongDuration = self.nextSongDuration }
             if !self.nextSongTitle.isEmpty  { self.currentSongTitle  = self.nextSongTitle }
             if !self.nextSongArtist.isEmpty { self.currentSongArtist = self.nextSongArtist }
@@ -1119,9 +1145,13 @@ class AudioEngineManager {
         streamFadeWatchdog?.cancel()
         streamFadeWatchdog = nil
         isCrossfading = false
-        // Reset DSP on A (active, playing) — parameter reset only, no disconnect
-        CrossfadeExecutor.resetBandsStatic(eqA)
-        CrossfadeExecutor.resetTimePitchStatic(timePitchA)
+        // Replace EQ on A (active, playing) with a fresh instance.
+        // disconnectNodeOutput is just routing — only engine.detach() triggers
+        // CleanupMemory, destroying stale IIR coefficients. A new AudioUnit has zero history.
+        eqA = CrossfadeExecutor.replaceEQNode(
+            engine: engine, oldEQ: eqA,
+            timePitch: timePitchA, mixer: mixerA,
+            label: "cancelCrossfade-activeA")
         // Nuclear reconnect on B (idle) — safe to disconnect/reconnect
         reconnectProcessingChain(player: playerB, timePitch: timePitchB,
                                  eq: eqB, mixer: mixerB, label: "cancelCrossfade-B")

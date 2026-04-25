@@ -362,7 +362,12 @@ struct HomeView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                CachedCoverView(coverArt: ctx.coverArtId, size: 44, cornerRadius: 6)
+                CachedCoverView(
+                    coverArt: ctx.coverArtId,
+                    playlistId: isPlaylist ? ctx.id : nil,
+                    size: 44,
+                    cornerRadius: 6
+                )
                 Text(ctx.title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
@@ -930,6 +935,7 @@ struct HomeView: View {
 /// cached cover is needed. Survives tab switches without flashing.
 private struct CachedCoverView: View {
     let coverArt: String?
+    var playlistId: String? = nil   // When set, tries backend cover first (personalized)
     var size: CGFloat = 48
     var cornerRadius: CGFloat = 8
     var fallbackIcon: String = "music.note"
@@ -953,16 +959,43 @@ private struct CachedCoverView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .onAppear {
-            if image == nil, let coverArt {
+            guard image == nil else { return }
+            if let pid = playlistId, let cached = PlaylistCoverCache.shared.image(for: pid) {
+                image = cached
+            } else if let coverArt {
                 image = AlbumCoverCache.shared.image(for: coverArt)
             }
         }
         .task {
-            guard image == nil, let coverArt, !coverArt.isEmpty,
+            guard image == nil else { return }
+
+            // Backend-first for playlists (personalized covers)
+            if let pid = playlistId {
+                if let cached = PlaylistCoverCache.shared.image(for: pid) {
+                    image = cached
+                    return
+                }
+                if BackendState.shared.isAvailable,
+                   let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: pid),
+                   let (data, resp) = try? await URLSession.shared.data(from: backendURL),
+                   let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                   let img = UIImage(data: data) {
+                    PlaylistCoverCache.shared.setImage(img, for: pid)
+                    image = img
+                    return
+                }
+            }
+
+            // Navidrome fallback
+            guard let coverArt, !coverArt.isEmpty,
                   let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let img = UIImage(data: data) else { return }
-            AlbumCoverCache.shared.setImage(img, for: coverArt)
+            if let pid = playlistId {
+                PlaylistCoverCache.shared.setImage(img, for: pid)
+            } else {
+                AlbumCoverCache.shared.setImage(img, for: coverArt)
+            }
             image = img
         }
     }

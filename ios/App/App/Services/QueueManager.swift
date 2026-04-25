@@ -633,13 +633,16 @@ final class QueueManager: AudioEngineDelegate {
 
         // Try to preload the file + calculate crossfade intelligence
         crossfadePreparationTask = Task {
-            // Parallel: load file + get analysis for both songs
+            // Parallel: load file + get analysis for both songs.
+            // Analysis uses 8s timeout — if backend is slow/unreachable, we proceed
+            // with generic crossfade instead of blocking forever. The backend fetch
+            // continues in background; Phase 2 recalculates if it arrives in time.
             async let fileLoad = AudioFileLoader.shared.load(remoteURL: streamURL, songId: nextSong.id)
-            async let currentAnalysis = AnalysisCacheService.shared.getAnalysis(
-                songId: current.id, streamURL: currentStreamURL
+            async let currentAnalysis = AnalysisCacheService.shared.getAnalysisWithTimeout(
+                songId: current.id, streamURL: currentStreamURL, timeout: 8
             )
-            async let nextAnalysis = AnalysisCacheService.shared.getAnalysis(
-                songId: nextSong.id, streamURL: streamURL
+            async let nextAnalysis = AnalysisCacheService.shared.getAnalysisWithTimeout(
+                songId: nextSong.id, streamURL: streamURL, timeout: 8
             )
 
             let fileURL = try? await fileLoad
@@ -1078,6 +1081,49 @@ final class QueueManager: AudioEngineDelegate {
                 AudioEngineManager.shared?.setAutomixTrigger(triggerTime: triggerTime, config: finalConfig)
 
                 print("[QueueManager] Crossfade prepared: \(executorType.rawValue) trigger=\(String(format: "%.1f", triggerTime))s (outro=\(String(format: "%.1f", outroStart))s, effDur=\(String(format: "%.1f", effectiveDuration))s, dur=\(String(format: "%.1f", currentDuration))s, now=\(String(format: "%.1f", nowTime))s), fade=\(String(format: "%.1f", crossfadeResult.fadeDuration))s, B-entry=\(String(format: "%.1f", adjustedEntryPoint))s")
+            }
+
+            // ── Phase 2: late analysis upgrade ──
+            // If either analysis timed out (was nil), the backend fetch continues
+            // in background. Wait for it and recalculate the crossfade with better
+            // data — but only if the trigger hasn't fired yet.
+            let curAnMissing = curAn == nil
+            let nxtAnMissing = nxtAn == nil
+            guard curAnMissing || nxtAnMissing else { return }
+            guard !Task.isCancelled else { return }
+
+            let currentId = current.id
+            let nextId = nextSong.id
+
+            // Wait for the full analysis (no timeout — fetch is already in progress)
+            if curAnMissing {
+                _ = await AnalysisCacheService.shared.getAnalysis(
+                    songId: currentId, streamURL: currentStreamURL
+                )
+            }
+            guard !Task.isCancelled else { return }
+            if nxtAnMissing {
+                _ = await AnalysisCacheService.shared.getAnalysis(
+                    songId: nextId, streamURL: streamURL
+                )
+            }
+            guard !Task.isCancelled else { return }
+
+            // Check if we actually got better data
+            let freshCurAn = await AnalysisCacheService.shared.getCachedAnalysis(songId: currentId)
+            let freshNxtAn = await AnalysisCacheService.shared.getCachedAnalysis(songId: nextId)
+            let gotBetter = (curAnMissing && freshCurAn != nil) || (nxtAnMissing && freshNxtAn != nil)
+            guard gotBetter else { return }
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run { [self] in
+                guard self.crossfadePreparationId == thisPreparationId else { return }
+                guard let engine = AudioEngineManager.shared,
+                      engine.automixHasTrigger,
+                      !engine.isCrossfading else { return }
+
+                print("[QueueManager] 🔄 Late analysis arrived — recalculating crossfade trigger")
+                self.prepareNextForCrossfade()
             }
         }
     }

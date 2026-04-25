@@ -131,8 +131,8 @@ final class NavidromeService: ObservableObject {
         return URL(string: "\(base)/api/playlists/\(playlistId)/cover.png")
     }
 
-    /// Check if the Audiorr backend is reachable (HEAD /api/health, 5s timeout).
-    /// Cached for 30s to avoid hammering the server on every view load.
+    /// Check if the Audiorr backend is reachable (GET /api/health, 5s timeout).
+    /// Positive results cached for 30s, negative for 10s (retry sooner on failure).
     func checkBackendAvailable() async -> Bool {
         let cacheKey = "backendAvailable"
         if let cached = cacheGet(cacheKey) as? Bool { return cached }
@@ -143,7 +143,7 @@ final class NavidromeService: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 2
+        request.timeoutInterval = 5  // generous for slow networks (was 2s)
 
         // Any HTTP response means the server is running.
         // Only network errors (timeout, unreachable) count as unavailable.
@@ -154,7 +154,7 @@ final class NavidromeService: ObservableObject {
         } else {
             available = false
         }
-        cacheSet(cacheKey, value: available, ttl: 30)
+        cacheSet(cacheKey, value: available, ttl: available ? 30 : 10)
         return available
     }
 

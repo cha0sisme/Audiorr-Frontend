@@ -363,8 +363,8 @@ struct SettingsView: View {
                 }
             }
 
-            // ── Transition Diagnostics (only with backend connection) ──
-            if BackendState.shared.isAvailable {
+            // ── Transition Diagnostics ──
+            if BackendState.shared.isAvailable || TransitionDiagnostics.debugModeEnabled {
                 settingsSection(header: "Diagnostics") {
                     settingsRow {
                         Toggle(isOn: Binding(

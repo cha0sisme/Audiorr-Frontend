@@ -42,7 +42,12 @@ final class BackendService {
     }
 
     func analyzeSong(_ payload: AnalysisPayload) async throws -> [String: Any] {
-        let data = try await post(path: "/api/analysis/song", body: payload)
+        var request = try makeRequest(path: "/api/analysis/song", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try jsonEncoder.encode(payload)
+        request.timeoutInterval = 15  // Analysis can be slow (ML processing) but shouldn't hang
+        let (data, response) = try await session.data(for: request)
+        try checkResponse(response)
         return try jsonDict(from: data)
     }
 
