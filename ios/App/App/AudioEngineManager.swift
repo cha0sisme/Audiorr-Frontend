@@ -517,6 +517,25 @@ class AudioEngineManager {
         if isCrossfading { playerB.play() }
         isPlaying = true
 
+        // Verify the player is actually rendering after resume.
+        // After a long interruption (Siri, phone call) the engine may have
+        // restarted but the scheduled segment was invalidated. If after 0.5s
+        // playerTime still returns nil, ask the delegate to reload the song
+        // at the current position (cold restart).
+        let resumeOffset = playStartOffset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self, self.isPlaying, !self.isStreamMode else { return }
+            if let nodeTime = self.playerA.lastRenderTime,
+               nodeTime.isSampleTimeValid,
+               self.playerA.playerTime(forNodeTime: nodeTime) != nil {
+                return // Player is rendering normally
+            }
+            // Player is not rendering — schedule is dead. Reload.
+            print("[AudioEngineManager] resume() — player not rendering after restart, reloading at \(String(format: "%.1f", resumeOffset))s")
+            self.isPlaying = false
+            self.delegate?.audioEngineNeedsReload()
+        }
+
         // Restart automix timer if we have a pending trigger (was suspended on pause).
         // This ensures the trigger fires at the correct playback position, not immediately.
         if automixTriggerTime != nil && !isCrossfading {
@@ -2009,17 +2028,27 @@ class AudioEngineManager {
                 print("[AudioEngineManager] Interrupción comenzada")
 
             case .ended:
-                guard let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
+                let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                if options.contains(.shouldResume) && self.wasPlayingBeforeInterruption {
+                let shouldResume = options.contains(.shouldResume)
+
+                // Always resume if we were playing before the interruption.
+                // Siri "Announce Messages", short phone calls, and navigation prompts
+                // often send .ended WITHOUT .shouldResume. Apple Music and Spotify
+                // resume regardless — the user expectation is that music comes back.
+                if self.wasPlayingBeforeInterruption {
                     self.ensureAudioSessionActive()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                        self?.resume()
+                    // Small delay: let the system finish routing audio back to us.
+                    // 0.5s covers Siri dismiss animation + CarPlay audio route restore.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        guard let self = self, !self.isPlaying else { return }
+                        self.resume()
+                        print("[AudioEngineManager] Interrupción terminada — reanudado (shouldResume: \(shouldResume))")
                     }
-                    print("[AudioEngineManager] Interrupción terminada — reanudando")
                 } else {
-                    print("[AudioEngineManager] Interrupción terminada — sin reanudar (shouldResume: \(options.contains(.shouldResume)))")
+                    print("[AudioEngineManager] Interrupción terminada — sin reanudar (no estaba reproduciendo)")
                 }
+                self.wasPlayingBeforeInterruption = false
 
             @unknown default:
                 break

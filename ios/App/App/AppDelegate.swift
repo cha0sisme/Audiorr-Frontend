@@ -40,12 +40,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             object: nil
         )
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAudioInterruption),
-            name: AVAudioSession.interruptionNotification,
-            object: nil
-        )
+        // Audio interruption is handled solely by AudioEngineManager
+        // (tracks wasPlayingBeforeInterruption, handles shouldResume + auto-resume).
+        // Do NOT add a duplicate observer here — it races with AudioEngineManager
+        // and corrupts wasPlayingBeforeInterruption state.
 
         // Initialize AudioEngineManager (now standalone, no Capacitor plugin)
         if AudioEngineManager.shared == nil {
@@ -93,39 +91,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             }
         } catch {
             print("[Audiorr] Failed to set IO buffer duration: \(error)")
-        }
-    }
-
-    // MARK: - Audio Session Interruption
-
-    @objc private func handleAudioInterruption(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeValue)
-        else { return }
-
-        switch type {
-        case .began:
-            print("[Audiorr] Audio session interrupted")
-            AudioEngineManager.shared?.pause()
-
-        case .ended:
-            print("[Audiorr] Audio session interruption ended — reactivating")
-            do {
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch {
-                print("[Audiorr] Failed to reactivate audio session: \(error)")
-            }
-
-            let options = AVAudioSession.InterruptionOptions(
-                rawValue: (userInfo[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
-            )
-            if options.contains(.shouldResume) {
-                AudioEngineManager.shared?.resume()
-            }
-
-        @unknown default:
-            break
         }
     }
 
