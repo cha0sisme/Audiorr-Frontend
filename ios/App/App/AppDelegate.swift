@@ -214,6 +214,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             print("[Audiorr] Failed to reactivate AVAudioSession on foreground: \(error)")
         }
         configureIOBufferForRoute()
+
+        // Reconcile progress immediately so the UI shows the correct time
+        // on the very first frame after returning from background.
+        // Without this, state.progress is stale for up to 250ms (one timer tick).
+        if let engine = AudioEngineManager.shared, engine.isPlaying {
+            let time = engine.currentTime()
+            NowPlayingState.shared.progress = time
+        }
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

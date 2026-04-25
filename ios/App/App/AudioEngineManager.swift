@@ -814,6 +814,11 @@ class AudioEngineManager {
             }
         }
 
+        // Switch currentTime() to read from the engine BEFORE starting it.
+        // Without this, the progress timer could fire during the ~5ms overlap
+        // and read the stream player's (stale) position instead of the engine's.
+        isStreamMode = false
+
         // Start AVAudioEngine FIRST — audio begins flowing through the engine
         playerA.play()
 

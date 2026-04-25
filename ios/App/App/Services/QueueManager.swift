@@ -534,6 +534,11 @@ final class QueueManager: AudioEngineDelegate {
 
     nonisolated func audioEngineDidSeek(to time: Double) {
         Task { @MainActor in
+            // Update progress immediately so the UI reflects the seek position
+            // without waiting for the next 4Hz timer tick.
+            self.currentTime = time
+            syncNowPlayingState()
+
             // Re-prepare crossfade trigger after seek since the old one was cleared
             prepareNextForCrossfade()
         }
