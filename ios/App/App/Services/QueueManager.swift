@@ -112,6 +112,11 @@ final class QueueManager: AudioEngineDelegate {
 
     /// Play a list of songs starting at the given index.
     func play(songs: [NavidromeSong], startIndex: Int = 0) {
+        // User explicitly chose new content — discard any restored resume position.
+        // Without this, a cold-start restore at 2:00 would make a completely different
+        // song start at 2:00 when tapped.
+        pendingResumePosition = 0
+
         let persistable = songs.map { PersistableSong(from: $0) }
         queue = persistable
         originalQueue = persistable
@@ -127,6 +132,8 @@ final class QueueManager: AudioEngineDelegate {
 
     /// Play a list of already-persistable songs.
     func play(queue newQueue: [PersistableSong], startIndex: Int = 0) {
+        pendingResumePosition = 0
+
         queue = newQueue
         originalQueue = newQueue
         currentIndex = min(startIndex, newQueue.count - 1)
@@ -518,12 +525,23 @@ final class QueueManager: AudioEngineDelegate {
                 if let song = currentSong { appendToHistory(song) }
                 currentIndex += 1
 
-                // CRITICAL: Read fresh values from the engine BEFORE syncing UI.
-                // Without this, syncNowPlayingState() uses stale currentTime/duration
-                // from the old song, causing progress bar overflow and time glitches.
+                // CRITICAL: Read fresh values from the engine and new song metadata.
+                // After crossfade, engine.currentSongDuration may be stale (old song's
+                // value) if nextSongDuration was 0 (file wasn't loaded, metadata missing).
+                // Use the new song's metadata duration as the authoritative source, and
+                // push it back to the engine so subsequent timer ticks use it too.
                 if let engine = AudioEngineManager.shared {
                     self.currentTime = engine.currentTime()
-                    self.duration = engine.currentSongDuration
+                    let engineDur = engine.currentSongDuration
+                    let metaDur = self.currentSong?.duration ?? 0
+
+                    // Prefer metadata (new song) over engine (may be stale from old song).
+                    // The engine's duration is corrected via updateNowPlayingMetadata below.
+                    if metaDur > 0 {
+                        self.duration = metaDur
+                    } else {
+                        self.duration = engineDur > 0 ? engineDur : 1
+                    }
                 }
 
                 persistState()
