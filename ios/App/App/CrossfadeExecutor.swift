@@ -628,6 +628,9 @@ class CrossfadeExecutor {
             mB.pan = 0
             tpA?.rate = 1.0
             tpB?.rate = 1.0
+            // Audit after serialized reset
+            Self.auditEQState(source: "cancel+async", eqA: eqA, eqB: eqB,
+                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
         }
         // Delayed backstop: 150ms later, reset again in case a stale timer event
         // was queued before cancel() invalidated the source.
@@ -638,6 +641,9 @@ class CrossfadeExecutor {
             mB.pan = 0
             tpA?.rate = 1.0
             tpB?.rate = 1.0
+            // Final audit — this is the last chance to catch stuck filters
+            Self.auditEQState(source: "cancel+150ms", eqA: eqA, eqB: eqB,
+                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
         }
     }
 
@@ -691,6 +697,95 @@ class CrossfadeExecutor {
             band.gain = 0
             band.bandwidth = 2.0
             band.bypass = false  // always active — rely on neutral params, not bypass
+        }
+
+        // Force CoreAudio AudioUnit to flush its internal DSP state.
+        // Setting Swift properties (band.gain = 0) updates the property value but the
+        // underlying AudioUnit may keep using stale IIR filter coefficients calculated
+        // from previous parameter values, especially under background execution, CarPlay,
+        // or render-thread pressure on real devices. The audit reads the Swift properties
+        // (shows CLEAN) but the DSP continues filtering with old coefficients.
+        //
+        // AudioUnitReset forces the AudioUnit to:
+        // 1. Clear all internal filter state (IIR delay buffers)
+        // 2. Recompute filter coefficients from CURRENT parameter values
+        // 3. Start fresh on the next render cycle
+        //
+        // This may cause a very brief (~1 sample) discontinuity which is inaudible
+        // since it happens when the player is either silent (outgoing) or already at
+        // the correct neutral state (incoming after crossfade).
+        let au = eq.audioUnit
+        AudioUnitReset(au, kAudioUnitScope_Global, 0)
+    }
+
+    // MARK: - Post-reset audit
+
+    /// Reads the REAL current values from AVAudioUnitEQ bands and publishes to diagnostics.
+    /// Call AFTER resetBandsStatic() to verify filters are truly neutral.
+    static func auditEQState(source: String, eqA: AVAudioUnitEQ, eqB: AVAudioUnitEQ,
+                                     mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
+                                     timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?) {
+        func snapshot(_ eq: AVAudioUnitEQ) -> [TransitionDiagnostics.EQBandSnapshot] {
+            let count = eq.bands.count
+            return (0..<count).map { i in
+                let b = eq.bands[i]
+                return TransitionDiagnostics.EQBandSnapshot(
+                    filterType: filterTypeName(b.filterType),
+                    frequency: b.frequency,
+                    gain: b.gain,
+                    bandwidth: b.bandwidth,
+                    bypass: b.bypass
+                )
+            }
+        }
+
+        // Read actual DSP-level parameters directly from the CoreAudio AudioUnit.
+        // AUNBandEQ parameter layout uses large offsets per parameter type:
+        //   kAUNBandEQParam_Frequency  = 3000 + bandIndex
+        //   kAUNBandEQParam_Gain       = 4000 + bandIndex
+        //   kAUNBandEQParam_Bandwidth  = 5000 + bandIndex
+        func dspSnapshot(_ eq: AVAudioUnitEQ) -> [TransitionDiagnostics.DSPBandSnapshot] {
+            let au = eq.audioUnit
+            let count = eq.bands.count
+            return (0..<count).map { i in
+                var gain: Float = 0
+                var freq: Float = 0
+                var bw: Float = 0
+                AudioUnitGetParameter(au, AudioUnitParameterID(4000 + i), kAudioUnitScope_Global, 0, &gain)
+                AudioUnitGetParameter(au, AudioUnitParameterID(3000 + i), kAudioUnitScope_Global, 0, &freq)
+                AudioUnitGetParameter(au, AudioUnitParameterID(5000 + i), kAudioUnitScope_Global, 0, &bw)
+                return TransitionDiagnostics.DSPBandSnapshot(gain: gain, frequency: freq, bandwidth: bw)
+            }
+        }
+
+        let audit = TransitionDiagnostics.PostResetAudit(
+            source: source,
+            bandsA: snapshot(eqA),
+            bandsB: snapshot(eqB),
+            dspBandsA: dspSnapshot(eqA),
+            dspBandsB: dspSnapshot(eqB),
+            panA: mixerA.pan,
+            panB: mixerB.pan,
+            rateA: timePitchA?.rate ?? 1.0,
+            rateB: timePitchB?.rate ?? 1.0
+        )
+        TransitionDiagnostics.shared.publishPostResetAudit(audit)
+    }
+
+    static func filterTypeName(_ type: AVAudioUnitEQFilterType) -> String {
+        switch type {
+        case .highPass: return "highPass"
+        case .lowShelf: return "lowShelf"
+        case .parametric: return "parametric"
+        case .highShelf: return "highShelf"
+        case .lowPass: return "lowPass"
+        case .bandPass: return "bandPass"
+        case .resonantHighPass: return "resHP"
+        case .resonantLowPass: return "resLP"
+        case .resonantHighShelf: return "resHS"
+        case .resonantLowShelf: return "resLS"
+        case .bandStop: return "bandStop"
+        @unknown default: return "unknown"
         }
     }
 
@@ -770,6 +865,20 @@ class CrossfadeExecutor {
             eqB.bands[1].gain = preset.lowshelfB.startGain
         }
 
+        // ── eqB bands 2-3: force neutral before crossfade ──
+        // These bands are only automated on A, never on B. But if a prior crossfade's
+        // reset was incomplete (e.g., iOS suspension), stale values could persist.
+        // Defense-in-depth: always start B's bands 2-3 at gain=0.
+        eqB.bands[2].bypass = false
+        eqB.bands[2].filterType = .parametric
+        eqB.bands[2].frequency = 1500
+        eqB.bands[2].gain = 0
+        eqB.bands[2].bandwidth = 2.0
+        eqB.bands[3].bypass = false
+        eqB.bands[3].filterType = .highShelf
+        eqB.bands[3].frequency = 8000
+        eqB.bands[3].gain = 0
+
         // ── Band 2: Mid scoop on A (vocal anti-clash, ~1.5kHz parametric dip) ──
         // Skip mid-scoop when B's intro is instrumental — no vocal clash risk
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
@@ -779,6 +888,13 @@ class CrossfadeExecutor {
             eqA.bands[2].frequency = ms.frequency
             eqA.bands[2].bandwidth = ms.bandwidth
             eqA.bands[2].gain = ms.startGain
+        } else {
+            // Force neutral if not used — defense against stale state
+            eqA.bands[2].bypass = false
+            eqA.bands[2].filterType = .parametric
+            eqA.bands[2].frequency = 1500
+            eqA.bands[2].gain = 0
+            eqA.bands[2].bandwidth = 2.0
         }
 
         // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup, ~8kHz) ──
@@ -789,6 +905,11 @@ class CrossfadeExecutor {
             eqA.bands[3].filterType = .highShelf
             eqA.bands[3].frequency = hs.frequency
             eqA.bands[3].gain = hs.startGain
+        } else {
+            eqA.bands[3].bypass = false
+            eqA.bands[3].filterType = .highShelf
+            eqA.bands[3].frequency = 8000
+            eqA.bands[3].gain = 0
         }
 
         // Copy global EQ (bands 4-7) from A to B
@@ -1388,6 +1509,20 @@ class CrossfadeExecutor {
         engine.mainMixerNode.outputVolume = vol
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
+
+        // Audit: verify EQ bands are truly neutral after reset
+        Self.auditEQState(source: "completeCrossfade", eqA: eqA, eqB: eqB,
+                          mixerA: mixerA, mixerB: mixerB,
+                          timePitchA: timePitchA, timePitchB: timePitchB)
+
+        // Backstop audit 200ms later — catches any race where stale writes land after reset
+        let eqACopy = self.eqA, eqBCopy = self.eqB
+        let mA = self.mixerA, mB = self.mixerB
+        let tpA = self.timePitchA, tpB = self.timePitchB
+        Self.automationQueue.asyncAfter(deadline: .now() + 0.2) {
+            Self.auditEQState(source: "completeCrossfade+200ms", eqA: eqACopy, eqB: eqBCopy,
+                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
+        }
 
         TransitionDiagnostics.shared.publishCompletion()
 

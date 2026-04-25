@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 /// Debug view showing real-time crossfade transition diagnostics.
 /// Accessible from Settings for testing transitions, filters, beat sync, time stretch, etc.
@@ -13,6 +14,9 @@ struct TransitionDiagnosticsView: View {
 
             // ── Current Playback ──
             currentPlaybackSection
+
+            // ── Environment ──
+            environmentSection
 
             // ── Active Transition ──
             if diag.isActive {
@@ -252,6 +256,31 @@ struct TransitionDiagnosticsView: View {
             diagRow("Lowshelf B", value: String(format: "%.1f dB", diag.lowshelfGainB))
             diagRow("Pan A", value: String(format: "%.3f", diag.panA))
             diagRow("Pan B", value: String(format: "%.3f", diag.panB))
+        }
+    }
+
+    // MARK: - Environment
+
+    private var environmentSection: some View {
+        Section("Environment") {
+            let session = AVAudioSession.sharedInstance()
+            let route = session.currentRoute
+            let outputName = route.outputs.first?.portName ?? "Unknown"
+            let isBT = route.outputs.contains { [.bluetoothA2DP, .bluetoothLE, .bluetoothHFP].contains($0.portType) }
+            let isCP = route.outputs.contains { $0.portType == .carAudio }
+
+            diagRow("Audio Route", value: outputName)
+            diagRow("Bluetooth", value: isBT ? "Active" : "No", color: isBT ? .blue : .secondary)
+            diagRow("CarPlay", value: isCP ? "Active" : "No", color: isCP ? .green : .secondary)
+            diagRow("IO Buffer", value: String(format: "%.1f ms", session.ioBufferDuration * 1000))
+            diagRow("Sample Rate", value: String(format: "%.0f Hz", session.sampleRate))
+            diagRow("Output Latency", value: String(format: "%.1f ms", session.outputLatency * 1000))
+
+            if let snap = diag.networkSnapshotStart, diag.isActive {
+                Divider()
+                diagRow("Route at start", value: snap.audioRoute)
+                diagRow("App state at start", value: snap.appState)
+            }
         }
     }
 

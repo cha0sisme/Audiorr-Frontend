@@ -178,22 +178,28 @@ struct QueuePanelView: View {
     // MARK: - Actions
 
     private func deleteUpcoming(offsets: IndexSet, currentIndex: Int) {
-        var q = state.queue
-        let upcomingStart = currentIndex + 1
-        let indicesToRemove = offsets.map { upcomingStart + $0 }
-        q.removeAll { song in indicesToRemove.contains(state.queue.firstIndex(where: { $0.id == song.id }) ?? -1) }
-        state.queue = q
+        let qm = QueueManager.shared
+        // Map offsets in the "upcoming" sub-list to real queue indices (descending to preserve indices)
+        let realIndices = offsets.map { currentIndex + 1 + $0 }.sorted(by: >)
+        for idx in realIndices {
+            qm.remove(at: idx)
+        }
     }
 
     private func moveUpcoming(source: IndexSet, destination: Int, currentIndex: Int) {
-        var upcoming = Array(state.queue.suffix(from: currentIndex + 1))
-        upcoming.move(fromOffsets: source, toOffset: destination)
-        let kept = Array(state.queue.prefix(through: currentIndex))
-        state.queue = kept + upcoming
+        let qm = QueueManager.shared
+        // Translate from upcoming-relative to absolute queue indices
+        let realSource = IndexSet(source.map { currentIndex + 1 + $0 })
+        let realDestination = currentIndex + 1 + destination
+        qm.move(from: realSource, to: realDestination)
     }
 
     private func clearUpcoming(currentIndex: Int) {
-        state.queue = Array(state.queue.prefix(through: currentIndex))
+        let qm = QueueManager.shared
+        // Remove all songs after currentIndex (descending to preserve indices)
+        for idx in stride(from: qm.queue.count - 1, through: currentIndex + 1, by: -1) {
+            qm.remove(at: idx)
+        }
     }
 
     // MARK: - Helpers

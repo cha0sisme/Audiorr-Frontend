@@ -193,6 +193,10 @@ struct SettingsView: View {
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
             vm.load()
+            // Restore diagnostics toggle state
+            if UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
+                TransitionDiagnostics.debugModeEnabled = UserDefaults.standard.bool(forKey: "audiorr_diagnostics_enabled")
+            }
             if TransitionDiagnostics.debugModeEnabled {
                 backendURLOverride = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
             }
@@ -432,96 +436,99 @@ struct SettingsView: View {
                 }
             }
 
-            // ── Debug / Diagnostics (only visible in debug mode) ──
-            if TransitionDiagnostics.debugModeEnabled {
-                settingsSection(header: "Debug") {
-                    NavigationLink {
-                        TransitionDiagnosticsView()
-                    } label: {
-                        settingsRow {
+            // ── Transition Diagnostics (only with backend connection) ──
+            if BackendState.shared.isAvailable {
+                settingsSection(header: "Diagnostics") {
+                    settingsRow {
+                        Toggle(isOn: Binding(
+                            get: { TransitionDiagnostics.debugModeEnabled },
+                            set: { newValue in
+                                TransitionDiagnostics.debugModeEnabled = newValue
+                                UserDefaults.standard.set(newValue, forKey: "audiorr_diagnostics_enabled")
+                            }
+                        )) {
                             Label("Transition Diagnostics", systemImage: "waveform.badge.magnifyingglass")
-                            Spacer()
-                            if NowPlayingState.shared.isCrossfading {
-                                Text("ACTIVE")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.cyan)
-                            }
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-
-                    Divider().padding(.leading, 16)
-
-                    settingsRow {
-                        Label("Backend", systemImage: "server.rack")
-                        Spacer()
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(BackendState.shared.isAvailable ? Color.green : Color.red)
-                                .frame(width: 8, height: 8)
-                            Text(BackendState.shared.isAvailable ? "Connected" : "Disconnected")
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
                         }
+                        .tint(.cyan)
                     }
 
-                    Divider().padding(.leading, 16)
+                    if TransitionDiagnostics.debugModeEnabled {
+                        Divider().padding(.leading, 16)
 
-                    // Editable backend URL (debug only)
-                    settingsRow {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Backend URL")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            TextField("Auto (\(NavidromeService.shared.backendURL() ?? "N/A"))",
-                                      text: $backendURLOverride)
-                                .font(.subheadline)
-                                .keyboardType(.URL)
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                                .textFieldStyle(.roundedBorder)
-                                .onSubmit {
-                                    NavidromeService.shared.setBackendOverride(
-                                        backendURLOverride.isEmpty ? nil : backendURLOverride
-                                    )
-                                }
-
-                            HStack(spacing: 10) {
-                                Button("Apply") {
-                                    NavidromeService.shared.setBackendOverride(
-                                        backendURLOverride.isEmpty ? nil : backendURLOverride
-                                    )
-                                }
-                                .font(.caption.bold())
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-
-                                if NavidromeService.shared.hasBackendOverride {
-                                    Button("Reset to Auto") {
-                                        backendURLOverride = ""
-                                        NavidromeService.shared.setBackendOverride(nil)
-                                    }
-                                    .font(.caption)
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    .tint(.orange)
-                                }
-
-                                Spacer()
-                            }
-                        }
-                    }
-
-                    Divider().padding(.leading, 16)
-
-                    settingsRow {
-                        Button {
-                            BackendState.shared.invalidateAndRecheck()
+                        NavigationLink {
+                            TransitionDiagnosticsView()
                         } label: {
-                            Label("Retry Connection", systemImage: "arrow.clockwise")
-                                .font(.subheadline)
+                            settingsRow {
+                                Label("View Diagnostics", systemImage: "chart.bar.doc.horizontal")
+                                Spacer()
+                                if NowPlayingState.shared.isCrossfading {
+                                    Text("ACTIVE")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.cyan)
+                                }
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+
+                        Divider().padding(.leading, 16)
+
+                        // Backend URL override (debug only)
+                        settingsRow {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Backend URL")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                TextField("Auto (\(NavidromeService.shared.backendURL() ?? "N/A"))",
+                                          text: $backendURLOverride)
+                                    .font(.subheadline)
+                                    .keyboardType(.URL)
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                                    .textFieldStyle(.roundedBorder)
+                                    .onSubmit {
+                                        NavidromeService.shared.setBackendOverride(
+                                            backendURLOverride.isEmpty ? nil : backendURLOverride
+                                        )
+                                    }
+
+                                HStack(spacing: 10) {
+                                    Button("Apply") {
+                                        NavidromeService.shared.setBackendOverride(
+                                            backendURLOverride.isEmpty ? nil : backendURLOverride
+                                        )
+                                    }
+                                    .font(.caption.bold())
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+
+                                    if NavidromeService.shared.hasBackendOverride {
+                                        Button("Reset to Auto") {
+                                            backendURLOverride = ""
+                                            NavidromeService.shared.setBackendOverride(nil)
+                                        }
+                                        .font(.caption)
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(.orange)
+                                    }
+
+                                    Spacer()
+                                }
+                            }
+                        }
+
+                        Divider().padding(.leading, 16)
+
+                        settingsRow {
+                            Button {
+                                BackendState.shared.invalidateAndRecheck()
+                            } label: {
+                                Label("Retry Connection", systemImage: "arrow.clockwise")
+                                    .font(.subheadline)
+                            }
                         }
                     }
                 }

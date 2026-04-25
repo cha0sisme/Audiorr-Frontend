@@ -193,7 +193,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     // MARK: - App Lifecycle (forwarded from SceneDelegate)
 
     func applicationWillResignActive(_ application: UIApplication) {}
-    func applicationDidEnterBackground(_ application: UIApplication) {}
+
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        // Save playback position immediately — app may be killed without warning
+        Task { @MainActor in
+            QueueManager.shared.savePositionNow()
+        }
+    }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
         let session = AVAudioSession.sharedInstance()
@@ -207,7 +213,10 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         configureIOBufferForRoute()
     }
 
-    func applicationWillTerminate(_ application: UIApplication) {}
+    func applicationWillTerminate(_ application: UIApplication) {
+        // Last-chance save — synchronous since app is about to die
+        PersistenceService.shared.position = NowPlayingState.shared.progress
+    }
 
     // MARK: - Background URLSession (Downloads)
 

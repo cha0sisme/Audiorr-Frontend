@@ -45,6 +45,10 @@ final class QueueManager: AudioEngineDelegate {
     private let api = NavidromeService.shared
     private var isAdvancingTrack = false
 
+    /// Position (seconds) to resume at when user presses play after cold-start restore.
+    /// Set during restoreState()/restoreLastPlayback(), consumed by playCurrentSong().
+    private var pendingResumePosition: Double = 0
+
     /// Read user settings from UserDefaults (audiorr_settings JSON dict).
     private var settingsDict: [String: Any]? {
         guard let json = UserDefaults.standard.string(forKey: "audiorr_settings"),
@@ -273,11 +277,14 @@ final class QueueManager: AudioEngineDelegate {
     func remove(at index: Int) {
         guard index >= 0 && index < queue.count else { return }
 
+        // Track whether we're removing the next song (crossfade target)
+        let isNextSong = (index == currentIndex + 1)
+
         // If removing the NEXT song while crossfading into it, cancel the crossfade.
         // The crossfade is transitioning to queue[currentIndex+1] — removing it would
         // leave the executor playing a song that's no longer in the queue.
         let isCrossfading = AudioEngineManager.shared?.isCrossfading == true
-        if isCrossfading && index == currentIndex + 1 {
+        if isCrossfading && isNextSong {
             AudioEngineManager.shared?.cancelCrossfade()
             print("[QueueManager] Cancelled crossfade: next song removed from queue")
         }
@@ -293,19 +300,26 @@ final class QueueManager: AudioEngineDelegate {
                 currentIndex = -1
                 AudioEngineManager.shared?.stop()
                 isPlaying = false
-                syncNowPlayingState()
             } else {
                 currentIndex = min(currentIndex, queue.count - 1)
                 playCurrentSong()
             }
         }
+
+        // Sync UI and recalculate crossfade for the new next song
+        syncNowPlayingState()
+        if isNextSong || index <= currentIndex + 1 {
+            prepareNextForCrossfade()
+        }
         persistState()
     }
 
     func move(from source: IndexSet, to destination: Int) {
+        // Track if the next song (crossfade target) is being moved
+        let nextSongMoved = source.contains(currentIndex + 1)
+
         // Cancel crossfade if the next song (being faded into) is moved away
-        if AudioEngineManager.shared?.isCrossfading == true,
-           let first = source.first, first == currentIndex + 1 {
+        if AudioEngineManager.shared?.isCrossfading == true, nextSongMoved {
             AudioEngineManager.shared?.cancelCrossfade()
             print("[QueueManager] Cancelled crossfade: next song moved in queue")
         }
@@ -320,6 +334,10 @@ final class QueueManager: AudioEngineDelegate {
                 currentIndex += 1
             }
         }
+
+        // Sync UI and recalculate crossfade for the (potentially new) next song
+        syncNowPlayingState()
+        prepareNextForCrossfade()
         persistState()
     }
 
@@ -331,6 +349,8 @@ final class QueueManager: AudioEngineDelegate {
             print("[QueueManager] Cancelled crossfade: upcoming queue cleared")
         }
         queue = Array(queue.prefix(currentIndex + 1))
+        AudioEngineManager.shared?.clearAutomixTrigger()
+        syncNowPlayingState()
         persistState()
     }
 
@@ -451,6 +471,18 @@ final class QueueManager: AudioEngineDelegate {
     nonisolated func audioEngineCrossfadeStarted() {
         Task { @MainActor in
             NowPlayingState.shared.isCrossfading = true
+
+            // Pre-fetch lyrics for the NEXT song so they're cached when crossfade completes.
+            // Without this, lyrics only start loading after songId changes (post-swap),
+            // causing a visible delay.
+            if self.currentIndex + 1 < self.queue.count {
+                let next = self.queue[self.currentIndex + 1]
+                Task {
+                    _ = await LyricsService.shared.fetch(
+                        songId: next.id, title: next.title, artist: next.artist
+                    )
+                }
+            }
         }
     }
 
@@ -532,6 +564,22 @@ final class QueueManager: AudioEngineDelegate {
                 persistState()
                 syncNowPlayingState()
             }
+        }
+    }
+
+    nonisolated func audioEngineNeedsReload() {
+        Task { @MainActor in
+            guard currentSong != nil else {
+                print("[QueueManager] audioEngineNeedsReload — no current song")
+                return
+            }
+            // Restore pending position from NowPlayingState (set during restoreState/restoreLastPlayback)
+            let savedPos = NowPlayingState.shared.progress
+            if savedPos > 0 {
+                self.pendingResumePosition = savedPos
+            }
+            print("[QueueManager] audioEngineNeedsReload — loading song at \(String(format: "%.1f", self.pendingResumePosition))s")
+            self.playCurrentSong()
         }
     }
 
@@ -1053,6 +1101,17 @@ final class QueueManager: AudioEngineDelegate {
 
         let duration = song.duration
 
+        // Consume pending resume position (cold-start restore).
+        // Clamp to valid range — don't resume within last 5s (would trigger crossfade immediately).
+        var startAt = pendingResumePosition
+        if startAt > 0 && duration > 0 && startAt >= duration - 5 {
+            startAt = 0 // Too close to end, start from beginning
+        }
+        pendingResumePosition = 0
+        if startAt > 0 {
+            print("[QueueManager] Resuming at \(String(format: "%.1f", startAt))s (restored position)")
+        }
+
         // Try cached file first (fast path).
         // Some MP3s (VBR, unusual headers) fail AVAudioFile but play fine via AVPlayer.
         // If play() fails, fall through to the streaming path.
@@ -1062,7 +1121,7 @@ final class QueueManager: AudioEngineDelegate {
             if (try? AVAudioFile(forReading: cachedURL)) != nil {
                 engine.play(
                     fileURL: cachedURL,
-                    startAt: 0,
+                    startAt: startAt,
                     replayGainMultiplier: effectiveReplayGain(for: song),
                     duration: duration,
                     title: song.title,
@@ -1079,7 +1138,7 @@ final class QueueManager: AudioEngineDelegate {
             // Streaming path — AVPlayer handles any format
             engine.playStreaming(
                 remoteURL: streamURL,
-                startAt: 0,
+                startAt: startAt,
                 replayGainMultiplier: effectiveReplayGain(for: song),
                 duration: duration,
                 title: song.title,
@@ -1105,7 +1164,7 @@ final class QueueManager: AudioEngineDelegate {
         // the real duration from the cached file immediately in play(fileURL:).
         let engineDuration = AudioEngineManager.shared?.currentSongDuration ?? 0
         self.duration = engineDuration > 0 ? engineDuration : duration
-        self.currentTime = 0
+        self.currentTime = startAt
         syncNowPlayingState()
 
         // Push high-res artwork to lock screen / Dynamic Island / Control Center
@@ -1185,7 +1244,18 @@ final class QueueManager: AudioEngineDelegate {
         persistence.saveQueue(queue)
         persistence.currentIndex = currentIndex
         persistence.lastSongId = currentSong?.id
+        persistence.position = NowPlayingState.shared.progress
         saveToBackend()
+    }
+
+    /// Save position immediately (called from app lifecycle events).
+    func savePositionNow() {
+        let pos = AudioEngineManager.shared?.currentTime() ?? NowPlayingState.shared.progress
+        persistence.position = pos
+        NowPlayingState.shared.progress = pos
+        // Also fire backend save (non-debounced)
+        saveToBackend()
+        print("[QueueManager] Position saved: \(String(format: "%.1f", pos))s")
     }
 
     /// Debounced save to backend — persists current song + queue for cross-device restore.
@@ -1234,6 +1304,10 @@ final class QueueManager: AudioEngineDelegate {
         if currentIndex >= queue.count { currentIndex = max(0, queue.count - 1) }
         if queue.isEmpty { currentIndex = -1 }
 
+        // Restore saved position (local) for cold-start resume
+        let savedPos = persistence.position
+        pendingResumePosition = savedPos
+
         // Don't auto-play on restore — just sync state
         if let song = currentSong {
             let state = NowPlayingState.shared
@@ -1245,6 +1319,7 @@ final class QueueManager: AudioEngineDelegate {
             state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
             state.isVisible = true
             state.duration = song.duration
+            state.progress = savedPos
         }
 
         // Sync queue to NowPlayingState
@@ -1360,4 +1435,7 @@ protocol AudioEngineDelegate: AnyObject {
     func audioEngineDidSeek(to time: Double)
     func audioEngineError(_ message: String, code: String)
     func audioEngineNativeNext(title: String, artist: String, album: String, duration: Double)
+    /// Called when resume() is invoked but no file/stream is loaded (cold-start).
+    /// Delegate should call playCurrentSong() to load and start playback.
+    func audioEngineNeedsReload()
 }

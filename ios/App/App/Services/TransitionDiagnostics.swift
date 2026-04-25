@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AVFoundation
 
 /// Singleton observable que captura el estado de cada crossfade en tiempo real.
 /// CrossfadeExecutor publica datos aquí; TransitionDiagnosticsView los muestra.
@@ -9,7 +10,7 @@ final class TransitionDiagnostics {
 
     /// When false, diagnostics data is not collected and the UI section is hidden.
     /// Set to true for internal debug builds only.
-    nonisolated(unsafe) static var debugModeEnabled = false
+    nonisolated(unsafe) static var debugModeEnabled = true
 
     static let shared = TransitionDiagnostics()
 
@@ -104,6 +105,23 @@ final class TransitionDiagnostics {
     var backendURL = ""
     var lastHealthCheck: Date?
 
+    // MARK: - Network / Environment diagnostics
+
+    struct NetworkSnapshot {
+        let timestamp: Date
+        let audioRoute: String
+        let isBluetoothActive: Bool
+        let isCarPlayActive: Bool
+        let appState: String          // "active", "background", "inactive"
+        let ioBufferDuration: Double  // actual IO buffer in seconds
+        let sampleRate: Double
+        let outputLatency: Double
+    }
+
+    /// Captured at crossfade start and end for comparison.
+    var networkSnapshotStart: NetworkSnapshot?
+    var networkSnapshotEnd: NetworkSnapshot?
+
     // MARK: - Persistent log
 
     /// Path to the log file in Documents.
@@ -125,6 +143,40 @@ final class TransitionDiagnostics {
             let header = "# Audiorr Transition Diagnostics Log\n# Format: human-readable, one block per transition\n# Generated automatically by TransitionDiagnostics\n\n"
             try? header.write(to: logFileURL, atomically: true, encoding: .utf8)
         }
+    }
+
+    // MARK: - Network snapshot capture
+
+    /// Captures current audio session, route, and app state for diagnostics.
+    nonisolated static func captureNetworkSnapshot() -> NetworkSnapshot {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let outputName = route.outputs.first?.portName ?? "Unknown"
+        let isBT = route.outputs.contains { [.bluetoothA2DP, .bluetoothLE, .bluetoothHFP].contains($0.portType) }
+        let isCP = route.outputs.contains { $0.portType == .carAudio }
+
+        let appState: String
+        if Thread.isMainThread {
+            switch UIApplication.shared.applicationState {
+            case .active: appState = "active"
+            case .background: appState = "background"
+            case .inactive: appState = "inactive"
+            @unknown default: appState = "unknown"
+            }
+        } else {
+            appState = "non-main-thread"
+        }
+
+        return NetworkSnapshot(
+            timestamp: Date(),
+            audioRoute: outputName,
+            isBluetoothActive: isBT,
+            isCarPlayActive: isCP,
+            appState: appState,
+            ioBufferDuration: session.ioBufferDuration,
+            sampleRate: session.sampleRate,
+            outputLatency: session.outputLatency
+        )
     }
 
     // MARK: - Publish from CrossfadeExecutor
@@ -195,6 +247,8 @@ final class TransitionDiagnostics {
             self.highpassFreqA = 0
             self.highpassFreqB = 0
             self.pendingTicks = []
+            self.networkSnapshotStart = Self.captureNetworkSnapshot()
+            self.networkSnapshotEnd = nil
         }
     }
 
@@ -259,10 +313,164 @@ final class TransitionDiagnostics {
             self.history.insert(record, at: 0)
             if self.history.count > 50 { self.history.removeLast() }
             self.isActive = false
+            self.networkSnapshotEnd = Self.captureNetworkSnapshot()
 
             // Write full block to log file
             self.writeTransitionToLog()
         }
+    }
+
+    // MARK: - Post-reset audit
+
+    /// Snapshot of EQ band values read from AVAudioUnitEQ Swift properties.
+    struct EQBandSnapshot {
+        let filterType: String
+        let frequency: Float
+        let gain: Float
+        let bandwidth: Float
+        let bypass: Bool
+    }
+
+    /// Snapshot of raw DSP parameters read directly from the CoreAudio AudioUnit
+    /// via AudioUnitGetParameter. These reflect what the render thread actually uses,
+    /// which may diverge from Swift property values under real-device conditions.
+    struct DSPBandSnapshot {
+        let gain: Float
+        let frequency: Float
+        let bandwidth: Float
+    }
+
+    struct PostResetAudit {
+        let source: String          // "completeCrossfade", "cancel", "cancel+150ms"
+        let bandsA: [EQBandSnapshot]
+        let bandsB: [EQBandSnapshot]
+        var dspBandsA: [DSPBandSnapshot] = []
+        var dspBandsB: [DSPBandSnapshot] = []
+        let panA: Float
+        let panB: Float
+        let rateA: Float
+        let rateB: Float
+    }
+
+    /// Whether the last audit detected stuck filters (non-neutral values).
+    var lastAuditFailed = false
+    var lastAuditDetails = ""
+
+    /// Pending audits to be flushed to log on next writeTransitionToLog or standalone.
+    private var pendingAudits: [String] = []
+
+    /// Called from CrossfadeExecutor after resetBandsStatic() to verify actual EQ state.
+    /// Reads BOTH Swift property values AND raw CoreAudio DSP parameters to detect divergence.
+    nonisolated func publishPostResetAudit(_ audit: PostResetAudit) {
+        // Check if any Swift-level band is non-neutral (stuck filter)
+        let allBands = audit.bandsA + audit.bandsB
+        let stuckBands = allBands.filter { band in
+            if band.filterType == "highPass" && band.frequency > 25 { return true }
+            if band.filterType != "highPass" && abs(band.gain) > 0.1 { return true }
+            return false
+        }
+
+        // Check DSP-level divergence: compare AudioUnitGetParameter values vs Swift properties
+        var dspDivergences: [String] = []
+        func checkDivergence(label: String, swift: [EQBandSnapshot], dsp: [DSPBandSnapshot]) {
+            for i in 0..<min(swift.count, dsp.count) {
+                let sg = swift[i].gain
+                let dg = dsp[i].gain
+                let sf = swift[i].frequency
+                let df = dsp[i].frequency
+                // Gain divergence > 0.5dB is significant (catches stale -14dB midScoop, -10dB hiShelfCut)
+                if abs(sg - dg) > 0.5 {
+                    dspDivergences.append("\(label)b\(i) gain: swift=\(String(format: "%.1f", sg))dB DSP=\(String(format: "%.1f", dg))dB Δ=\(String(format: "%.1f", abs(sg - dg)))dB")
+                }
+                // Frequency divergence > 50Hz is significant (catches stale highpass sweeps)
+                if abs(sf - df) > 50 {
+                    dspDivergences.append("\(label)b\(i) freq: swift=\(String(format: "%.0f", sf))Hz DSP=\(String(format: "%.0f", df))Hz")
+                }
+            }
+        }
+        checkDivergence(label: "A-", swift: audit.bandsA, dsp: audit.dspBandsA)
+        checkDivergence(label: "B-", swift: audit.bandsB, dsp: audit.dspBandsB)
+
+        let hasDivergence = !dspDivergences.isEmpty
+        let isClean = stuckBands.isEmpty && !hasDivergence && abs(audit.panA) < 0.01 && abs(audit.panB) < 0.01
+
+        var line = "  POST-RESET AUDIT [\(audit.source)]:"
+        if hasDivergence {
+            line += " 🔴 DSP DIVERGENCE"
+        } else if !stuckBands.isEmpty {
+            line += " 🚨 STUCK FILTERS DETECTED"
+        } else {
+            line += " ✅ CLEAN"
+        }
+
+        // Swift property values
+        line += "\n    EQ-A (Swift):"
+        for (i, b) in audit.bandsA.enumerated() {
+            line += " b\(i)[\(b.filterType) \(String(format: "%.0f", b.frequency))Hz g=\(String(format: "%.1f", b.gain))dB]"
+        }
+        line += "\n    EQ-B (Swift):"
+        for (i, b) in audit.bandsB.enumerated() {
+            line += " b\(i)[\(b.filterType) \(String(format: "%.0f", b.frequency))Hz g=\(String(format: "%.1f", b.gain))dB]"
+        }
+
+        // DSP-level values (raw AudioUnit parameters)
+        if !audit.dspBandsA.isEmpty {
+            line += "\n    EQ-A (DSP):"
+            for (i, b) in audit.dspBandsA.enumerated() {
+                line += " b\(i)[\(String(format: "%.0f", b.frequency))Hz g=\(String(format: "%.1f", b.gain))dB]"
+            }
+        }
+        if !audit.dspBandsB.isEmpty {
+            line += "\n    EQ-B (DSP):"
+            for (i, b) in audit.dspBandsB.enumerated() {
+                line += " b\(i)[\(String(format: "%.0f", b.frequency))Hz g=\(String(format: "%.1f", b.gain))dB]"
+            }
+        }
+
+        line += String(format: "\n    pan: A=%.3f B=%.3f  rate: A=%.3f B=%.3f",
+                       audit.panA, audit.panB, audit.rateA, audit.rateB)
+
+        if hasDivergence {
+            line += "\n    🔴 DSP DIVERGENCE DETECTED (Swift says neutral but AudioUnit disagrees):"
+            for d in dspDivergences {
+                line += "\n      → \(d)"
+            }
+        }
+        if !stuckBands.isEmpty {
+            line += "\n    ⚠️ STUCK: \(stuckBands.map { "\($0.filterType) \(String(format: "%.0f", $0.frequency))Hz g=\(String(format: "%.1f", $0.gain))dB" }.joined(separator: ", "))"
+        }
+        if abs(audit.panA) >= 0.01 || abs(audit.panB) >= 0.01 {
+            line += "\n    ⚠️ pan not centered"
+        }
+
+        // Console output
+        let consolePrefix: String
+        if hasDivergence { consolePrefix = "[PostResetAudit 🔴 DSP DIVERGE]" }
+        else if !stuckBands.isEmpty { consolePrefix = "[PostResetAudit 🚨 STUCK]" }
+        else { consolePrefix = "[PostResetAudit ✅]" }
+        print("\(consolePrefix) \(audit.source) — Swift: A=\(audit.bandsA.map { "\(String(format: "%.1f", $0.gain))dB" }) B=\(audit.bandsB.map { "\(String(format: "%.1f", $0.gain))dB" }) | DSP: A=\(audit.dspBandsA.map { "\(String(format: "%.1f", $0.gain))dB" }) B=\(audit.dspBandsB.map { "\(String(format: "%.1f", $0.gain))dB" })\(hasDivergence ? " ← MISMATCH" : "")")
+
+        Task { @MainActor in
+            self.lastAuditFailed = !isClean
+            self.lastAuditDetails = line
+            self.pendingAudits.append(line)
+
+            if !self.isActive {
+                self.flushAuditsToLog()
+            }
+        }
+    }
+
+    /// Flush pending audits to the log file.
+    private func flushAuditsToLog() {
+        guard !pendingAudits.isEmpty else { return }
+        var block = "\n  ── POST-RESET AUDITS ──\n"
+        for audit in pendingAudits {
+            block += audit + "\n"
+        }
+        block += "\n"
+        pendingAudits.removeAll()
+        appendToLog(block)
     }
 
     // MARK: - Log file
@@ -298,14 +506,43 @@ final class TransitionDiagnostics {
         REPLAY GAIN:
           rgA=\(String(format: "%.3f", replayGainA))  rgB=\(String(format: "%.3f", replayGainB))
 
-        AUTOMATION TICKS (\(pendingTicks.count) samples):
-
         """
+
+        // Environment snapshot (start vs end)
+        if let s = networkSnapshotStart {
+            block += "\n  ENVIRONMENT (start):\n"
+            block += "    route=\(s.audioRoute)  bluetooth=\(s.isBluetoothActive)  carplay=\(s.isCarPlayActive)\n"
+            block += "    appState=\(s.appState)  ioBuffer=\(String(format: "%.1f", s.ioBufferDuration * 1000))ms  sampleRate=\(String(format: "%.0f", s.sampleRate))Hz  outputLatency=\(String(format: "%.1f", s.outputLatency * 1000))ms\n"
+        }
+        if let e = networkSnapshotEnd {
+            block += "  ENVIRONMENT (end):\n"
+            block += "    route=\(e.audioRoute)  bluetooth=\(e.isBluetoothActive)  carplay=\(e.isCarPlayActive)\n"
+            block += "    appState=\(e.appState)  ioBuffer=\(String(format: "%.1f", e.ioBufferDuration * 1000))ms  sampleRate=\(String(format: "%.0f", e.sampleRate))Hz  outputLatency=\(String(format: "%.1f", e.outputLatency * 1000))ms\n"
+            // Flag route change during crossfade
+            if let s = networkSnapshotStart, s.audioRoute != e.audioRoute {
+                block += "    ⚠️ ROUTE CHANGED DURING CROSSFADE: \(s.audioRoute) → \(e.audioRoute)\n"
+            }
+            if let s = networkSnapshotStart, s.appState != e.appState {
+                block += "    ⚠️ APP STATE CHANGED DURING CROSSFADE: \(s.appState) → \(e.appState)\n"
+            }
+        }
+
+        block += "\n  AUTOMATION TICKS (\(pendingTicks.count) samples):\n"
 
         for tick in pendingTicks {
             block += tick + "\n"
         }
         block += "\n"
+
+        // Include any post-reset audits that arrived before or at completion
+        if !pendingAudits.isEmpty {
+            block += "  ── POST-RESET AUDITS ──\n"
+            for audit in pendingAudits {
+                block += audit + "\n"
+            }
+            block += "\n"
+            pendingAudits.removeAll()
+        }
 
         appendToLog(block)
     }

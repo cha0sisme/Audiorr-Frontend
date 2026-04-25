@@ -61,12 +61,30 @@ final class LyricsService {
     private func doFetch(songId: String, title: String, artist: String) async -> LyricsResult {
         print("[LyricsService] doFetch: songId=\(songId) title='\(title)' artist='\(artist)'")
 
-        // Fetch embedded and LRCLib in parallel (both are network calls)
-        async let embeddedTask = fetchEmbedded(songId: songId)
-        async let lrclibTask = fetchLRCLib(title: title, artist: artist)
+        // Fast path: LRCLib is typically the fastest source (simple HTTP GET).
+        // Fetch it first; if it returns synced lyrics, skip embedded entirely.
+        let lrclib = await fetchLRCLib(title: title, artist: artist)
+        if let lrclib, lrclib.isSynced {
+            print("[LyricsService] ✓ Found LRCLib synced lyrics: \(lrclib.lines.count) lines")
+            return lrclib
+        }
 
-        let embedded = await embeddedTask
-        let lrclib = await lrclibTask
+        // Embedded: try with a 3s timeout (disk cache is instant, remote can be slow)
+        let embedded = await withTaskGroup(of: LyricsResult?.self) { group in
+            group.addTask { await self.fetchEmbedded(songId: songId) }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return nil // timeout sentinel
+            }
+            // Return whichever finishes first
+            for await result in group {
+                if result != nil {
+                    group.cancelAll()
+                    return result
+                }
+            }
+            return nil
+        }
 
         if let embedded {
             print("[LyricsService] Found embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
@@ -78,7 +96,7 @@ final class LyricsService {
             return embedded
         }
 
-        // 2. LRCLib (already fetched in parallel)
+        // 2. LRCLib plain lyrics (already fetched above)
         if let lrclib {
             print("[LyricsService] ✓ Found LRCLib lyrics: \(lrclib.lines.count) lines, synced=\(lrclib.isSynced)")
             return lrclib
@@ -105,11 +123,18 @@ final class LyricsService {
     // MARK: - 1. Embedded lyrics (AVAsset metadata)
 
     private func fetchEmbedded(songId: String) async -> LyricsResult? {
-        guard let url = NavidromeService.shared.streamURL(songId: songId) else { return nil }
+        // Prefer local cached file (instant disk read) over remote stream URL
+        let url: URL
+        if let cachedURL = AudioFileLoader.shared.cachedFileURL(for: songId) {
+            url = cachedURL
+        } else if let streamURL = NavidromeService.shared.streamURL(songId: songId) {
+            url = streamURL
+        } else {
+            return nil
+        }
 
         let asset = AVURLAsset(url: url)
         do {
-            // Load only metadata — does not download the full audio file
             let metadata = try await asset.load(.metadata)
 
             // Search for lyrics in common metadata spaces

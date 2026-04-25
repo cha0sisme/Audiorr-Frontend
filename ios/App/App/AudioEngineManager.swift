@@ -474,6 +474,13 @@ class AudioEngineManager {
 
         guard !isPlaying else { return }
 
+        // Cold-start: no file/stream loaded. Ask delegate to reload the current song.
+        if currentFile == nil && streamPlayer == nil {
+            print("[AudioEngineManager] resume() — no file loaded, requesting reload from delegate")
+            delegate?.audioEngineNeedsReload()
+            return
+        }
+
         if isStreamMode {
             streamPlayer?.play()
             isPlaying = true
@@ -981,16 +988,38 @@ class AudioEngineManager {
             // Asegurar que el master mixer tiene el volumen correcto post-crossfade
             self.engine.mainMixerNode.outputVolume = self.volume
 
+            // Audit post-swap: verify EQ state AFTER player swap and reset
+            CrossfadeExecutor.auditEQState(source: "onComplete+postSwap", eqA: self.eqA, eqB: self.eqB,
+                                           mixerA: self.mixerA, mixerB: self.mixerB,
+                                           timePitchA: self.timePitchA, timePitchB: self.timePitchB)
+
             // Backstop: staggered EQ resets on automationQueue to catch any
             // ghost filterTick that was in-flight during completion.
             let bsEqA = self.eqA, bsEqB = self.eqB
             let bsMixA = self.mixerA, bsMixB = self.mixerB
+            let bsTpA = self.timePitchA, bsTpB = self.timePitchB
             for delay in [0.1, 0.3, 0.6] {
                 CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + delay) {
                     CrossfadeExecutor.resetBandsStatic(bsEqA)
                     CrossfadeExecutor.resetBandsStatic(bsEqB)
                     bsMixA.pan = 0
                     bsMixB.pan = 0
+                }
+            }
+            // Audit after LAST backstop reset — this is the definitive check
+            CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.7) {
+                CrossfadeExecutor.auditEQState(source: "onComplete+700ms", eqA: bsEqA, eqB: bsEqB,
+                                               mixerA: bsMixA, mixerB: bsMixB,
+                                               timePitchA: bsTpA, timePitchB: bsTpB)
+            }
+            // Periodic audit during normal playback: check at 2s, 5s, 15s, 30s post-crossfade
+            // This catches any delayed corruption that the immediate audits miss
+            for delay in [2.0, 5.0, 15.0, 30.0] {
+                CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self = self, !self.isCrossfading else { return }
+                    CrossfadeExecutor.auditEQState(source: "periodic+\(Int(delay))s", eqA: bsEqA, eqB: bsEqB,
+                                                   mixerA: bsMixA, mixerB: bsMixB,
+                                                   timePitchA: bsTpA, timePitchB: bsTpB)
                 }
             }
 
