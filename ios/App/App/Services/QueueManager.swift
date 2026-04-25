@@ -96,6 +96,14 @@ final class QueueManager: AudioEngineDelegate {
     /// Tracks the songId whose background download is in progress so we can cancel it on skip.
     private var activeDownloadSongId: String?
 
+    /// Incremented each time playCurrentSong() is called. Guards against stale
+    /// audioEngineCrossfadeCompleted callbacks that were dispatched to main thread
+    /// before a skip cancelled the crossfade.
+    /// nonisolated(unsafe) because it's read from nonisolated delegate methods (called from
+    /// automationQueue) to capture the value BEFORE the Task @MainActor runs. Writes are
+    /// always on @MainActor. A stale read is conservative (old gen ≠ current gen → discard).
+    private nonisolated(unsafe) var crossfadeCompletionGeneration: Int = 0
+
     private init() {
         restoreState()
     }
@@ -490,8 +498,20 @@ final class QueueManager: AudioEngineDelegate {
     }
 
     nonisolated func audioEngineCrossfadeCompleted(startOffset: Double) {
+        // Capture generation BEFORE creating the Task — if the user skips (playCurrentSong
+        // increments the gen) between now and when the Task runs, the guard will detect it.
+        let expectedGen = crossfadeCompletionGeneration
         Task { @MainActor in
             NowPlayingState.shared.isCrossfading = false
+
+            // Guard against stale callbacks: if the user skipped during crossfade,
+            // playCurrentSong() incremented the generation. This async Task may arrive
+            // AFTER the skip — advancing currentIndex would skip the wrong song.
+            guard self.crossfadeCompletionGeneration == expectedGen else {
+                print("[QueueManager] Discarding stale crossfade completion (gen \(expectedGen) != \(self.crossfadeCompletionGeneration))")
+                return
+            }
+
             // After crossfade, the engine already swapped players.
             // Advance our index to match.
             if currentIndex < queue.count - 1 {
@@ -1141,7 +1161,15 @@ final class QueueManager: AudioEngineDelegate {
     private func playCurrentSong() {
         guard let song = currentSong else { return }
 
-        // Fix 2: Cancel any in-flight download from the previous song.
+        // Increment generation so stale audioEngineCrossfadeCompleted callbacks are discarded
+        crossfadeCompletionGeneration += 1
+
+        // Reset crossfade UI flag — if we're here from a skip during crossfade,
+        // cancelCrossfade() cleared AudioEngineManager.isCrossfading but the
+        // NowPlayingState flag was never reset (audioEngineCrossfadeCompleted wasn't called).
+        NowPlayingState.shared.isCrossfading = false
+
+        // Cancel any in-flight download from the previous song.
         // During rapid skips, old downloads pile up wasting bandwidth.
         if let oldId = activeDownloadSongId, oldId != song.id {
             AudioFileLoader.shared.cancelDownload(songId: oldId)

@@ -962,7 +962,13 @@ class AudioEngineManager {
         )
 
         executor.onComplete = { [weak self] startOffset in
-            guard let self = self else { return }
+            guard let self = self, self.isCrossfading else {
+                // Stale callback — crossfade was cancelled (user skipped) between
+                // when completeCrossfade() dispatched this to main and now. The new
+                // song is already playing; doing the swap would corrupt state.
+                print("[AudioEngineManager] onComplete: discarded (crossfade already cancelled)")
+                return
+            }
 
             // Parar playerA (canción saliente, ya silenciado)
             self.playerA.stop()
