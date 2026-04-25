@@ -439,7 +439,7 @@ struct PlaylistDetailView: View {
                             pin: false
                         )
                     } label: {
-                        Label(L.downloads, systemImage: "arrow.down.circle")
+                        Label(L.download, systemImage: "arrow.down.circle")
                     }
                 }
 

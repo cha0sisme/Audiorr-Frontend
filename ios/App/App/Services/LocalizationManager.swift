@@ -146,8 +146,9 @@ enum L {
     static var newPlaylistPrompt: String { isEn ? "Enter the name of the new playlist." : "Introduce el nombre de la nueva playlist." }
     static var name: String { isEn ? "Name" : "Nombre" }
     static var createPlaylist: String { isEn ? "Create" : "Crear" }
-    static var deletePlaylist: String { isEn ? "Delete playlist" : "Eliminar playlist" }
+    static var deletePlaylist: String { isEn ? "Delete Playlist" : "Eliminar playlist" }
     static var deletePlaylistConfirm: String { isEn ? "This action cannot be undone." : "Esta acción no se puede deshacer." }
+    static var download: String { isEn ? "Download" : "Descargar" }
     static var downloads: String { isEn ? "Downloads" : "Descargas" }
     static var noDownloadedSongs: String { isEn ? "No downloaded songs" : "No hay canciones descargadas" }
     static var songsAutoSaved: String { isEn ? "Songs you play will be saved automatically." : "Las canciones que reproduzcas se guardarán automáticamente." }
@@ -197,9 +198,9 @@ enum L {
 
     // MARK: - Downloads / Storage
 
-    static var pin: String { isEn ? "Pin (don't auto-delete)" : "Fijar (no eliminar automáticamente)" }
-    static var unpin: String { isEn ? "Unpin" : "Desfijar" }
-    static var deleteDownload: String { isEn ? "Delete download" : "Eliminar descarga" }
+    static var pin: String { isEn ? "Pin" : "Fijar" }
+    static var unpin: String { isEn ? "Unpin" : "Quitar fijado" }
+    static var deleteDownload: String { isEn ? "Delete Download" : "Eliminar descarga" }
 
     // MARK: - Settings
 
