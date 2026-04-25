@@ -376,22 +376,27 @@ struct PlaylistDetailView: View {
     private var actionButtons: some View {
         let fillColor: Color  = Color(vm.palette.buttonFillColor)
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
+        let smartMixReady = vm.smartMixStatus == .ready && BackendState.shared.isAvailable
 
         return HStack(spacing: 12) {
-            // Play — primary action, capsule with text
+            // Play — capsule with text normally, collapses to circle when SmartMix is ready
             Button {
                 guard !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "play.fill")
-                    Text(L.play)
-                        .fontWeight(.semibold)
+                    if !smartMixReady {
+                        Text(L.play)
+                            .fontWeight(.semibold)
+                            .transition(.blurReplace)
+                    }
                 }
                 .font(.system(size: 15))
                 .foregroundStyle(labelColor)
-                .padding(.horizontal, 22)
+                .padding(.horizontal, smartMixReady ? 0 : 22)
                 .padding(.vertical, 10)
+                .frame(width: smartMixReady ? 40 : nil, height: 40)
                 .background(fillColor, in: Capsule())
             }
 
@@ -412,6 +417,7 @@ struct PlaylistDetailView: View {
                 smartMixButton(fillColor: fillColor, labelColor: labelColor)
             }
         }
+        .animation(Anim.moderate, value: smartMixReady)
         .disabled(vm.isLoading)
     }
 
@@ -460,7 +466,7 @@ struct PlaylistDetailView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle.fill")
+                Image(systemName: "ellipsis.circle")
                     .font(.system(size: 22))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(isLight ? Color.accentColor : .white)
@@ -468,9 +474,10 @@ struct PlaylistDetailView: View {
         }
     }
 
-    /// SmartMix button — follows the App Store GET → ● → OPEN pattern:
-    /// idle (generate) → analyzing (spinner) → ready (play) → error (retry).
-    /// Each state changes the icon to communicate the *action*, not just status.
+    /// SmartMix button — idle/analyzing/error show a compact circle;
+    /// ready expands into a capsule with "SmartMix" label, mirroring the
+    /// Play button's capsule shape. The Play button simultaneously collapses
+    /// to a circle, creating a smooth hand-off of visual prominence.
     @ViewBuilder
     private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
         let status = vm.smartMixStatus
@@ -489,43 +496,47 @@ struct PlaylistDetailView: View {
                 break
             }
         } label: {
-            ZStack {
-                // Background — accent when ready, default otherwise
-                Circle()
-                    .fill(isReady ? Color.accentColor : fillColor)
+            HStack(spacing: 7) {
+                ZStack {
+                    switch status {
+                    case .idle:
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(labelColor)
+                            .transition(.blurReplace)
 
-                switch status {
-                case .idle:
-                    // "Tap to generate" — the wand represents SmartMix
-                    Image(systemName: "wand.and.stars")
+                    case .analyzing:
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(labelColor)
+                            .transition(.blurReplace)
+
+                    case .ready:
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(labelColor)
+                            .transition(.blurReplace)
+
+                    case .error:
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(labelColor.opacity(0.6))
+                            .transition(.blurReplace)
+                    }
+                }
+
+                if isReady {
+                    Text("SmartMix")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(labelColor)
-                        .transition(.scale.combined(with: .opacity))
-
-                case .analyzing:
-                    // "Working…"
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(labelColor)
-                        .transition(.opacity)
-
-                case .ready:
-                    // "Tap to play your SmartMix" — play icon on accent background
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .transition(.scale.combined(with: .opacity))
-
-                case .error:
-                    // "Tap to retry"
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(labelColor.opacity(0.6))
-                        .transition(.scale.combined(with: .opacity))
+                        .transition(.blurReplace)
                 }
             }
-            .frame(width: 40, height: 40)
-            .animation(.smooth(duration: 0.35), value: status)
+            .padding(.horizontal, isReady ? 22 : 0)
+            .padding(.vertical, 10)
+            .frame(width: isReady ? nil : 40, height: 40)
+            .background(fillColor, in: Capsule())
+            .animation(Anim.moderate, value: status)
         }
         .disabled(status == .analyzing || vm.songs.isEmpty)
         .sensoryFeedback(.success, trigger: isReady)
