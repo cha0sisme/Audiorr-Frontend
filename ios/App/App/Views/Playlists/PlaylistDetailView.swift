@@ -387,28 +387,38 @@ struct PlaylistDetailView: View {
     private var actionButtons: some View {
         let fillColor: Color  = Color(vm.palette.buttonFillColor)
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
+        let nowPlaying = NowPlayingState.shared
+        let isPlaylistContext = nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(vm.displayPlaylist.id)"
+        let isPlaylistPlaying = isPlaylistContext && nowPlaying.isPlaying
         let smartMixReady = vm.smartMixStatus == .ready && BackendState.shared.isAvailable
+        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
+        let collapsePlay = smartMixReady || isSmartMixContext
 
         return HStack(spacing: 12) {
-            // Play — capsule with text normally, collapses to circle when SmartMix is ready
+            // Play — capsule with text normally, collapses to circle when SmartMix active
             Button {
-                guard !vm.songs.isEmpty else { return }
-                PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
+                if isPlaylistContext {
+                    PlayerService.shared.togglePlayPause()
+                } else {
+                    guard !vm.songs.isEmpty else { return }
+                    PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
+                }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "play.fill")
-                    if !smartMixReady {
-                        Text(L.play)
+                    Image(systemName: isPlaylistPlaying ? "pause.fill" : "play.fill")
+                    if !collapsePlay {
+                        Text(isPlaylistContext ? L.pause : L.play)
                             .fontWeight(.semibold)
                             .transition(.blurReplace)
                     }
                 }
                 .font(.system(size: 15))
                 .foregroundStyle(labelColor)
-                .padding(.horizontal, smartMixReady ? 0 : 22)
+                .padding(.horizontal, collapsePlay ? 0 : 22)
                 .padding(.vertical, 10)
-                .frame(width: smartMixReady ? 40 : nil, height: 40)
+                .frame(width: collapsePlay ? 40 : nil, height: 40)
                 .background(fillColor, in: Capsule())
+                .animation(Anim.moderate, value: isPlaylistPlaying)
             }
 
             // Shuffle
@@ -491,65 +501,87 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
         let status = vm.smartMixStatus
-        let isReady = status == .ready
+        let nowPlaying = NowPlayingState.shared
+        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
+        let isSmartMixPlaying = isSmartMixContext && nowPlaying.isPlaying
+        let isExpanded = status == .ready || isSmartMixContext
 
         Button {
-            switch status {
-            case .idle, .error:
-                PlayerService.shared.generateSmartMix(
-                    playlistId: vm.initialPlaylist.id,
-                    songs: vm.songs
-                )
-            case .ready:
-                PlayerService.shared.playSmartMix(playlistId: vm.initialPlaylist.id)
-            case .analyzing:
-                break
+            if isSmartMixContext {
+                // SmartMix is the current context — toggle play/pause
+                PlayerService.shared.togglePlayPause()
+            } else {
+                switch status {
+                case .idle, .error:
+                    PlayerService.shared.generateSmartMix(
+                        playlistId: vm.initialPlaylist.id,
+                        songs: vm.songs
+                    )
+                case .ready:
+                    PlayerService.shared.playSmartMix(playlistId: vm.initialPlaylist.id, playlistName: vm.displayPlaylist.name)
+                case .analyzing:
+                    break
+                }
             }
         } label: {
             HStack(spacing: 7) {
                 ZStack {
-                    switch status {
-                    case .idle:
-                        Image(systemName: "wand.and.stars")
+                    if isSmartMixPlaying {
+                        Image(systemName: "pause.fill")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(labelColor)
                             .transition(.blurReplace)
-
-                    case .analyzing:
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(labelColor)
-                            .transition(.blurReplace)
-
-                    case .ready:
+                    } else if isSmartMixContext {
+                        // Paused but still the active context
                         Image(systemName: "play.fill")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(labelColor)
                             .transition(.blurReplace)
+                    } else {
+                        switch status {
+                        case .idle:
+                            Image(systemName: "wand.and.stars")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(labelColor)
+                                .transition(.blurReplace)
 
-                    case .error:
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(labelColor.opacity(0.6))
-                            .transition(.blurReplace)
+                        case .analyzing:
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(labelColor)
+                                .transition(.blurReplace)
+
+                        case .ready:
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(labelColor)
+                                .transition(.blurReplace)
+
+                        case .error:
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(labelColor.opacity(0.6))
+                                .transition(.blurReplace)
+                        }
                     }
                 }
 
-                if isReady {
+                if isExpanded {
                     Text("SmartMix")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(labelColor)
                         .transition(.blurReplace)
                 }
             }
-            .padding(.horizontal, isReady ? 22 : 0)
+            .padding(.horizontal, isExpanded ? 22 : 0)
             .padding(.vertical, 10)
-            .frame(width: isReady ? nil : 40, height: 40)
+            .frame(width: isExpanded ? nil : 40, height: 40)
             .background(fillColor, in: Capsule())
             .animation(Anim.moderate, value: status)
+            .animation(Anim.moderate, value: isSmartMixPlaying)
         }
         .disabled(status == .analyzing || vm.songs.isEmpty)
-        .sensoryFeedback(.success, trigger: isReady)
+        .sensoryFeedback(.success, trigger: status == .ready)
     }
 
 

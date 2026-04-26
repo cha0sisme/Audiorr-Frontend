@@ -127,7 +127,7 @@ final class PlayerService {
     }
 
     @MainActor
-    func playSmartMix(playlistId: String) {
+    func playSmartMix(playlistId: String, playlistName: String? = nil) {
         let mix = SmartMixManager.shared.generatedMix
         guard !mix.isEmpty else { return }
 
@@ -145,7 +145,7 @@ final class PlayerService {
             return
         }
         currentContextUri = "smartmix:\(playlistId)"
-        currentContextName = "SmartMix"
+        currentContextName = playlistName ?? "SmartMix"
         QueueManager.shared.play(songs: mix, startIndex: startIdx)
     }
 

@@ -10,7 +10,7 @@ final class TransitionDiagnostics {
 
     /// When false, diagnostics data is not collected and the UI section is hidden.
     /// Set to true for internal debug builds only.
-    nonisolated(unsafe) static var debugModeEnabled = false
+    nonisolated(unsafe) static var debugModeEnabled = true
 
     static let shared = TransitionDiagnostics()
 

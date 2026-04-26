@@ -832,6 +832,80 @@ class CrossfadeExecutor {
         return newEQ
     }
 
+    /// Replaces both TimePitch and EQ nodes on an ACTIVE (playing) chain with brand-new
+    /// AudioUnit instances, guaranteeing zero stale DSP state. Uses the mixer's multi-input
+    /// capability to build the new sub-chain before atomically redirecting the player,
+    /// minimizing audio disruption to a single `connect` call (~1 render buffer, ~5ms).
+    ///
+    /// **Why this is needed:**
+    /// In background execution, `AudioUnitReset` + parameter writes update the parameter
+    /// tree (audits read CLEAN) but the render thread may keep using stale IIR coefficients
+    /// and time-stretch state computed from PREVIOUS values. New AudioUnit instances have
+    /// zero history — impossible to have stale coefficients.
+    ///
+    /// **Connection strategy (zero-gap):**
+    /// 1. Build new sub-chain: newTP → newEQ → mixer (mixer accepts multiple inputs)
+    /// 2. Single `connect(player, to: newTP)` atomically redirects audio to new chain
+    /// 3. Detach old nodes (triggers CoreAudio CleanupMemory)
+    ///
+    /// - Returns: Tuple of (new TimePitch, new EQ). Caller must update stored references.
+    @discardableResult
+    static func replaceActiveChainNodes(
+        engine: AVAudioEngine,
+        player: AVAudioPlayerNode,
+        oldTP: AVAudioUnitTimePitch,
+        oldEQ: AVAudioUnitEQ,
+        mixer: AVAudioMixerNode,
+        label: String
+    ) -> (AVAudioUnitTimePitch, AVAudioUnitEQ) {
+        // Create fresh nodes with neutral state
+        let newTP = AVAudioUnitTimePitch()
+        newTP.rate = 1.0
+        newTP.pitch = 0
+        newTP.overlap = 8.0
+
+        let bandCount = oldEQ.bands.count
+        let newEQ = AVAudioUnitEQ(numberOfBands: bandCount)
+        resetBandsStatic(newEQ)
+
+        // Copy global EQ bands (4-7) from old node before detaching
+        for i in 4..<bandCount {
+            let src = oldEQ.bands[i]
+            let dst = newEQ.bands[i]
+            dst.filterType = src.filterType
+            dst.frequency = src.frequency
+            dst.gain = src.gain
+            dst.bandwidth = src.bandwidth
+            dst.bypass = src.bypass
+        }
+
+        // 1. Attach new nodes (not connected yet — no audio flows through them)
+        engine.attach(newTP)
+        engine.attach(newEQ)
+
+        // 2. Build new sub-chain: newTP → newEQ → mixer
+        //    Mixer accepts multiple inputs, so oldEQ → mixer is NOT broken.
+        //    Audio still flows through old chain: player → oldTP → oldEQ → mixer
+        engine.connect(newEQ, to: mixer, format: nil)
+        engine.connect(newTP, to: newEQ, format: nil)
+
+        // 3. Atomic switch: redirect player output to new chain.
+        //    Single connect breaks player → oldTP and creates player → newTP.
+        //    Audio instantly flows: player → newTP → newEQ → mixer
+        engine.connect(player, to: newTP, format: nil)
+
+        // 4. Detach old nodes — triggers CleanupMemory, destroys all internal state
+        engine.disconnectNodeOutput(oldTP)
+        engine.disconnectNodeOutput(oldEQ)
+        engine.detach(oldTP)
+        engine.detach(oldEQ)
+
+        print("[CrossfadeExecutor] ♻️ Active chain replaced (\(label)) — fresh TP+EQ, zero stale state")
+        TransitionDiagnostics.shared.logEvent("♻️ ACTIVE CHAIN REPLACED (\(label))")
+
+        return (newTP, newEQ)
+    }
+
     // MARK: - Post-reset audit
 
     /// Reads the REAL current values from AVAudioUnitEQ bands and publishes to diagnostics.

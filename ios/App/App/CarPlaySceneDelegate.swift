@@ -10,6 +10,9 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
     var interfaceController: CPInterfaceController?
     private var homeTemplate: CPListTemplate?
     private var playlistsTemplate: CPListTemplate?
+    /// Playlist name lookup (playlistId → name) — populated by loadPlaylists,
+    /// used by loadHomeContent to resolve "SmartMix" titles in Jump Back In.
+    private var playlistNames: [String: String] = [:]
 
     // MARK: - CPTemplateApplicationSceneDelegate
 
@@ -123,6 +126,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             }
 
             let username = creds.username
+
+            // Build playlist name lookup for Jump Back In smartmix resolution
+            for p in playlistArr {
+                if let id = p["id"] as? String, let name = p["name"] as? String {
+                    playlistNames[id] = name
+                }
+            }
 
             var allItems: [CPListItem] = []
             var myItems: [CPListItem] = []
@@ -240,11 +250,16 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 for entry in arr.prefix(10) {
                     let type   = entry["type"]   as? String ?? ""
                     let id     = entry["id"]     as? String ?? ""
-                    let title  = entry["title"]  as? String ?? id
+                    var title  = entry["title"]  as? String ?? id
                     let artist = entry["artist"] as? String ?? ""
                     let coverArtId = entry["coverArtId"] as? String
 
                     guard type == "album" || type == "playlist" || type == "smartmix" else { continue }
+
+                    // Resolve generic "SmartMix" title to actual playlist name
+                    if type == "smartmix", let realName = self.playlistNames[id] {
+                        title = realName
+                    }
 
                     let detail = type == "album" ? artist : nil
                     let item = CPListItem(
@@ -725,7 +740,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
             if SmartMixManager.shared.status == .ready {
-                PlayerService.shared.playSmartMix(playlistId: playlistId)
+                PlayerService.shared.playSmartMix(playlistId: playlistId, playlistName: playlistName)
             } else {
                 // Fallback: play in original order
                 PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(playlistId)", contextName: playlistName)

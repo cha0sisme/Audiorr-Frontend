@@ -73,6 +73,7 @@ enum L {
     // MARK: - Common
 
     static var play: String { isEn ? "Play" : "Reproducir" }
+    static var pause: String { isEn ? "Pause" : "Pausa" }
     static var shuffle: String { isEn ? "Shuffle" : "Aleatorio" }
     static var cancel: String { isEn ? "Cancel" : "Cancelar" }
     static var close: String { isEn ? "Close" : "Cerrar" }
