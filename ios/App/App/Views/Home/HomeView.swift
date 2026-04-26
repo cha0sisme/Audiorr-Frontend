@@ -130,11 +130,15 @@ final class HomeViewModel: ObservableObject {
 
     private func loadRecentContexts() async {
         guard BackendState.shared.isAvailable else { return }
-        var contexts = Array(await api.getRecentContexts().prefix(12))
+        // Only albums, playlists, and artists — smartmixes don't have proper
+        // cover art / metadata and cause blank tiles in the grid.
+        var contexts = Array(await api.getRecentContexts()
+            .filter { $0.type == "album" || $0.type == "playlist" || $0.type == "artist" }
+            .prefix(12))
 
-        // Enrich playlist/smartmix contexts with real name, song count, and cover from Navidrome
+        // Enrich playlist contexts with real name, song count, and cover from Navidrome
         let playlistIndices = contexts.enumerated().compactMap { (i, ctx) -> (Int, String)? in
-            (ctx.type == "playlist" || ctx.type == "smartmix") ? (i, ctx.id) : nil
+            ctx.type == "playlist" ? (i, ctx.id) : nil
         }
         await withTaskGroup(of: (Int, String?, Int?, String?).self) { group in
             for (index, pid) in playlistIndices {
@@ -354,7 +358,8 @@ struct HomeView: View {
 
     private func quickPlayTile(_ ctx: RecentContext) -> some View {
         let isAlbum = ctx.type == "album"
-        let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
+        let isPlaylist = ctx.type == "playlist"
+        let isArtist = ctx.type == "artist"
 
         return Button {
             if isAlbum {
@@ -369,17 +374,21 @@ struct HomeView: View {
                     songCount: ctx.songCount ?? 0, duration: 0,
                     owner: nil, coverArt: ctx.coverArtId, changed: nil
                 ))
-            } else if ctx.type == "artist" {
+            } else if isArtist {
                 navigationPath.append(NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil))
             }
         } label: {
             HStack(spacing: 10) {
-                CachedCoverView(
-                    coverArt: ctx.coverArtId,
-                    playlistId: isPlaylist ? ctx.id : nil,
-                    size: 44,
-                    cornerRadius: 6
-                )
+                if isArtist {
+                    QuickPlayArtistAvatar(artistId: ctx.id, name: ctx.title)
+                } else {
+                    CachedCoverView(
+                        coverArt: ctx.coverArtId,
+                        playlistId: isPlaylist ? ctx.id : nil,
+                        size: 44,
+                        cornerRadius: 6
+                    )
+                }
                 Text(ctx.title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
@@ -587,7 +596,7 @@ struct HomeView: View {
             HorizontalScrollSection(title: L.listenAgain) {
                 ForEach(overflow) { ctx in
                     let isAlbum = ctx.type == "album"
-                    let isPlaylist = ctx.type == "playlist" || ctx.type == "smartmix"
+                    let isPlaylist = ctx.type == "playlist"
 
                     if isAlbum {
                         let album = NavidromeAlbum(
@@ -975,6 +984,53 @@ struct HomeView: View {
 }
 
 // MARK: - Cached cover view (small thumbnails — uses AlbumCoverCache)
+
+/// 44pt circular artist avatar for the Quick Play grid.
+/// Uses ArtistImageCache (same as ArtistCardView) — shows colored initial as fallback.
+private struct QuickPlayArtistAvatar: View {
+    let artistId: String
+    let name: String
+    @State private var image: UIImage?
+    @State private var loaded = false
+
+    private var initialColor: Color {
+        let hash = name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 360 }
+        return Color(hue: Double(hash) / 360.0, saturation: 0.45, brightness: 0.50)
+    }
+
+    var body: some View {
+        ZStack {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else if loaded {
+                initialColor.opacity(0.25)
+                    .overlay(
+                        Text(String(name.prefix(1)).uppercased())
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundStyle(initialColor)
+                    )
+            } else {
+                Color(.systemGray5)
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(Circle())
+        .task(id: artistId) {
+            if let cached = ArtistImageCache.shared.image(for: artistId) {
+                image = cached; loaded = true; return
+            }
+            guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artistId) else {
+                loaded = true; return
+            }
+            if let img = await ArtistImageCache.shared.loadImage(artistId: artistId, url: url) {
+                image = img
+            }
+            loaded = true
+        }
+    }
+}
 
 /// Small cover thumbnail that checks AlbumCoverCache first.
 /// Used in top weekly rows, offline album list, and anywhere a small

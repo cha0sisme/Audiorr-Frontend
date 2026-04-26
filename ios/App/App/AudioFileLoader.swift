@@ -421,8 +421,17 @@ class AudioFileLoader: @unchecked Sendable {
     }
 
     /// Promote a downloaded file to the persistent offline cache (fire-and-forget).
+    /// Snapshots file data synchronously to survive LRU eviction before the async hop.
     private func promoteToOfflineCache(songId: String, fileURL: URL) {
         guard PersistenceService.shared.offlineAutoCacheEnabled else { return }
+
+        // Read file data NOW on the queue — evictIfNeeded() can delete the source
+        // before the MainActor task runs (race condition with LRU eviction).
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            print("[AudioFileLoader] Promote skipped (file gone): \(songId)")
+            return
+        }
+        let ext = fileURL.pathExtension.isEmpty ? "mp3" : fileURL.pathExtension
 
         Task { @MainActor in
             // Resolve song metadata from the current queue (MainActor for QueueManager access)
@@ -433,7 +442,16 @@ class AudioFileLoader: @unchecked Sendable {
                 return QueueManager.shared.queue.first { $0.id == songId }
             }()
 
-            await OfflineStorageManager.shared.storeFile(from: fileURL, songId: songId, song: song)
+            // Write snapshot to temp promotion file (source may have been evicted by now)
+            let promoURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(songId)_promo.\(ext)")
+            do {
+                try fileData.write(to: promoURL, options: .atomic)
+                await OfflineStorageManager.shared.storeFile(from: promoURL, songId: songId, song: song)
+                try? FileManager.default.removeItem(at: promoURL)
+            } catch {
+                print("[AudioFileLoader] Promote write failed: \(songId) — \(error)")
+            }
         }
     }
 }
