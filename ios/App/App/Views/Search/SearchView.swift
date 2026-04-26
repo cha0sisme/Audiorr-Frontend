@@ -167,6 +167,7 @@ struct SearchView: View {
                 PlaylistDetailView(playlist: playlist)
                     .navigationTransition(.zoom(sourceID: playlist.id, in: heroNS))
             }
+            .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
         }
     }
 

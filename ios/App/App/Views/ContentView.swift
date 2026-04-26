@@ -84,6 +84,7 @@ struct ContentView: View {
                         ArtistDetailView(artist: $0, heroNamespace: overlayHeroNS)
                             .navigationTransition(.zoom(sourceID: $0.id, in: overlayHeroNS))
                     }
+                    .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
                 }
                 .transition(.move(edge: .trailing))
                 .zIndex(5)

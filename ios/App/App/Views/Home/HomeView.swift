@@ -154,7 +154,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     private func loadRecentReleases() async {
-        recentReleases = await api.getRecentReleases(months: 6, size: 18)
+        recentReleases = await api.getRecentReleases(months: 6, size: 30)
     }
 
     private func loadDailyMixes() async {
@@ -200,7 +200,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     private func loadFrequentAlbums() async {
-        frequentAlbums = await api.getAlbumList(type: "frequent", size: 10)
+        frequentAlbums = await api.getAlbumList(type: "frequent", size: 20)
     }
 
     private func loadRandomAlbums() async {
@@ -739,13 +739,26 @@ struct HomeView: View {
 
     // MARK: - Heavy Rotation (Navidrome frequent)
 
+    private let heavyRotationVisibleLimit = 8
+
     @ViewBuilder
     private var heavyRotationSection: some View {
         if !vm.frequentAlbums.isEmpty {
+            let visible = Array(vm.frequentAlbums.prefix(heavyRotationVisibleLimit))
+            let overflow = vm.frequentAlbums.count - heavyRotationVisibleLimit
+
             HorizontalScrollSection(title: L.heavyRotation) {
-                ForEach(vm.frequentAlbums) { album in
+                ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 170, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(
+                        title: L.heavyRotation, items: vm.frequentAlbums
+                    )) {
+                        SeeAllCard(remaining: overflow, size: 170)
                     }
                     .buttonStyle(.plain)
                 }

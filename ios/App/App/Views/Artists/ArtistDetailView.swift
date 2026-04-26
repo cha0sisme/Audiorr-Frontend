@@ -431,6 +431,8 @@ struct ArtistDetailView: View {
 
     // MARK: Álbumes
 
+    private let albumsVisibleLimit = 8
+
     @ViewBuilder
     private var discographySection: some View {
         if vm.isLoadingAlbums {
@@ -444,10 +446,21 @@ struct ArtistDetailView: View {
                 }
             }
         } else if !vm.albums.isEmpty {
+            let visible = Array(vm.albums.prefix(albumsVisibleLimit))
+            let overflow = vm.albums.count - albumsVisibleLimit
+
             HorizontalScrollSection(title: L.albums, isLight: isLight) {
-                ForEach(vm.albums) { album in
+                ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(
+                        title: L.albums, items: vm.albums
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -457,13 +470,26 @@ struct ArtistDetailView: View {
 
     // MARK: Aparece en (collaborations)
 
+    private let collabsVisibleLimit = 8
+
     @ViewBuilder
     private var collaborationsSection: some View {
         if !vm.collaborations.isEmpty {
+            let visible = Array(vm.collaborations.prefix(collabsVisibleLimit))
+            let overflow = vm.collaborations.count - collabsVisibleLimit
+
             HorizontalScrollSection(title: L.appearsIn, isLight: isLight) {
-                ForEach(vm.collaborations) { album in
+                ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(
+                        title: L.appearsIn, items: vm.collaborations
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -473,16 +499,29 @@ struct ArtistDetailView: View {
 
     // MARK: Playlists con X
 
+    private let playlistsVisibleLimit = 8
+
     @ViewBuilder
     private var playlistsSection: some View {
         if !vm.playlistsAreLoading && !vm.playlists.isEmpty {
+            let visible = Array(vm.playlists.prefix(playlistsVisibleLimit))
+            let overflow = vm.playlists.count - playlistsVisibleLimit
+
             HorizontalScrollSection(
                 title: L.playlistsWith(vm.artist.name),
                 isLight: isLight
             ) {
-                ForEach(vm.playlists) { playlist in
+                ForEach(visible) { playlist in
                     NavigationLink(value: playlist) {
                         PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.playlists(
+                        title: L.playlistsWith(vm.artist.name), items: vm.playlists
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -491,6 +530,8 @@ struct ArtistDetailView: View {
     }
 
     // MARK: Fans también escuchan (similar artists)
+
+    private let similarVisibleLimit = 8
 
     @ViewBuilder
     private var similarArtistsSection: some View {
@@ -504,11 +545,21 @@ struct ArtistDetailView: View {
             let artists = info.similarArtists.map {
                 NavidromeArtist(id: $0.id, name: $0.name, albumCount: nil)
             }
+            let visible = Array(artists.prefix(similarVisibleLimit))
+            let overflow = artists.count - similarVisibleLimit
 
             HorizontalScrollSection(title: L.fansAlsoListen, isLight: isLight) {
-                ForEach(artists) { artist in
+                ForEach(visible) { artist in
                     NavigationLink(value: artist) {
                         ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.artists(
+                        title: L.fansAlsoListen, items: artists
+                    )) {
+                        SeeAllArtistCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
