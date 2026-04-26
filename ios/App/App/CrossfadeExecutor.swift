@@ -209,16 +209,6 @@ class CrossfadeExecutor {
         highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
     )
 
-    // MARK: - Prototipos de EQ Global
-    // Permite que B herede el estado de EQ de A si el usuario tiene un EQ activo.
-    struct EQState {
-        var band0Frequency: Float = 20
-        var band0Bypass: Bool = true
-        var band1Frequency: Float = 200
-        var band1Gain: Float = 0
-        var band1Bypass: Bool = true
-    }
-
     // MARK: - Estado
 
     let config: Config
@@ -231,12 +221,14 @@ class CrossfadeExecutor {
     private let engine: AVAudioEngine
     private let playerA: AVAudioPlayerNode
     private let playerB: AVAudioPlayerNode
-    private let eqA: AVAudioUnitEQ
-    private let eqB: AVAudioUnitEQ
+    private let dspA: BiquadDSPNode
+    private let dspB: BiquadDSPNode
     private let mixerA: AVAudioMixerNode
     private let mixerB: AVAudioMixerNode
     private let timePitchA: AVAudioUnitTimePitch?
     private let timePitchB: AVAudioUnitTimePitch?
+    /// Sample rate for biquad coefficient computation (from nextFile's processing format)
+    private let sampleRate: Float
     private let currentFile: AVAudioFile?
     private let nextFile: AVAudioFile
 
@@ -256,6 +248,11 @@ class CrossfadeExecutor {
     private var lastLogTime: Double = 0
     private var lastTickTime: Double = 0
     private var foregroundObserver: Any?
+    /// Diagnostic tracking: current filter parameter values (for logging, not audio-critical)
+    private var diagFreqA: Float = 20
+    private var diagFreqB: Float = 20
+    private var diagLsGainA: Float = 0
+    private var diagLsGainB: Float = 0
 
     var onComplete: ((Double) -> Void)?
     /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
@@ -281,8 +278,8 @@ class CrossfadeExecutor {
         engine: AVAudioEngine,
         playerA: AVAudioPlayerNode,
         playerB: AVAudioPlayerNode,
-        eqA: AVAudioUnitEQ,
-        eqB: AVAudioUnitEQ,
+        dspA: BiquadDSPNode,
+        dspB: BiquadDSPNode,
         mixerA: AVAudioMixerNode,
         mixerB: AVAudioMixerNode,
         timePitchA: AVAudioUnitTimePitch? = nil,
@@ -299,12 +296,13 @@ class CrossfadeExecutor {
         self.engine = engine
         self.playerA = playerA
         self.playerB = playerB
-        self.eqA = eqA
-        self.eqB = eqB
+        self.dspA = dspA
+        self.dspB = dspB
         self.mixerA = mixerA
         self.mixerB = mixerB
         self.timePitchA = timePitchA
         self.timePitchB = timePitchB
+        self.sampleRate = Float(nextFile.processingFormat.sampleRate)
         self.currentFile = currentFile
         self.nextFile = nextFile
         self.maxVolumeA = maxVolumeA
@@ -569,9 +567,9 @@ class CrossfadeExecutor {
             // limpie isCrossfading y no quede en estado fantasma.
             print("[CrossfadeExecutor] ⚠️ Setup falló (sin frames en B) — restaurando A")
             mixerA.outputVolume = maxVolumeA
-            // Reset EQ and time-stretch that setupInitialEQ/setupTimeStretch already applied
-            resetCrossfadeBands(eqA)
-            resetCrossfadeBands(eqB)
+            // Reset DSP and time-stretch that setupInitialEQ/setupTimeStretch already applied
+            dspA.reset()
+            dspB.reset()
             mixerA.pan = 0
             mixerB.pan = 0
             resetTimeStretch()
@@ -606,35 +604,23 @@ class CrossfadeExecutor {
         mixerA.outputVolume = maxVolumeA
         mixerB.outputVolume = 0
 
-        // Immediate parameter reset on calling thread (best-effort)
-        resetCrossfadeBands(eqA)
-        resetCrossfadeBands(eqB)
+        // Immediate DSP reset on calling thread
+        dspA.reset()
+        dspB.reset()
         mixerA.pan = 0
         mixerB.pan = 0
         resetTimeStretch()
 
-        // Dispatch backstop to automationQueue — serializes AFTER any in-flight filterTick().
-        // A (active): best-effort parameter reset only. EQ node replacement happens in
-        // AudioEngineManager.cancelCrossfade() where we have mutable references.
-        // B (stopped): nuclear reconnect is safe on idle players.
-        let eng = self.engine
-        let eqA = self.eqA, eqB = self.eqB
+        // Backstop on automationQueue: serialize after any in-flight filterTick
+        let dA = self.dspA, dB = self.dspB
         let mA = self.mixerA, mB = self.mixerB
-        let pB = self.playerB
-        let tpA = self.timePitchA, tpB = self.timePitchB
+        let tpA = self.timePitchA
         Self.automationQueue.asyncAfter(deadline: .now() + 0.15) {
-            // A (active): parameter reset only — node replacement in cancelCrossfade()
-            Self.resetBandsStatic(eqA)
-            if let tpA { Self.resetTimePitchStatic(tpA) }
+            dA.reset()
+            dB.reset()
             mA.pan = 0
-            // B (stopped): nuclear reconnect — safe to disconnect idle player
-            if let tpB {
-                Self.reconnectChain(engine: eng, player: pB, timePitch: tpB,
-                                    eq: eqB, mixer: mB, label: "cancel-B")
-            }
             mB.pan = 0
-            Self.auditEQState(source: "cancel+reconnect", eqA: eqA, eqB: eqB,
-                              mixerA: mA, mixerB: mB, timePitchA: tpA, timePitchB: tpB)
+            if let tpA { Self.resetTimePitchSoft(tpA) }
         }
     }
 
@@ -660,61 +646,7 @@ class CrossfadeExecutor {
         if let tpB = timePitchB { Self.resetTimePitchSoft(tpB) }
     }
 
-    /// Resets crossfade bands (0-3) to neutral: bypass + neutral parameters.
-    /// AVAudioUnitEQ bypass can be unreliable in CoreAudio — the DSP may keep
-    /// processing even with bypass=true. Setting gain=0 and freq to inaudible
-    /// values guarantees no residual filtering even if bypass fails.
-    private func resetCrossfadeBands(_ eq: AVAudioUnitEQ) {
-        Self.resetBandsStatic(eq)
-    }
-
-    /// Static version — callable from closures that capture the EQ ref without `self`.
-    /// Used by cancel()'s automationQueue dispatches to serialize after in-flight filterTicks.
-    /// Internal access: AudioEngineManager.cancelCrossfade() also needs this for its backstop reset.
-    /// Reset crossfade bands to transparent state — NO BYPASS.
-    /// CoreAudio bypass=true is unreliable: the DSP may keep processing with
-    /// stale parameters, or ignore parameter changes while bypassed. Instead,
-    /// we keep bands always active (bypass=false) with neutral parameters:
-    /// highPass at 20Hz passes everything, gain=0 shelves are flat.
-    static func resetBandsStatic(_ eq: AVAudioUnitEQ) {
-        let defaults: [(AVAudioUnitEQFilterType, Float)] = [
-            (.highPass, 20),       // band 0: highpass at 20Hz = transparent
-            (.lowShelf, 80),       // band 1: lowshelf at 80Hz, gain 0 = flat
-            (.parametric, 1500),   // band 2: parametric at 1.5kHz, gain 0 = flat
-            (.highShelf, 8000),    // band 3: highshelf at 8kHz, gain 0 = flat
-        ]
-        let count = min(eq.bands.count, defaults.count)
-        for i in 0..<count {
-            let band = eq.bands[i]
-            band.filterType = defaults[i].0
-            band.frequency = defaults[i].1
-            band.gain = 0
-            band.bandwidth = 2.0
-            band.bypass = false  // always active — rely on neutral params, not bypass
-        }
-
-        // Force CoreAudio AudioUnit to flush its internal DSP state.
-        // Setting Swift properties (band.gain = 0) updates the property value but the
-        // underlying AudioUnit may keep using stale IIR filter coefficients calculated
-        // from previous parameter values, especially under background execution, CarPlay,
-        // or render-thread pressure on real devices. The audit reads the Swift properties
-        // (shows CLEAN) but the DSP continues filtering with old coefficients.
-        //
-        // AudioUnitReset forces the AudioUnit to:
-        // 1. Clear all internal filter state (IIR delay buffers)
-        // 2. Recompute filter coefficients from CURRENT parameter values
-        // 3. Start fresh on the next render cycle
-        //
-        // This may cause a very brief (~1 sample) discontinuity which is inaudible
-        // since it happens when the player is either silent (outgoing) or already at
-        // the correct neutral state (incoming after crossfade).
-        let au = eq.audioUnit
-        AudioUnitReset(au, kAudioUnitScope_Global, 0)
-    }
-
     /// Resets a TimePitch node to neutral (rate 1.0) and flushes its CoreAudio DSP state.
-    /// Same pattern as resetBandsStatic: Swift property + AudioUnitReset to prevent
-    /// the DSP from continuing to time-stretch with stale rate values.
     /// ⚠️ ONLY safe on IDLE (stopped) players — AudioUnitReset permanently breaks
     /// playerTime(forNodeTime:) on active (rendering) chains.
     static func resetTimePitchStatic(_ tp: AVAudioUnitTimePitch) {
@@ -732,221 +664,39 @@ class CrossfadeExecutor {
         tp.rate = 1.0
         tp.pitch = 0       // semitones
         tp.overlap = 8.0   // default
-        // NO AudioUnitReset — the node continues rendering normally
-    }
-
-    /// Nuclear DSP reset: disconnects and reconnects processing nodes in the audio graph.
-    /// Forces CoreAudio to rebuild the render pipeline with fresh IIR coefficients.
-    /// On real devices, AudioUnitReset + parameter writes update the parameter tree but
-    /// the render thread may keep using stale coefficients — especially in background.
-    /// ⚠️ ONLY safe on IDLE (stopped) players — disconnecting a playing player breaks audio.
-    static func reconnectChain(
-        engine: AVAudioEngine,
-        player: AVAudioPlayerNode,
-        timePitch: AVAudioUnitTimePitch,
-        eq: AVAudioUnitEQ,
-        mixer: AVAudioMixerNode,
-        label: String
-    ) {
-        // Reset parameters
-        resetBandsStatic(eq)
-        resetTimePitchStatic(timePitch)
-
-        // Disconnect: player → timePitch → eq → mixer
-        engine.disconnectNodeOutput(player)
-        engine.disconnectNodeOutput(timePitch)
-        engine.disconnectNodeOutput(eq)
-
-        // Reconnect: forces render resource reallocation
-        engine.connect(player, to: timePitch, format: nil)
-        engine.connect(timePitch, to: eq, format: nil)
-        engine.connect(eq, to: mixer, format: nil)
-
-        print("[CrossfadeExecutor] 🔄 Nuclear reconnect (\(label))")
-        TransitionDiagnostics.shared.logEvent("🔄 NUCLEAR RECONNECT (\(label))")
-    }
-
-    /// Replaces an EQ node with a brand-new instance, guaranteeing zero stale IIR
-    /// coefficients. The old EQ is detached (triggers CoreAudio's CleanupMemory,
-    /// destroying all internal filter state). A fresh AVAudioUnitEQ is created,
-    /// configured with neutral crossfade bands + the user's global EQ, and connected.
-    ///
-    /// **Why disconnect/reconnect is not enough:**
-    /// `disconnectNodeOutput` is a routing operation — it does NOT reset AudioUnit
-    /// internal state (confirmed by Infinum's symbolic breakpoint analysis: only
-    /// `engine.detach()` triggers `CleanupMemory`/`InitializeMemory`).
-    /// `AudioUnitReset` + parameter writes update the parameter tree (audits read CLEAN)
-    /// but the render thread may keep using stale biquad coefficients on real devices.
-    ///
-    /// A new AudioUnit instance has zero history — impossible to have stale coefficients.
-    ///
-    /// **Safe on ACTIVE chains:** only the EQ node is swapped. The player → timePitch
-    /// connection is untouched, so audio keeps flowing. Dynamic reconnection upstream
-    /// of a mixer is supported (WWDC 2014 Session 502). Worst case: ~1 render buffer
-    /// gap (~5ms), inaudible right after a crossfade.
-    ///
-    /// - Returns: The new AVAudioUnitEQ. Caller must update its stored reference.
-    @discardableResult
-    static func replaceEQNode(
-        engine: AVAudioEngine,
-        oldEQ: AVAudioUnitEQ,
-        timePitch: AVAudioUnitTimePitch,
-        mixer: AVAudioMixerNode,
-        label: String
-    ) -> AVAudioUnitEQ {
-        let bandCount = oldEQ.bands.count
-        let newEQ = AVAudioUnitEQ(numberOfBands: bandCount)
-
-        // Crossfade bands (0-3): neutral state
-        resetBandsStatic(newEQ)
-
-        // Global EQ bands (4-7): copy from old node before detaching
-        for i in 4..<bandCount {
-            let src = oldEQ.bands[i]
-            let dst = newEQ.bands[i]
-            dst.filterType = src.filterType
-            dst.frequency = src.frequency
-            dst.gain = src.gain
-            dst.bandwidth = src.bandwidth
-            dst.bypass = src.bypass
-        }
-
-        // 1. Attach new EQ (not yet connected — no audio flows through it)
-        engine.attach(newEQ)
-
-        // 2. Connect newEQ → mixer (still no input, silent)
-        engine.connect(newEQ, to: mixer, format: nil)
-
-        // 3. Atomic switch: redirect timePitch output from oldEQ → newEQ
-        //    Apple docs: "If the node already has a connection on the output bus,
-        //    this method breaks the existing connection and creates a new one."
-        engine.connect(timePitch, to: newEQ, format: nil)
-
-        // 4. Detach old EQ — triggers CleanupMemory, destroys all internal state
-        engine.disconnectNodeOutput(oldEQ)
-        engine.detach(oldEQ)
-
-        print("[CrossfadeExecutor] ♻️ EQ replaced (\(label)) — fresh AudioUnit, zero stale state")
-        TransitionDiagnostics.shared.logEvent("♻️ EQ REPLACED (\(label))")
-
-        return newEQ
-    }
-
-    /// Replaces both TimePitch and EQ nodes on an ACTIVE (playing) chain with brand-new
-    /// AudioUnit instances, guaranteeing zero stale DSP state. Uses the mixer's multi-input
-    /// capability to build the new sub-chain before atomically redirecting the player,
-    /// minimizing audio disruption to a single `connect` call (~1 render buffer, ~5ms).
-    ///
-    /// **Why this is needed:**
-    /// In background execution, `AudioUnitReset` + parameter writes update the parameter
-    /// tree (audits read CLEAN) but the render thread may keep using stale IIR coefficients
-    /// and time-stretch state computed from PREVIOUS values. New AudioUnit instances have
-    /// zero history — impossible to have stale coefficients.
-    ///
-    /// **Connection strategy (zero-gap):**
-    /// 1. Build new sub-chain: newTP → newEQ → mixer (mixer accepts multiple inputs)
-    /// 2. Single `connect(player, to: newTP)` atomically redirects audio to new chain
-    /// 3. Detach old nodes (triggers CoreAudio CleanupMemory)
-    ///
-    /// - Returns: Tuple of (new TimePitch, new EQ). Caller must update stored references.
-    @discardableResult
-    static func replaceActiveChainNodes(
-        engine: AVAudioEngine,
-        player: AVAudioPlayerNode,
-        oldTP: AVAudioUnitTimePitch,
-        oldEQ: AVAudioUnitEQ,
-        mixer: AVAudioMixerNode,
-        label: String
-    ) -> (AVAudioUnitTimePitch, AVAudioUnitEQ) {
-        // Create fresh nodes with neutral state
-        let newTP = AVAudioUnitTimePitch()
-        newTP.rate = 1.0
-        newTP.pitch = 0
-        newTP.overlap = 8.0
-
-        let bandCount = oldEQ.bands.count
-        let newEQ = AVAudioUnitEQ(numberOfBands: bandCount)
-        resetBandsStatic(newEQ)
-
-        // Copy global EQ bands (4-7) from old node before detaching
-        for i in 4..<bandCount {
-            let src = oldEQ.bands[i]
-            let dst = newEQ.bands[i]
-            dst.filterType = src.filterType
-            dst.frequency = src.frequency
-            dst.gain = src.gain
-            dst.bandwidth = src.bandwidth
-            dst.bypass = src.bypass
-        }
-
-        // 1. Attach new nodes (not connected yet — no audio flows through them)
-        engine.attach(newTP)
-        engine.attach(newEQ)
-
-        // 2. Build new sub-chain: newTP → newEQ → mixer
-        //    Mixer accepts multiple inputs, so oldEQ → mixer is NOT broken.
-        //    Audio still flows through old chain: player → oldTP → oldEQ → mixer
-        engine.connect(newEQ, to: mixer, format: nil)
-        engine.connect(newTP, to: newEQ, format: nil)
-
-        // 3. Atomic switch: redirect player output to new chain.
-        //    Single connect breaks player → oldTP and creates player → newTP.
-        //    Audio instantly flows: player → newTP → newEQ → mixer
-        engine.connect(player, to: newTP, format: nil)
-
-        // 4. Detach old nodes — triggers CleanupMemory, destroys all internal state
-        engine.disconnectNodeOutput(oldTP)
-        engine.disconnectNodeOutput(oldEQ)
-        engine.detach(oldTP)
-        engine.detach(oldEQ)
-
-        print("[CrossfadeExecutor] ♻️ Active chain replaced (\(label)) — fresh TP+EQ, zero stale state")
-        TransitionDiagnostics.shared.logEvent("♻️ ACTIVE CHAIN REPLACED (\(label))")
-
-        return (newTP, newEQ)
     }
 
     // MARK: - Post-reset audit
 
-    /// Reads the REAL current values from AVAudioUnitEQ bands and publishes to diagnostics.
-    /// Call AFTER resetBandsStatic() to verify filters are truly neutral.
-    static func auditEQState(source: String, eqA: AVAudioUnitEQ, eqB: AVAudioUnitEQ,
-                                     mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
-                                     timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?) {
-        func snapshot(_ eq: AVAudioUnitEQ) -> [TransitionDiagnostics.EQBandSnapshot] {
-            let count = eq.bands.count
-            return (0..<count).map { i in
-                let b = eq.bands[i]
-                return TransitionDiagnostics.EQBandSnapshot(
-                    filterType: filterTypeName(b.filterType),
-                    frequency: b.frequency,
-                    gain: b.gain,
-                    bandwidth: b.bandwidth,
-                    bypass: b.bypass
+    /// Reads current biquad coefficients from DSP nodes and publishes to diagnostics.
+    static func auditDSPState(source: String, dspA: BiquadDSPNode, dspB: BiquadDSPNode,
+                              mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
+                              timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?) {
+        func coeffSnapshot(_ dsp: BiquadDSPNode) -> [TransitionDiagnostics.EQBandSnapshot] {
+            let coeffs = dsp.currentCoefficients()
+            let labels = ["highPass", "lowShelf", "parametric", "highShelf"]
+            return coeffs.enumerated().map { i, c in
+                TransitionDiagnostics.EQBandSnapshot(
+                    filterType: labels[min(i, labels.count - 1)],
+                    frequency: 0, // coefficients don't expose frequency directly
+                    gain: c.isPassthrough ? 0 : 1,  // 0=passthrough, 1=active
+                    bandwidth: 0,
+                    bypass: c.isPassthrough
                 )
             }
         }
 
-        // Read actual DSP-level parameters directly from the CoreAudio AudioUnit.
-        // AUNBandEQ parameter layout uses large offsets per parameter type:
-        //   kAUNBandEQParam_Frequency  = 3000 + bandIndex
-        //   kAUNBandEQParam_Gain       = 4000 + bandIndex
-        //   kAUNBandEQParam_Bandwidth  = 5000 + bandIndex
-        func dspSnapshot(_ eq: AVAudioUnitEQ) -> [TransitionDiagnostics.DSPBandSnapshot] {
-            let au = eq.audioUnit
-            let count = eq.bands.count
-            return (0..<count).map { i in
-                var gain: Float = 0
-                var freq: Float = 0
-                var bw: Float = 0
-                AudioUnitGetParameter(au, AudioUnitParameterID(4000 + i), kAudioUnitScope_Global, 0, &gain)
-                AudioUnitGetParameter(au, AudioUnitParameterID(3000 + i), kAudioUnitScope_Global, 0, &freq)
-                AudioUnitGetParameter(au, AudioUnitParameterID(5000 + i), kAudioUnitScope_Global, 0, &bw)
-                return TransitionDiagnostics.DSPBandSnapshot(gain: gain, frequency: freq, bandwidth: bw)
+        func dspSnapshot(_ dsp: BiquadDSPNode) -> [TransitionDiagnostics.DSPBandSnapshot] {
+            let coeffs = dsp.currentCoefficients()
+            return coeffs.map { c in
+                TransitionDiagnostics.DSPBandSnapshot(
+                    gain: c.isPassthrough ? 0 : 1,
+                    frequency: 0,
+                    bandwidth: 0
+                )
             }
         }
 
-        // Read DSP-level rate from TimePitch AudioUnit (kNewTimePitchParam_Rate = 0)
         func dspRate(_ tp: AVAudioUnitTimePitch?) -> Float {
             guard let tp else { return 1.0 }
             var rate: Float = 1.0
@@ -956,10 +706,10 @@ class CrossfadeExecutor {
 
         let audit = TransitionDiagnostics.PostResetAudit(
             source: source,
-            bandsA: snapshot(eqA),
-            bandsB: snapshot(eqB),
-            dspBandsA: dspSnapshot(eqA),
-            dspBandsB: dspSnapshot(eqB),
+            bandsA: coeffSnapshot(dspA),
+            bandsB: coeffSnapshot(dspB),
+            dspBandsA: dspSnapshot(dspA),
+            dspBandsB: dspSnapshot(dspB),
             panA: mixerA.pan,
             panB: mixerB.pan,
             rateA: timePitchA?.rate ?? 1.0,
@@ -968,23 +718,6 @@ class CrossfadeExecutor {
             dspRateB: dspRate(timePitchB)
         )
         TransitionDiagnostics.shared.publishPostResetAudit(audit)
-    }
-
-    static func filterTypeName(_ type: AVAudioUnitEQFilterType) -> String {
-        switch type {
-        case .highPass: return "highPass"
-        case .lowShelf: return "lowShelf"
-        case .parametric: return "parametric"
-        case .highShelf: return "highShelf"
-        case .lowPass: return "lowPass"
-        case .bandPass: return "bandPass"
-        case .resonantHighPass: return "resHP"
-        case .resonantLowPass: return "resLP"
-        case .resonantHighShelf: return "resHS"
-        case .resonantLowShelf: return "resLS"
-        case .bandStop: return "bandStop"
-        @unknown default: return "unknown"
-        }
     }
 
     // MARK: - Setup
@@ -1020,104 +753,63 @@ class CrossfadeExecutor {
         useLowpassA = preset.lowpassA != nil
 
         // High danceability (>0.7) = preserve bass/groove: scale lowshelf cuts to 50-100%.
-        // This keeps the track's energy/groove during the transition.
         if config.danceability > 0.7 {
-            // 0.7 → 1.0, 1.0 → 0.5 (linear interpolation)
             danceabilityBassScale = Float(1.0 - (config.danceability - 0.7) / 0.3 * 0.5)
         }
 
-        // ── Player A: highpass (or lowpass for energy-down) ──
-        if useLowpassA, let lpA = preset.lowpassA {
-            // Lowpass sweep on A for energy-down transitions: song "goes dark"
-            eqA.bands[0].bypass = false
-            eqA.bands[0].filterType = .lowPass
-            eqA.bands[0].frequency = lpA.startFreq
-            eqA.bands[0].bandwidth = qToBandwidth(lpA.q)
-        } else {
-            // Highpass A: sweeps up to thin out the outgoing song
-            eqA.bands[0].bypass = false
-            eqA.bands[0].filterType = .highPass
-            eqA.bands[0].frequency = preset.highpassA.startFreq
-            eqA.bands[0].bandwidth = qToBandwidth(preset.highpassA.q)
-        }
-
-        // Bass swap: lowshelf on A to cut bass coordinately with B
-        if useBassManagement, let lsA = preset.lowshelfA {
-            eqA.bands[1].bypass = false
-            eqA.bands[1].filterType = .lowShelf
-            eqA.bands[1].frequency = lsA.frequency
-            eqA.bands[1].gain = lsA.startGain
-        }
-
-        // ── Player B: highpass sweep (bass gradually enters) + lowshelf ──
-        // Skip when A's outro is short — B enters clean, no filtered sound
-        if !config.skipBFilters {
-            eqB.bands[0].bypass = false
-            eqB.bands[0].filterType = .highPass
-            eqB.bands[0].frequency = preset.highpassB.startFreq
-            eqB.bands[0].bandwidth = qToBandwidth(preset.highpassB.q)
-
-            eqB.bands[1].bypass = false
-            eqB.bands[1].filterType = .lowShelf
-            eqB.bands[1].frequency = preset.lowshelfB.frequency
-            eqB.bands[1].gain = preset.lowshelfB.startGain
-        }
-
-        // ── eqB bands 2-3: force neutral before crossfade ──
-        // These bands are only automated on A, never on B. But if a prior crossfade's
-        // reset was incomplete (e.g., iOS suspension), stale values could persist.
-        // Defense-in-depth: always start B's bands 2-3 at gain=0.
-        eqB.bands[2].bypass = false
-        eqB.bands[2].filterType = .parametric
-        eqB.bands[2].frequency = 1500
-        eqB.bands[2].gain = 0
-        eqB.bands[2].bandwidth = 2.0
-        eqB.bands[3].bypass = false
-        eqB.bands[3].filterType = .highShelf
-        eqB.bands[3].frequency = 8000
-        eqB.bands[3].gain = 0
-
-        // ── Band 2: Mid scoop on A (vocal anti-clash, ~1.5kHz parametric dip) ──
-        // Skip mid-scoop when B's intro is instrumental — no vocal clash risk
+        // ── Band 2: Mid scoop on A (vocal anti-clash) ──
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
-        if useMidScoop, let ms = preset.midScoopA {
-            eqA.bands[2].bypass = false
-            eqA.bands[2].filterType = .parametric
-            eqA.bands[2].frequency = ms.frequency
-            eqA.bands[2].bandwidth = ms.bandwidth
-            eqA.bands[2].gain = ms.startGain
-        } else {
-            // Force neutral if not used — defense against stale state
-            eqA.bands[2].bypass = false
-            eqA.bands[2].filterType = .parametric
-            eqA.bands[2].frequency = 1500
-            eqA.bands[2].gain = 0
-            eqA.bands[2].bandwidth = 2.0
-        }
-
-        // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup, ~8kHz) ──
-        // Skip high-shelf when A's outro is instrumental — no hi-hat/cymbal clash
+        // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup) ──
         useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
-        if useHighShelfCut, let hs = preset.highShelfA {
-            eqA.bands[3].bypass = false
-            eqA.bands[3].filterType = .highShelf
-            eqA.bands[3].frequency = hs.frequency
-            eqA.bands[3].gain = hs.startGain
+
+        // ── Compute initial biquad coefficients for A ──
+        let band0A: BiquadCoefficients
+        if useLowpassA, let lpA = preset.lowpassA {
+            band0A = BiquadCoefficientCalculator.lowpass(frequency: lpA.startFreq, sampleRate: sampleRate, Q: lpA.q)
+            diagFreqA = lpA.startFreq
         } else {
-            eqA.bands[3].bypass = false
-            eqA.bands[3].filterType = .highShelf
-            eqA.bands[3].frequency = 8000
-            eqA.bands[3].gain = 0
+            band0A = BiquadCoefficientCalculator.highpass(frequency: preset.highpassA.startFreq, sampleRate: sampleRate, Q: preset.highpassA.q)
+            diagFreqA = preset.highpassA.startFreq
         }
 
-        // Copy global EQ (bands 4-7) from A to B
-        for i in 4..<8 {
-            eqB.bands[i].bypass = eqA.bands[i].bypass
-            eqB.bands[i].filterType = eqA.bands[i].filterType
-            eqB.bands[i].frequency = eqA.bands[i].frequency
-            eqB.bands[i].bandwidth = eqA.bands[i].bandwidth
-            eqB.bands[i].gain = eqA.bands[i].gain
+        let band1A: BiquadCoefficients
+        if useBassManagement, let lsA = preset.lowshelfA {
+            band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsA.startGain)
+            diagLsGainA = lsA.startGain
+        } else {
+            band1A = .passthrough
         }
+
+        let band2A: BiquadCoefficients
+        if useMidScoop, let ms = preset.midScoopA {
+            band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: ms.startGain, bandwidth: ms.bandwidth)
+        } else {
+            band2A = .passthrough
+        }
+
+        let band3A: BiquadCoefficients
+        if useHighShelfCut, let hs = preset.highShelfA {
+            band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hs.startGain)
+        } else {
+            band3A = .passthrough
+        }
+
+        dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
+
+        // ── Compute initial biquad coefficients for B ──
+        let band0B: BiquadCoefficients
+        let band1B: BiquadCoefficients
+        if !config.skipBFilters {
+            band0B = BiquadCoefficientCalculator.highpass(frequency: preset.highpassB.startFreq, sampleRate: sampleRate, Q: preset.highpassB.q)
+            band1B = BiquadCoefficientCalculator.lowShelf(frequency: preset.lowshelfB.frequency, sampleRate: sampleRate, gainDB: preset.lowshelfB.startGain)
+            diagFreqB = preset.highpassB.startFreq
+            diagLsGainB = preset.lowshelfB.startGain
+        } else {
+            band0B = .passthrough
+            band1B = .passthrough
+        }
+        // B bands 2-3 always passthrough (never automated)
+        dspB.setCoefficients(band0: band0B, band1: band1B, band2: .passthrough, band3: .passthrough)
     }
 
     @discardableResult
@@ -1483,24 +1175,19 @@ class CrossfadeExecutor {
             lastLogTime = t
             let elapsed = t - timings.startTime
             let vol = getMasterVolume?() ?? 1.0
-            let freqA = eqA.bands[0].frequency
-            let freqB = eqB.bands[0].frequency
             let filterLabelA = useLowpassA ? "lp" : "hp"
-            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA * vol)) \(filterLabelA)=\(String(format: "%.0f", freqA))Hz | B: vol=\(String(format: "%.3f", gB * vol)) hp=\(String(format: "%.0f", freqB))Hz | master=\(String(format: "%.2f", vol))")
+            print("[CrossfadeExecutor] t+\(String(format: "%.1f", elapsed))s | A: vol=\(String(format: "%.3f", gA * vol)) \(filterLabelA)=\(String(format: "%.0f", diagFreqA))Hz | B: vol=\(String(format: "%.3f", gB * vol)) hp=\(String(format: "%.0f", diagFreqB))Hz | master=\(String(format: "%.2f", vol))")
 
-            // Publish real-time tick to diagnostics
-            let lsGainA = eqA.bands[1].gain
-            let lsGainB = eqB.bands[1].gain
             TransitionDiagnostics.shared.publishTick(
                 elapsed: elapsed,
                 volumeA: gA,
                 volumeB: gB,
                 masterVolume: vol,
-                highpassFreqA: freqA,
-                highpassFreqB: freqB,
+                highpassFreqA: diagFreqA,
+                highpassFreqB: diagFreqB,
                 filterTypeA: useLowpassA ? "lp" : "hp",
-                lowshelfGainA: lsGainA,
-                lowshelfGainB: lsGainB,
+                lowshelfGainA: diagLsGainA,
+                lowshelfGainB: diagLsGainB,
                 panA: mixerA.pan,
                 panB: mixerB.pan,
                 currentRateA: timePitchA?.rate ?? 1.0
@@ -1514,150 +1201,149 @@ class CrossfadeExecutor {
         guard t >= timings.filterStartTime else { return }
 
         // Short CUT: highpass ramp is pointless — the quick fade handles separation.
-        // Skip the entire filter sweep so A stays full-spectrum until the volume drop.
-        // (Lowshelf/bass swap still applies via applyBassSwap.)
         if (config.transitionType == .cut || config.transitionType == .cutAFadeInB),
            config.fadeDuration < 5.0 {
             return
         }
 
-        // ── Filter pivot aligned with hold→drop ──
-        // During A's "hold" phase (~first 60%), filters are gentle (A sounds mostly natural).
-        // During A's "drop" phase (~last 40%), filters ramp aggressively (A thins out and vanishes).
-        // This matches the volume curve: hold at 85% → exponential drop at 60-65%.
         let totalFilterDur = timings.transitionEndTime - timings.filterStartTime
         guard totalFilterDur > 0 else { return }
 
         // Pivot = where filters shift from gentle to aggressive (aligned with volume drop)
         let pivotTime = timings.filterStartTime + totalFilterDur * 0.60
 
-        // ── Lowpass sweep (energy-down) OR highpass (normal) ──
+        // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
+        var freqA: Float
+        let band0A: BiquadCoefficients
         if useLowpassA, let lpA = preset.lowpassA {
-            // Lowpass sweep: 20kHz → 800Hz — song "goes dark"
-            // Use hold→drop aligned: gentle to midpoint during hold, aggressive during drop
+            let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
             if t < pivotTime {
                 let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
-                let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3  // ~30% of sweep during hold
-                eqA.bands[0].frequency = expInterp(lpA.startFreq, midFreq, min(1, p))
+                freqA = expInterp(lpA.startFreq, midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
-                let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
-                eqA.bands[0].frequency = expInterp(midFreq, lpA.endFreq, min(1, p))
+                freqA = expInterp(midFreq, lpA.endFreq, min(1, p))
             }
+            band0A = BiquadCoefficientCalculator.lowpass(frequency: freqA, sampleRate: sampleRate, Q: lpA.q)
         } else {
-            let bandA = eqA.bands[0]
-            // Hold phase: gentle sweep startFreq → midFreq (~60% of time, ~30% of sweep)
-            // Drop phase: aggressive sweep midFreq → endFreq (~40% of time, ~70% of sweep)
-            if t < pivotTime {
-                let dur = pivotTime - timings.filterStartTime
-                let p = Float((t - timings.filterStartTime) / dur)
-                bandA.frequency = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
-            } else {
-                let dur = timings.transitionEndTime - pivotTime
-                let p = Float((t - pivotTime) / dur)
-                bandA.frequency = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
-            }
-        }
-
-        // ── Mid scoop on A: hold→drop aligned ──
-        // Gentle during hold (reach ~40% of target), aggressive during drop.
-        if useMidScoop, let ms = preset.midScoopA {
             if t < pivotTime {
                 let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
-                let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
-                eqA.bands[2].gain = linInterp(ms.startGain, holdTarget, min(1, p))
+                freqA = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
-                let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
-                eqA.bands[2].gain = linInterp(holdTarget, ms.endGain, min(1, p))
+                freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
+            band0A = BiquadCoefficientCalculator.highpass(frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
         }
+        diagFreqA = freqA
 
-        // ── High-shelf cut on A: hold→drop aligned ──
-        if useHighShelfCut, let hs = preset.highShelfA {
-            if t < pivotTime {
-                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
-                let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
-                eqA.bands[3].gain = linInterp(hs.startGain, holdTarget, min(1, p))
-            } else {
-                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
-                let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
-                eqA.bands[3].gain = linInterp(holdTarget, hs.endGain, min(1, p))
-            }
-        }
-
-        // ── Bass swap: lowshelf on A — beat-aligned coordinated bass cut ──
-        // Bass swaps on the nearest downbeat to ~45% of the crossfade (bassSwapTime)
-        // instead of a linear midpoint, so the kick drum handoff happens on a beat.
+        // ── Band 1: Bass swap lowshelf ──
+        var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
             let filterDur = timings.transitionEndTime - timings.filterStartTime
-            guard filterDur > 0 else { return }
-
-            // Scale target gains by danceability — high danceability preserves more bass
-            let scaledMidGain = lsA.midGain * danceabilityBassScale
-            let scaledEndGain = lsA.endGain * danceabilityBassScale
-
-            if t < bassSwapTime {
-                // Before swap point: ease bass down to midGain
-                let preDur = bassSwapTime - timings.filterStartTime
-                let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
-                eqA.bands[1].gain = linInterp(lsA.startGain, scaledMidGain, preP)
-            } else {
-                // After swap point: cut bass aggressively to endGain
-                let postDur = timings.transitionEndTime - bassSwapTime
-                let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
-                eqA.bands[1].gain = linInterp(scaledMidGain, scaledEndGain, postP)
+            if filterDur > 0 {
+                let scaledMidGain = lsA.midGain * danceabilityBassScale
+                let scaledEndGain = lsA.endGain * danceabilityBassScale
+                var lsGain: Float
+                if t < bassSwapTime {
+                    let preDur = bassSwapTime - timings.filterStartTime
+                    let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
+                    lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
+                } else {
+                    let postDur = timings.transitionEndTime - bassSwapTime
+                    let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
+                    lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
+                }
+                diagLsGainA = lsGain
+                band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain)
             }
         }
+
+        // ── Band 2: Mid scoop ──
+        var band2A: BiquadCoefficients = .passthrough
+        if useMidScoop, let ms = preset.midScoopA {
+            var msGain: Float
+            let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
+            if t < pivotTime {
+                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                msGain = linInterp(ms.startGain, holdTarget, min(1, p))
+            } else {
+                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                msGain = linInterp(holdTarget, ms.endGain, min(1, p))
+            }
+            band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: msGain, bandwidth: ms.bandwidth)
+        }
+
+        // ── Band 3: High-shelf cut ──
+        var band3A: BiquadCoefficients = .passthrough
+        if useHighShelfCut, let hs = preset.highShelfA {
+            var hsGain: Float
+            let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
+            if t < pivotTime {
+                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                hsGain = linInterp(hs.startGain, holdTarget, min(1, p))
+            } else {
+                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                hsGain = linInterp(holdTarget, hs.endGain, min(1, p))
+            }
+            band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain)
+        }
+
+        dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
     }
 
     // MARK: - Filter B automation (port exacto de AudioEffectsChain.ts líneas 332-394)
 
     private func applyFiltersB(at t: Double) {
         guard !config.skipBFilters else { return }
-        let hpB = eqB.bands[0]
-        let lsB = eqB.bands[1]
+
+        var hpFreq: Float
+        var lsGain: Float
 
         if config.needsAnticipation {
-            // Anticipation: multi-phase sweep with teaser section
             if t < timings.filterStartTime {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.anticipationStartTime) / dur)
-                hpB.frequency = linInterp(preset.highpassB.startFreq, preset.highpassB.midFreq, p)
-                lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.midGain, p)
+                hpFreq = linInterp(preset.highpassB.startFreq, preset.highpassB.midFreq, p)
+                lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.midGain, p)
             } else if t < timings.fadeInStartTime {
                 let dur = timings.fadeInStartTime - timings.filterStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.filterStartTime) / dur)
-                hpB.frequency = linInterp(preset.highpassB.midFreq, 300, p)
-                lsB.gain = linInterp(preset.lowshelfB.midGain, -4, p)
+                hpFreq = linInterp(preset.highpassB.midFreq, 300, p)
+                lsGain = linInterp(preset.lowshelfB.midGain, -4, p)
             } else if t < timings.fadeInEndTime {
                 let dur = timings.fadeInEndTime - timings.fadeInStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.fadeInStartTime) / dur)
-                hpB.frequency = linInterp(300, preset.highpassB.endFreq, p)
-                lsB.gain = linInterp(-4, preset.lowshelfB.endGain, p)
+                hpFreq = linInterp(300, preset.highpassB.endFreq, p)
+                lsGain = linInterp(-4, preset.lowshelfB.endGain, p)
             } else {
-                hpB.frequency = preset.highpassB.endFreq
-                lsB.gain = preset.lowshelfB.endGain
+                hpFreq = preset.highpassB.endFreq
+                lsGain = preset.lowshelfB.endGain
             }
         } else {
-            // Standard: highpass sweep + bass ramp during fade-in
             guard t >= timings.fadeInStartTime else { return }
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
             guard dur > 0 else { return }
             let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
-            hpB.frequency = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
-            // Beat-aligned bass ramp when available, otherwise linear
+            hpFreq = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
             if useBassManagement {
                 let bassDur = bassSwapTime - timings.fadeInStartTime
                 let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
-                lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, bassP)
+                lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, bassP)
             } else {
-                lsB.gain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
+                lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
             }
         }
+
+        diagFreqB = hpFreq
+        diagLsGainB = lsGain
+
+        let band0B = BiquadCoefficientCalculator.highpass(frequency: hpFreq, sampleRate: sampleRate, Q: preset.highpassB.q)
+        let band1B = BiquadCoefficientCalculator.lowShelf(frequency: preset.lowshelfB.frequency, sampleRate: sampleRate, gainDB: lsGain)
+        dspB.setCoefficients(band0: band0B, band1: band1B, band2: .passthrough, band3: .passthrough)
     }
 
     // MARK: - Completion
@@ -1692,9 +1378,9 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
-        // Reset crossfade EQ (bands 0-3) to neutral + reset time-stretch
-        resetCrossfadeBands(eqA)
-        resetCrossfadeBands(eqB)
+        // Reset crossfade DSP to passthrough + reset time-stretch
+        dspA.reset()
+        dspB.reset()
         mixerA.pan = 0
         mixerB.pan = 0
         resetTimeStretch()
@@ -1704,14 +1390,10 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
-        // Note: EQ node replacement (detach old + attach fresh) happens in
-        // AudioEngineManager.onComplete where we have mutable references.
-        // resetCrossfadeBands above is best-effort for the brief window before onComplete.
-
         // Audit after reset
-        Self.auditEQState(source: "completeCrossfade", eqA: eqA, eqB: eqB,
-                          mixerA: mixerA, mixerB: mixerB,
-                          timePitchA: timePitchA, timePitchB: timePitchB)
+        Self.auditDSPState(source: "completeCrossfade", dspA: dspA, dspB: dspB,
+                           mixerA: mixerA, mixerB: mixerB,
+                           timePitchA: timePitchA, timePitchB: timePitchB)
 
         TransitionDiagnostics.shared.publishCompletion()
 

@@ -89,12 +89,36 @@ final class TransitionDiagnostics {
         let fromTitle: String
         let toTitle: String
         let type: String
+        let transitionReason: String
+        // Timing
         let fadeDuration: Double
-        let filtersUsed: String
+        let entryPoint: Double
+        let startOffset: Double
+        let anticipationTime: Double
+        // Filters
+        let filterPreset: String
+        let filtersEnabled: Bool
+        let useMidScoop: Bool
+        let useHighShelfCut: Bool
+        let skipBFilters: Bool
+        // Beat / BPM
         let beatSynced: Bool
+        let beatSyncInfo: String
+        let bpmA: Double
+        let bpmB: Double
+        // Time stretch
         let timeStretched: Bool
+        let rateA: Float
+        let rateB: Float
+        // Energy / Analysis
         let energyA: Double
         let energyB: Double
+        let danceability: Double
+        let isOutroInstrumental: Bool
+        let isIntroInstrumental: Bool
+        // ReplayGain
+        let replayGainA: Float
+        let replayGainB: Float
     }
 
     var history: [TransitionRecord] = []
@@ -303,12 +327,30 @@ final class TransitionDiagnostics {
                 fromTitle: self.currentTitle,
                 toTitle: self.nextTitle,
                 type: self.transitionType,
+                transitionReason: self.transitionReason,
                 fadeDuration: self.fadeDuration,
-                filtersUsed: self.filterPreset,
+                entryPoint: self.entryPoint,
+                startOffset: self.startOffset,
+                anticipationTime: self.anticipationTime,
+                filterPreset: self.filterPreset,
+                filtersEnabled: self.filtersEnabled,
+                useMidScoop: self.useMidScoop,
+                useHighShelfCut: self.useHighShelfCut,
+                skipBFilters: self.skipBFilters,
                 beatSynced: self.isBeatSynced,
+                beatSyncInfo: self.beatSyncInfo,
+                bpmA: self.bpmA,
+                bpmB: self.bpmB,
                 timeStretched: self.useTimeStretch,
+                rateA: self.rateA,
+                rateB: self.rateB,
                 energyA: self.energyA,
-                energyB: self.energyB
+                energyB: self.energyB,
+                danceability: self.danceability,
+                isOutroInstrumental: self.isOutroInstrumental,
+                isIntroInstrumental: self.isIntroInstrumental,
+                replayGainA: self.replayGainA,
+                replayGainB: self.replayGainB
             )
             self.history.insert(record, at: 0)
             if self.history.count > 50 { self.history.removeLast() }
@@ -322,7 +364,7 @@ final class TransitionDiagnostics {
 
     // MARK: - Post-reset audit
 
-    /// Snapshot of EQ band values read from AVAudioUnitEQ Swift properties.
+    /// Snapshot of biquad filter state read from BiquadDSPNode.
     struct EQBandSnapshot {
         let filterType: String
         let frequency: Float
@@ -331,9 +373,8 @@ final class TransitionDiagnostics {
         let bypass: Bool
     }
 
-    /// Snapshot of raw DSP parameters read directly from the CoreAudio AudioUnit
-    /// via AudioUnitGetParameter. These reflect what the render thread actually uses,
-    /// which may diverge from Swift property values under real-device conditions.
+    /// Secondary snapshot for DSP comparison. With BiquadDSPNode, both snapshots
+    /// come from the same source (no Swift-vs-CoreAudio divergence possible).
     struct DSPBandSnapshot {
         let gain: Float
         let frequency: Float
@@ -361,15 +402,15 @@ final class TransitionDiagnostics {
     /// Pending audits to be flushed to log on next writeTransitionToLog or standalone.
     private var pendingAudits: [String] = []
 
-    /// Called from CrossfadeExecutor after resetBandsStatic() to verify actual EQ state.
-    /// Reads BOTH Swift property values AND raw CoreAudio DSP parameters to detect divergence.
+    /// Called from CrossfadeExecutor after dsp.reset() to verify filter state.
+    /// With BiquadDSPNode, both snapshots read from the same kernel — divergence is impossible.
     nonisolated func publishPostResetAudit(_ audit: PostResetAudit) {
-        // Check if any Swift-level band is non-neutral (stuck filter)
+        // Check if any band is non-neutral (stuck filter after reset)
+        // With BiquadDSPNode: bypass=true means passthrough, gain=0.
+        // Any band with bypass=false after reset is stuck.
         let allBands = audit.bandsA + audit.bandsB
         let stuckBands = allBands.filter { band in
-            if band.filterType == "highPass" && band.frequency > 25 { return true }
-            if band.filterType != "highPass" && abs(band.gain) > 0.1 { return true }
-            return false
+            !band.bypass
         }
 
         // Check DSP-level divergence: compare AudioUnitGetParameter values vs Swift properties
