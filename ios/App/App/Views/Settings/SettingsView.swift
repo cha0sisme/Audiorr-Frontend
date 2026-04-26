@@ -364,7 +364,7 @@ struct SettingsView: View {
             }
 
             // ── Transition Diagnostics ──
-            if BackendState.shared.isAvailable && TransitionDiagnostics.debugModeEnabled {
+            if TransitionDiagnostics.debugModeEnabled {
                 settingsSection(header: "Diagnostics") {
                     settingsRow {
                         Toggle(isOn: Binding(
@@ -615,7 +615,7 @@ final class UserProfileViewModel: ObservableObject {
     @Published var lastScrobble: (title: String, artist: String, playedAt: Date)?
     @Published var lastConnection: Date?
     @Published var topSongs: [(id: String, title: String, artist: String, coverArt: String?, plays: Int)] = []
-    @Published var topArtists: [(artist: String, plays: Int)] = []
+    @Published var topArtists: [(artist: String, plays: Int, image: UIImage?)] = []
 
     init(username: String) {
         self.username = username
@@ -632,7 +632,6 @@ final class UserProfileViewModel: ObservableObject {
 
     private func fetchAll() async {
         isLoading = true
-        // Fetch user info (last connection, last scrobble) and stats in parallel
         async let statsTask: () = fetchStats()
         async let userTask: () = fetchUserInfo()
         _ = await (statsTask, userTask)
@@ -661,11 +660,33 @@ final class UserProfileViewModel: ObservableObject {
 
             if let artists = dict["top_artists"] as? [[String: Any]] {
                 topArtists = artists.prefix(5).map { a in
-                    (artist: a["artist"] as? String ?? "", plays: a["plays"] as? Int ?? 0)
+                    (artist: a["artist"] as? String ?? "", plays: a["plays"] as? Int ?? 0, image: nil)
                 }
+                // Resolve artist avatars in background
+                await resolveArtistAvatars()
             }
         } catch {
             print("[UserProfile] Stats fetch failed: \(error)")
+        }
+    }
+
+    private func resolveArtistAvatars() async {
+        let api = NavidromeService.shared
+        guard BackendState.shared.isAvailable else { return }
+        await withTaskGroup(of: (Int, UIImage?).self) { group in
+            for (i, artist) in topArtists.enumerated() {
+                group.addTask {
+                    guard let url = await api.artistImageURL(name: artist.artist),
+                          let (data, _) = try? await URLSession.shared.data(from: url),
+                          let img = UIImage(data: data) else { return (i, nil) }
+                    return (i, img)
+                }
+            }
+            for await (index, image) in group {
+                if index < topArtists.count, let img = image {
+                    topArtists[index].image = img
+                }
+            }
         }
     }
 
@@ -706,60 +727,25 @@ struct UserProfileSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                // Account header
-                Section {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            Circle()
-                                .fill(color.gradient)
-                            Text(initial)
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: 60, height: 60)
+            ScrollView {
+                VStack(spacing: 0) {
+                    // ── Hero header ──
+                    profileHeader
+                        .padding(.top, 24)
+                        .padding(.bottom, 20)
 
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(username)
-                                .font(.title3.bold())
-                            if let date = vm.lastConnection {
-                                Text("Activo \(date, format: .relative(presentation: .named))")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
-                            if !serverUrl.isEmpty {
-                                Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .listRowBackground(Color(.secondarySystemGroupedBackground))
-                }
-
-                if vm.isLoading {
-                    Section {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                            Spacer()
-                        }
-                        .listRowBackground(Color(.secondarySystemGroupedBackground))
-                    }
-                } else if vm.totalPlays == 0 && vm.topSongs.isEmpty {
-                    Section {
+                    if vm.isLoading {
+                        ProgressView()
+                            .padding(.top, 60)
+                    } else if vm.totalPlays == 0 && vm.topSongs.isEmpty {
                         ContentUnavailableView(
                             L.noActivity,
                             systemImage: "music.note.list",
                             description: Text(L.listensWillAppear)
                         )
-                        .listRowBackground(Color(.systemGroupedBackground))
-                    }
-                } else {
-                    // Period picker + summary
-                    Section {
+                        .padding(.top, 40)
+                    } else {
+                        // ── Period picker ──
                         Picker(L.period, selection: Binding(
                             get: { vm.period },
                             set: { vm.setPeriod($0) }
@@ -768,140 +754,58 @@ struct UserProfileSheet: View {
                             Text(L.monthly).tag("month")
                         }
                         .pickerStyle(.segmented)
-                        .listRowBackground(Color(.systemGroupedBackground))
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 20)
 
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L.plays)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text("\(vm.totalPlays)")
-                                    .font(.title.bold())
-                            }
-                            Spacer()
-                            if let genre = vm.topGenre {
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(L.topGenre)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Text(genre)
-                                        .font(.title3.bold())
-                                        .lineLimit(1)
-                                }
-                            }
+                        // ── Stat cards ──
+                        statsRow
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 24)
+
+                        // ── Last scrobble ──
+                        if let scrobble = vm.lastScrobble {
+                            lastScrobbleRow(scrobble)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 24)
                         }
-                        .listRowBackground(Color(.secondarySystemGroupedBackground))
-                    }
 
-                    // Last scrobble
-                    if let scrobble = vm.lastScrobble {
-                        Section(L.lastScrobble) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "music.note")
-                                    .font(.title3)
-                                    .foregroundStyle(color)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(scrobble.title)
-                                        .font(.subheadline.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(scrobble.artist)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                        // ── Top Songs ──
+                        if !vm.topSongs.isEmpty {
+                            sectionHeader(L.topSongs)
+                            VStack(spacing: 0) {
+                                ForEach(Array(vm.topSongs.enumerated()), id: \.offset) { index, song in
+                                    topSongRow(index: index, song: song)
+                                    if index < vm.topSongs.count - 1 {
+                                        Divider().padding(.leading, 78)
+                                    }
                                 }
-                                Spacer()
-                                Text(scrobble.playedAt, format: .relative(presentation: .named))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
                             }
-                            .listRowBackground(Color(.secondarySystemGroupedBackground))
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 24)
                         }
-                    }
 
-                    // Top Songs
-                    if !vm.topSongs.isEmpty {
-                        Section(L.topSongs) {
-                            ForEach(Array(vm.topSongs.enumerated()), id: \.offset) { index, song in
-                                HStack(spacing: 10) {
-                                    Text("\(index + 1)")
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 20)
-
-                                    if let coverArt = song.coverArt,
-                                       let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
-                                        AsyncImage(url: url) { image in
-                                            image.resizable().aspectRatio(contentMode: .fill)
-                                        } placeholder: {
-                                            Color(.tertiarySystemFill)
-                                        }
-                                        .frame(width: 44, height: 44)
-                                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    } else {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(Color(.tertiarySystemFill))
-                                            .frame(width: 44, height: 44)
-                                            .overlay {
-                                                Image(systemName: "music.note")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
+                        // ── Top Artists ──
+                        if !vm.topArtists.isEmpty {
+                            sectionHeader(L.topArtists)
+                            VStack(spacing: 0) {
+                                ForEach(Array(vm.topArtists.enumerated()), id: \.offset) { index, artist in
+                                    topArtistRow(index: index, artist: artist)
+                                    if index < vm.topArtists.count - 1 {
+                                        Divider().padding(.leading, 78)
                                     }
-
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(song.title)
-                                            .font(.subheadline)
-                                            .lineLimit(1)
-                                        Text(song.artist)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Text(L.playsCount(song.plays))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
                                 }
-                                .listRowBackground(Color(.secondarySystemGroupedBackground))
                             }
-                        }
-                    }
-
-                    // Top Artists
-                    if !vm.topArtists.isEmpty {
-                        Section(L.topArtists) {
-                            ForEach(Array(vm.topArtists.enumerated()), id: \.offset) { index, artist in
-                                HStack(spacing: 10) {
-                                    Text("\(index + 1)")
-                                        .font(.subheadline.bold())
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 20)
-                                    ZStack {
-                                        Circle()
-                                            .fill(avatarColor(for: artist.artist))
-                                        Text(avatarInitial(for: artist.artist))
-                                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                                            .foregroundStyle(.white)
-                                    }
-                                    .frame(width: 44, height: 44)
-
-                                    Text(artist.artist)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text(L.playsCount(artist.plays))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .listRowBackground(Color(.secondarySystemGroupedBackground))
-                            }
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 40)
                         }
                     }
                 }
             }
-            .listStyle(.insetGrouped)
+            .background(Color(.systemGroupedBackground))
             .navigationTitle(L.profile)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -911,5 +815,208 @@ struct UserProfileSheet: View {
             }
             .onAppear { vm.load() }
         }
+    }
+
+    // MARK: - Hero header
+
+    private var profileHeader: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(color.gradient)
+                    .shadow(color: color.opacity(0.4), radius: 12, y: 6)
+                Text(initial)
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 80, height: 80)
+
+            VStack(spacing: 4) {
+                Text(username)
+                    .font(.title2.bold())
+
+                if let date = vm.lastConnection {
+                    Text("Activo \(date, format: .relative(presentation: .named))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
+                if !serverUrl.isEmpty {
+                    Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Stats row (Apple Fitness style)
+
+    private var statsRow: some View {
+        HStack(spacing: 12) {
+            statCard(
+                label: L.plays,
+                value: "\(vm.totalPlays)",
+                icon: "play.circle.fill",
+                tint: .pink
+            )
+            if let genre = vm.topGenre {
+                statCard(
+                    label: L.topGenre,
+                    value: genre,
+                    icon: "guitars.fill",
+                    tint: .purple
+                )
+            }
+        }
+    }
+
+    private func statCard(label: String, value: String, icon: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(tint)
+                Text(label.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.title2.bold())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: - Last scrobble
+
+    private func lastScrobbleRow(_ scrobble: (title: String, artist: String, playedAt: Date)) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "waveform")
+                .font(.body.weight(.medium))
+                .foregroundStyle(color)
+                .frame(width: 32, height: 32)
+                .background(color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scrobble.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Text(scrobble.artist)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(scrobble.playedAt, format: .relative(presentation: .named))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // MARK: - Section header
+
+    private func sectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.title3.bold())
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+    }
+
+    // MARK: - Top song row
+
+    private func topSongRow(index: Int, song: (id: String, title: String, artist: String, coverArt: String?, plays: Int)) -> some View {
+        HStack(spacing: 12) {
+            Text("\(index + 1)")
+                .font(.subheadline.bold().monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 22, alignment: .trailing)
+
+            if let coverArt = song.coverArt,
+               let url = NavidromeService.shared.coverURL(id: coverArt, size: 80) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(.tertiarySystemFill)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(.tertiarySystemFill))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "music.note")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(song.title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                Text(song.artist)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(L.playsCount(song.plays))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Top artist row (real avatars)
+
+    private func topArtistRow(index: Int, artist: (artist: String, plays: Int, image: UIImage?)) -> some View {
+        HStack(spacing: 12) {
+            Text("\(index + 1)")
+                .font(.subheadline.bold().monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 22, alignment: .trailing)
+
+            if let img = artist.image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 44, height: 44)
+                    .clipShape(Circle())
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(avatarColor(for: artist.artist).opacity(0.25))
+                    Text(avatarInitial(for: artist.artist))
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(avatarColor(for: artist.artist))
+                }
+                .frame(width: 44, height: 44)
+            }
+
+            Text(artist.artist)
+                .font(.subheadline)
+                .lineLimit(1)
+            Spacer()
+            Text(L.playsCount(artist.plays))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 }

@@ -461,6 +461,7 @@ struct HomeView: View {
             if isCurrentSong {
                 NowPlayingIndicator(
                     isPlaying: nowPlaying.isPlaying,
+                    bpm: nowPlaying.currentBpm,
                     color: .accentColor,
                     barWidth: 2.5, height: 12
                 )

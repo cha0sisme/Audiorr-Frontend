@@ -1,5 +1,90 @@
 import UIKit
 
+// MARK: - Palette cache (RAM + disk, 13 bytes per entry)
+
+/// Caches extracted `AlbumPalette` values so detail views that revisit an
+/// already-seen cover skip the pixel-level extraction entirely.
+/// Thread-safe: NSCache for RAM, serial DispatchQueue for disk I/O.
+final class PaletteCache: @unchecked Sendable {
+    static let shared = PaletteCache()
+
+    private let memory = NSCache<NSString, PaletteBox>()
+    private let diskDir: URL
+    private let ioQueue = DispatchQueue(label: "palette.cache.io", qos: .utility)
+
+    private init() {
+        memory.countLimit = 500
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        diskDir = caches.appendingPathComponent("palette_cache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
+    }
+
+    // MARK: Read
+
+    func palette(for key: String) -> AlbumPalette? {
+        // 1. RAM
+        if let box = memory.object(forKey: key as NSString) { return box.palette }
+        // 2. Disk — 13-byte binary: R G B  R G B  R G B  isSolid
+        let path = diskDir.appendingPathComponent(key)
+        guard let data = try? Data(contentsOf: path), data.count == 13 else { return nil }
+        let p = decodePalette(data)
+        memory.setObject(PaletteBox(p), forKey: key as NSString)
+        return p
+    }
+
+    // MARK: Write
+
+    func set(_ palette: AlbumPalette, for key: String) {
+        memory.setObject(PaletteBox(palette), forKey: key as NSString)
+        let data = encodePalette(palette)
+        let path = diskDir.appendingPathComponent(key)
+        ioQueue.async { try? data.write(to: path, options: .atomic) }
+    }
+
+    // MARK: Invalidate
+
+    func invalidate(key: String) {
+        memory.removeObject(forKey: key as NSString)
+        let path = diskDir.appendingPathComponent(key)
+        ioQueue.async { try? FileManager.default.removeItem(at: path) }
+    }
+
+    // MARK: Binary encode/decode — 13 bytes: 3×(R,G,B) + 1×isSolid
+
+    private func encodePalette(_ p: AlbumPalette) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 13)
+        func write(_ color: UIColor, offset: Int) {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: nil)
+            bytes[offset]     = UInt8(clamping: Int(r * 255))
+            bytes[offset + 1] = UInt8(clamping: Int(g * 255))
+            bytes[offset + 2] = UInt8(clamping: Int(b * 255))
+        }
+        write(p.primary, offset: 0)
+        write(p.secondary, offset: 3)
+        write(p.accent, offset: 6)
+        bytes[9]  = 0 // reserved
+        bytes[10] = 0 // reserved
+        bytes[11] = 0 // reserved
+        bytes[12] = p.isSolid ? 1 : 0
+        return Data(bytes)
+    }
+
+    private func decodePalette(_ data: Data) -> AlbumPalette {
+        let b = [UInt8](data)
+        func color(_ o: Int) -> UIColor {
+            UIColor(red: CGFloat(b[o]) / 255, green: CGFloat(b[o+1]) / 255, blue: CGFloat(b[o+2]) / 255, alpha: 1)
+        }
+        return AlbumPalette(primary: color(0), secondary: color(3), accent: color(6), isSolid: b[12] == 1)
+    }
+
+    /// NSCache requires reference-type values.
+    private final class PaletteBox {
+        let palette: AlbumPalette
+        init(_ palette: AlbumPalette) { self.palette = palette }
+    }
+}
+
 // MARK: - Album palette
 
 struct AlbumPalette {

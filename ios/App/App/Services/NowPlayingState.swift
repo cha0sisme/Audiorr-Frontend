@@ -64,6 +64,9 @@ final class NowPlayingState {
     var repeatMode = "off"     // "off", "all", "one"
     var isCrossfading = false
 
+    // -- BPM of the current song (from analysis cache, nil if unknown) --
+    var currentBpm: Double?
+
     // -- Audio route --
     var audioRouteIcon = "iphone"       // SF Symbol for current output
     var audioRouteName = "iPhone"       // Human-readable name
@@ -151,6 +154,17 @@ final class NowPlayingState {
         }
     }
 
+    // MARK: - BPM
+
+    /// Load BPM from analysis cache for the current song.
+    func refreshBpm() {
+        guard !songId.isEmpty else { currentBpm = nil; return }
+        Task {
+            let bpm = await AnalysisCacheService.shared.getCachedAnalysis(songId: songId)?.bpm
+            self.currentBpm = bpm
+        }
+    }
+
     // MARK: - Queue (native)
 
     /// Set the queue from Swift (used by QueueManager.syncNowPlayingState).
@@ -163,6 +177,7 @@ final class NowPlayingState {
             albumId  = current.albumId ?? ""
             artistId = current.artistId ?? ""
             coverArt = current.coverArt ?? ""
+            refreshBpm()
         }
     }
 }

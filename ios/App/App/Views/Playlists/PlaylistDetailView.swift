@@ -17,14 +17,26 @@ final class PlaylistDetailViewModel: ObservableObject {
     private let api = NavidromeService.shared
     private var cancellables = Set<AnyCancellable>()
     let initialPlaylist: NavidromePlaylist
+    private var paletteReady = false
 
     init(playlist: NavidromePlaylist) {
         self.initialPlaylist = playlist
         self.playlist = playlist
 
         // Pre-load cached cover so hero transition doesn't flash placeholder
-        if let cached = AlbumCoverCache.shared.image(for: playlist.coverArt) {
+        let coverId = playlist.id  // playlist covers keyed by playlistId
+        if let cached = PlaylistCoverCache.shared.image(for: playlist.id) {
             self.coverImage = cached
+            if let p = PaletteCache.shared.palette(for: coverId) {
+                self.palette = p
+                self.paletteReady = true
+            }
+        } else if let cached = AlbumCoverCache.shared.image(for: playlist.coverArt) {
+            self.coverImage = cached
+            if let id = playlist.coverArt, let p = PaletteCache.shared.palette(for: id) {
+                self.palette = p
+                self.paletteReady = true
+            }
         }
 
         // Observe SmartMix status from PlayerService
@@ -73,10 +85,14 @@ final class PlaylistDetailViewModel: ObservableObject {
     private func loadCover() async {
         if let image = await fetchCover() {
             self.coverImage = image
-            let extracted = await Task.detached(priority: .userInitiated) {
-                ColorExtractor.extract(from: image)
-            }.value
-            self.palette = extracted
+            if !paletteReady {
+                let playlistId = initialPlaylist.id
+                let extracted = await Task.detached(priority: .userInitiated) {
+                    ColorExtractor.extract(from: image)
+                }.value
+                self.palette = extracted
+                PaletteCache.shared.set(extracted, for: playlistId)
+            }
         }
     }
 
@@ -135,23 +151,18 @@ final class PlaylistDetailViewModel: ObservableObject {
         }
     }
 
-    /// Backend cover first, Navidrome as fallback — mirrors PlaylistCoverView logic.
-    /// Skips backend when unavailable to avoid long timeouts blocking the UI.
+    /// Backend cover first, Navidrome as fallback — uses shared PlaylistCoverCache
+    /// with disk persistence, downsampling, and request deduplication.
     private func fetchCover() async -> UIImage? {
-        // 1. Try backend generated cover (only if backend is reachable)
+        let cache = PlaylistCoverCache.shared
+        let hash = cache.contentHash(for: initialPlaylist.id)
+        var urls: [URL] = []
         if BackendState.shared.isAvailable,
-           let backendURL = api.playlistBackendCoverURL(playlistId: initialPlaylist.id),
-           let (data, _) = try? await URLSession.shared.data(from: backendURL),
-           let img = UIImage(data: data) {
-            return img
-        }
-        // 2. Navidrome getCoverArt fallback
-        if let naviURL = api.coverURL(id: initialPlaylist.coverArt, size: 600),
-           let (data, _) = try? await URLSession.shared.data(from: naviURL),
-           let img = UIImage(data: data) {
-            return img
-        }
-        return nil
+           let u = api.playlistBackendCoverURL(playlistId: initialPlaylist.id, contentHash: hash) { urls.append(u) }
+        if let u = api.coverURL(id: initialPlaylist.coverArt, size: 600) { urls.append(u) }
+        return await cache.loadCover(
+            playlistId: initialPlaylist.id, urls: urls, maxPixels: 600
+        )
     }
 }
 
@@ -602,22 +613,21 @@ struct PlaylistCoverImage: View {
 
     private func loadCover() async {
         guard loadedImage == nil else { return }
-        let urls: [URL] = [
-            NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
-            NavidromeService.shared.coverURL(id: playlist.coverArt, size: 600),
-        ].compactMap { $0 }
+        let api = NavidromeService.shared
+        let cache = PlaylistCoverCache.shared
+        let hash = cache.contentHash(for: playlist.id)
+        var urls: [URL] = []
+        if BackendState.shared.isAvailable,
+           let u = api.playlistBackendCoverURL(playlistId: playlist.id, contentHash: hash) { urls.append(u) }
+        if let u = api.coverURL(id: playlist.coverArt, size: 600) { urls.append(u) }
 
-        for url in urls {
-            for attempt in 0..<2 {
-                if attempt > 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
-                guard let (data, resp) = try? await URLSession.shared.data(from: url),
-                      let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                      let img = UIImage(data: data) else { continue }
-                loadedImage = img
-                return
-            }
+        if let img = await cache.loadCover(
+            playlistId: playlist.id, urls: urls, maxPixels: 600
+        ) {
+            loadedImage = img
+        } else {
+            didFail = true
         }
-        didFail = true
     }
 
     private var placeholderView: some View {
@@ -630,21 +640,179 @@ struct PlaylistCoverImage: View {
     }
 }
 
-// MARK: - Playlist cover cache (RAM — survives tab switches)
+// MARK: - Playlist cover cache (RAM + disk, with downsampling & dedup)
 
 final class PlaylistCoverCache: @unchecked Sendable {
     static let shared = PlaylistCoverCache()
 
-    private let cache = NSCache<NSString, UIImage>()
+    private let memory = NSCache<NSString, UIImage>()
+    private let diskDir: URL
+    private let ioQueue = DispatchQueue(label: "playlist.cover.cache", qos: .utility)
+    private let coordinator = PlaylistCoverDownloadCoordinator()
 
-    private init() { cache.countLimit = 200 }
+    /// Known content hashes from backend (playlistId → coverContentHash).
+    /// Used to append ?v= for immutable caching and to detect stale covers.
+    private var contentHashes: [String: String] = [:]
+    /// Hashes that were active when covers were last cached to disk.
+    private var cachedHashes: [String: String] = [:]
 
-    func image(for playlistId: String) -> UIImage? {
-        cache.object(forKey: playlistId as NSString)
+    private init() {
+        memory.countLimit = 200
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        diskDir = caches.appendingPathComponent("playlist_covers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
+
+        // Restore persisted hashes
+        let hashesFile = diskDir.appendingPathComponent("_hashes.json")
+        if let data = try? Data(contentsOf: hashesFile),
+           let dict = try? JSONDecoder().decode([String: String].self, from: data) {
+            cachedHashes = dict
+        }
     }
 
+    private func diskPath(for playlistId: String) -> URL {
+        diskDir.appendingPathComponent(playlistId + ".jpg")
+    }
+
+    private func persistHashes() {
+        let path = diskDir.appendingPathComponent("_hashes.json")
+        let hashes = cachedHashes
+        ioQueue.async {
+            if let data = try? JSONEncoder().encode(hashes) {
+                try? data.write(to: path, options: .atomic)
+            }
+        }
+    }
+
+    // MARK: Read (RAM → disk)
+
+    func image(for playlistId: String) -> UIImage? {
+        if let img = memory.object(forKey: playlistId as NSString) { return img }
+        let path = diskPath(for: playlistId)
+        guard let data = try? Data(contentsOf: path),
+              let img = UIImage(data: data) else { return nil }
+        memory.setObject(img, forKey: playlistId as NSString)
+        return img
+    }
+
+    // MARK: Write (RAM + async disk as compressed JPEG)
+
     func setImage(_ image: UIImage, for playlistId: String) {
-        cache.setObject(image, forKey: playlistId as NSString)
+        memory.setObject(image, forKey: playlistId as NSString)
+        // Track which hash this cover was saved under
+        if let hash = contentHashes[playlistId] {
+            cachedHashes[playlistId] = hash
+            persistHashes()
+        }
+        let path = diskPath(for: playlistId)
+        ioQueue.async {
+            if let data = image.jpegData(compressionQuality: 0.82) {
+                try? data.write(to: path, options: .atomic)
+            }
+        }
+    }
+
+    // MARK: Invalidate
+
+    func invalidate(playlistId: String) {
+        memory.removeObject(forKey: playlistId as NSString)
+        cachedHashes.removeValue(forKey: playlistId)
+        persistHashes()
+        let path = diskPath(for: playlistId)
+        ioQueue.async { try? FileManager.default.removeItem(at: path) }
+    }
+
+    // MARK: Content hash management
+
+    /// Returns the known content hash for a playlist (nil for user playlists or unknown).
+    func contentHash(for playlistId: String) -> String? {
+        contentHashes[playlistId]
+    }
+
+    /// Register content hashes from backend API responses.
+    /// Automatically invalidates covers whose hash changed.
+    func registerContentHashes(_ hashes: [String: String]) {
+        for (id, newHash) in hashes {
+            let oldHash = contentHashes[id]
+            contentHashes[id] = newHash
+
+            // If hash changed and we have a cached version with the old hash, invalidate
+            if let cachedHash = cachedHashes[id], cachedHash != newHash {
+                invalidate(playlistId: id)
+            } else if oldHash != nil && oldHash != newHash {
+                invalidate(playlistId: id)
+            }
+        }
+    }
+
+    // MARK: Coalesced download with downsampling
+
+    /// Downloads a cover, downsizing to `maxPixels` during decode to save RAM.
+    /// Concurrent requests for the same playlist coalesce into a single download.
+    func loadCover(playlistId: String, urls: [URL], maxPixels: Int = 600) async -> UIImage? {
+        if let cached = image(for: playlistId) { return cached }
+        let cache = self
+        let maxPx = maxPixels
+        return await coordinator.download(id: playlistId) {
+            for url in urls {
+                guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                      let http = resp as? HTTPURLResponse, http.statusCode == 200 else { continue }
+                let img = Self.downsample(data: data, maxPixels: maxPx) ?? UIImage(data: data)
+                if let img {
+                    cache.setImage(img, for: playlistId)
+                    return img
+                }
+            }
+            return nil
+        }
+    }
+
+    // MARK: Prefetch (fire-and-forget for a batch)
+
+    @MainActor func prefetch(playlists: [NavidromePlaylist], maxPixels: Int = 600) {
+        let api = NavidromeService.shared
+        let backendAvailable = BackendState.shared.isAvailable
+        for pl in playlists {
+            guard image(for: pl.id) == nil else { continue }
+            let hash = contentHashes[pl.id]
+            Task.detached(priority: .utility) { [weak self] in
+                guard let self else { return }
+                var urls: [URL] = []
+                if backendAvailable, let u = api.playlistBackendCoverURL(playlistId: pl.id, contentHash: hash) { urls.append(u) }
+                if let u = api.coverURL(id: pl.coverArt, size: maxPixels) { urls.append(u) }
+                guard !urls.isEmpty else { return }
+                _ = await self.loadCover(playlistId: pl.id, urls: urls, maxPixels: maxPixels)
+            }
+        }
+    }
+
+    // MARK: Downsample via CGImageSource (decode directly at target size)
+
+    private static func downsample(data: Data, maxPixels: Int) -> UIImage? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }
+        let downsampleOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions as CFDictionary) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+}
+
+/// Actor that deduplicates concurrent cover downloads for the same playlist.
+private actor PlaylistCoverDownloadCoordinator {
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+
+    func download(id: String, work: @Sendable @escaping () async -> UIImage?) async -> UIImage? {
+        if let existing = inFlight[id] { return await existing.value }
+        let task = Task<UIImage?, Never> { await work() }
+        inFlight[id] = task
+        let result = await task.value
+        inFlight.removeValue(forKey: id)
+        return result
     }
 }
 
@@ -701,35 +869,22 @@ struct PlaylistCoverView: View {
     }
 
     private func loadCover() async {
-        // 1. Check cache (instant — survives tab switches)
-        if let cached = PlaylistCoverCache.shared.image(for: playlist.id) {
-            coverImage = cached
-            return
-        }
-
-        // 2. Backend first (custom cover — preferred)
+        let api = NavidromeService.shared
+        let cache = PlaylistCoverCache.shared
+        let hash = cache.contentHash(for: playlist.id)
+        var urls: [URL] = []
         if BackendState.shared.isAvailable,
-           let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: playlist.id),
-           let (data, resp) = try? await URLSession.shared.data(from: backendURL),
-           let http = resp as? HTTPURLResponse, http.statusCode == 200,
-           let img = UIImage(data: data) {
-            coverImage = img
-            PlaylistCoverCache.shared.setImage(img, for: playlist.id)
-            return
-        }
+           let u = api.playlistBackendCoverURL(playlistId: playlist.id, contentHash: hash) { urls.append(u) }
+        if let u = api.coverURL(id: playlist.coverArt, size: imageSize) { urls.append(u) }
+        guard !urls.isEmpty else { didFail = true; return }
 
-        // 3. Navidrome fallback
-        if let navidromeURL = NavidromeService.shared.coverURL(id: playlist.coverArt, size: imageSize),
-           let (data, resp) = try? await URLSession.shared.data(from: navidromeURL),
-           let http = resp as? HTTPURLResponse, http.statusCode == 200,
-           let img = UIImage(data: data) {
+        if let img = await cache.loadCover(
+            playlistId: playlist.id, urls: urls, maxPixels: imageSize
+        ) {
             coverImage = img
-            PlaylistCoverCache.shared.setImage(img, for: playlist.id)
-            return
+        } else {
+            didFail = true
         }
-
-        // 4. Nothing worked — show placeholder
-        didFail = true
     }
 
     private var placeholder: some View {

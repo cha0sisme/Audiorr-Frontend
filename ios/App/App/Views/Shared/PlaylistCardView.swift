@@ -44,6 +44,7 @@ struct PlaylistCardView: View {
                 if isCurrentContext {
                     NowPlayingIndicator(
                         isPlaying: nowPlaying.isPlaying,
+                        bpm: nowPlaying.currentBpm,
                         color: Color.white,
                         barWidth: 3, height: 14
                     )

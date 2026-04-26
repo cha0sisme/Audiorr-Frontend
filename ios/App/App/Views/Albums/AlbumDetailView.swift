@@ -10,9 +10,11 @@ final class AlbumDetailViewModel: ObservableObject {
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
     @Published var recordLabels: [RecordLabel] = []
+    @Published var albumNotes: String?
 
     private let api = NavidromeService.shared
     let initialAlbum: NavidromeAlbum
+    private var paletteReady = false
 
     init(album: NavidromeAlbum) {
         self.initialAlbum = album
@@ -20,6 +22,11 @@ final class AlbumDetailViewModel: ObservableObject {
         // Pre-load cached cover immediately so the hero transition doesn't flash a placeholder
         if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
             self.coverImage = cached
+            // Palette from cache → colors appear WITH the zoom transition, zero delay
+            if let id = album.coverArt, let p = PaletteCache.shared.palette(for: id) {
+                self.palette = p
+                self.paletteReady = true
+            }
         }
     }
 
@@ -29,25 +36,32 @@ final class AlbumDetailViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        // Fetch songs + cover image concurrently
+        // Fetch songs + cover image + album notes concurrently
         async let songsTask = api.getAlbumDetail(albumId: initialAlbum.id)
         async let imageTask = fetchCover()
+        async let notesTask = api.getAlbumInfo(albumId: initialAlbum.id)
 
-        let (songsResult, image) = await (try? songsTask, imageTask)
+        let (songsResult, image, notes) = await (try? songsTask, imageTask, notesTask)
 
         if let (al, songs, labels) = songsResult {
             self.songs = songs
             self.recordLabels = labels
             if let al { self.album = al }
         }
+        self.albumNotes = notes
 
         if let image {
             self.coverImage = image
-            // Extract palette off the main thread
-            let extracted = await Task.detached(priority: .userInitiated) {
-                ColorExtractor.extract(from: image)
-            }.value
-            self.palette = extracted
+            // Skip extraction if palette was already loaded from cache in init
+            if !paletteReady {
+                let extracted = await Task.detached(priority: .userInitiated) {
+                    ColorExtractor.extract(from: image)
+                }.value
+                self.palette = extracted
+                if let key = initialAlbum.coverArt {
+                    PaletteCache.shared.set(extracted, for: key)
+                }
+            }
         }
     }
 
@@ -103,6 +117,7 @@ struct AlbumDetailView: View {
                 VStack(spacing: 0) {
                     heroSection
                     songListSection
+                    albumNotesSection
                     Spacer(minLength: 120) // mini-player clearance
                 }
                 .frame(maxWidth: .infinity)
@@ -397,6 +412,57 @@ struct AlbumDetailView: View {
             .padding(.horizontal, 16)
             .padding(.top, 16)
     }
+
+    // MARK: - Album notes
+
+    @ViewBuilder
+    private var albumNotesSection: some View {
+        let cardBG: Color = isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.08)
+        let cardBorder: Color = isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.10)
+
+        if let notes = vm.albumNotes, !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(L.aboutAlbum(vm.displayAlbum.name))
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+
+                Text(cleanNotes(notes))
+                    .font(.system(size: 15))
+                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
+                    .lineSpacing(4)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(22)
+            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(cardBorder, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+        }
+    }
+
+    private func cleanNotes(_ html: String) -> String {
+        var cleaned = html
+        cleaned = cleaned.replacingOccurrences(
+            of: "<a[^>]*>[^<]*Read more on Last\\.fm[^<]*</a>",
+            with: "",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(of: "Read more on Last.fm", with: "")
+        cleaned = cleaned.replacingOccurrences(
+            of: "<[^>]+>",
+            with: "",
+            options: .regularExpression
+        )
+        let entities = ["&amp;": "&", "&quot;": "\"", "&#39;": "'", "&lt;": "<", "&gt;": ">"]
+        for (k, v) in entities { cleaned = cleaned.replacingOccurrences(of: k, with: v) }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Song list
 
     private var songListSection: some View {
         VStack(spacing: 0) {

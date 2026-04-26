@@ -23,11 +23,19 @@ final class ArtistDetailViewModel: ObservableObject {
     @Published var showAllSongs = false
 
     private let api = NavidromeService.shared
+    private var paletteReady = false
 
     init(artist: NavidromeArtist) {
         self.artist = artist
         // Pre-populate from cache so the hero transition shows the real avatar
-        self.avatarImage = ArtistImageCache.shared.image(for: artist.id)
+        if let cached = ArtistImageCache.shared.image(for: artist.id) {
+            self.avatarImage = cached
+            // Palette from cache → colors appear WITH the zoom transition
+            if let p = PaletteCache.shared.palette(for: artist.id) {
+                self.palette = p
+                self.paletteReady = true
+            }
+        }
     }
 
     /// Each section loads and publishes independently — no global spinner.
@@ -60,11 +68,15 @@ final class ArtistDetailViewModel: ObservableObject {
     private func loadAvatar() async {
         if let img = await fetchAvatar() {
             self.avatarImage = img
-            let extracted = await Task.detached(priority: .userInitiated) {
-                ColorExtractor.extract(from: img)
-            }.value
-            guard !Task.isCancelled else { return }
-            self.palette = extracted
+            if !paletteReady {
+                let artistId = artist.id
+                let extracted = await Task.detached(priority: .userInitiated) {
+                    ColorExtractor.extract(from: img)
+                }.value
+                guard !Task.isCancelled else { return }
+                self.palette = extracted
+                PaletteCache.shared.set(extracted, for: artistId)
+            }
         }
     }
 

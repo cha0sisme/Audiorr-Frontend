@@ -125,10 +125,14 @@ final class NavidromeService: ObservableObject {
     }
 
     /// URL de la cover generada por el backend para una playlist.
-    /// URL estable — URLSession cache + ETag del backend se encargan del refresco.
-    func playlistBackendCoverURL(playlistId: String) -> URL? {
+    /// When `contentHash` is provided, appends `?v=` for immutable caching.
+    func playlistBackendCoverURL(playlistId: String, contentHash: String? = nil) -> URL? {
         guard let base = backendURL() else { return nil }
-        return URL(string: "\(base)/api/playlists/\(playlistId)/cover.png")
+        let baseURL = "\(base)/api/playlists/\(playlistId)/cover.png"
+        if let hash = contentHash, !hash.isEmpty {
+            return URL(string: "\(baseURL)?v=\(hash)")
+        }
+        return URL(string: baseURL)
     }
 
     /// Check if the Audiorr backend is reachable (GET /api/health, 5s timeout).
@@ -339,6 +343,29 @@ final class NavidromeService: ObservableObject {
             explicitStatus: d.explicitStatus
         )
         return (album, d.song ?? [], d.recordLabels)
+    }
+
+    /// Album notes/description via `getAlbumInfo2` (Last.fm or manually set in Navidrome).
+    func getAlbumInfo(albumId: String) async -> String? {
+        let cacheKey = "albumInfo_\(albumId)"
+        if let cached = cacheGet(cacheKey) as? String { return cached.isEmpty ? nil : cached }
+
+        guard let base = baseURL() else { return nil }
+        let urlStr = "\(base)/rest/getAlbumInfo2.view?\(authQuery())&id=\(albumId)"
+        guard let url = URL(string: urlStr) else { return nil }
+
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(AlbumInfoResponse.self, from: data),
+              response.status == "ok",
+              let notes = response.albumInfo?.notes,
+              !notes.isEmpty
+        else {
+            cacheSet(cacheKey, value: "", ttl: 3600)
+            return nil
+        }
+
+        cacheSet(cacheKey, value: notes, ttl: 3600)
+        return notes
     }
 
     // MARK: - Search
@@ -636,6 +663,39 @@ final class NavidromeService: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
         return try? JSONDecoder().decode(GenerateMixesResult.self, from: data)
+    }
+
+    /// Fetch cover content hashes from backend (smart-playlists + daily-mixes)
+    /// and register them in PlaylistCoverCache for immutable URL caching.
+    func refreshPlaylistCoverHashes() async {
+        guard let base = backendURL() else { return }
+        var hashes: [String: String] = [:]
+
+        // Smart playlists
+        if let url = URL(string: "\(base)/api/smart-playlists"),
+           let request = backendRequest(url: url),
+           let (data, _) = try? await URLSession.shared.data(for: request),
+           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let playlists = dict["playlists"] as? [[String: Any]] {
+            for pl in playlists {
+                if let id = pl["navidromeId"] as? String,
+                   let hash = pl["coverContentHash"] as? String {
+                    hashes[id] = hash
+                }
+            }
+        }
+
+        // Daily mixes (already decoded with coverContentHash field)
+        let mixes = await getDailyMixes()
+        for mix in mixes {
+            if let id = mix.navidromeId, let hash = mix.coverContentHash {
+                hashes[id] = hash
+            }
+        }
+
+        if !hashes.isEmpty {
+            PlaylistCoverCache.shared.registerContentHashes(hashes)
+        }
     }
 
     /// Artist image URL from backend (Last.fm / Spotify).

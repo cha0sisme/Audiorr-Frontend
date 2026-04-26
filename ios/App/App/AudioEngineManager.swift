@@ -1068,44 +1068,27 @@ class AudioEngineManager {
             self.engine.mainMixerNode.outputVolume = self.volume
 
             // ═══ DSP RESET ═══
-            // Two-tier reconnect to force CoreAudio to rebuild the render pipeline
-            // with fresh IIR coefficients on BOTH chains.
-
-            // Active chain (playerA after swap): REPLACE EQ with fresh instance.
-            // disconnectNodeOutput is just routing — doesn't reset AudioUnit internal state.
-            // Only engine.detach() triggers CleanupMemory, destroying stale IIR coefficients.
-            // A new AVAudioUnitEQ has zero history — impossible to have stale coefficients.
-            // Player → timePitch connection is untouched, audio keeps flowing.
-            self.eqA = CrossfadeExecutor.replaceEQNode(
-                engine: self.engine, oldEQ: self.eqA,
-                timePitch: self.timePitchA, mixer: self.mixerA,
-                label: "onComplete-activeA"
-            )
-
-            // Idle chain (playerB after swap): full nuclear reconnect (nothing playing)
+            // Active chain (playerA after swap): resetCrossfadeBands above already
+            // called AudioUnitReset on the EQ, which flushes IIR filter state.
+            // Do NOT replaceEQNode or reconnectProcessingChain on active chains —
+            // detaching/reattaching nodes on a rendering pipeline causes silence.
+            //
+            // Idle chain (playerB after swap): full nuclear reconnect is safe.
             self.reconnectProcessingChain(
                 player: self.playerB, timePitch: self.timePitchB,
                 eq: self.eqB, mixer: self.mixerB, label: "idle-B"
             )
 
-            // Audit post-swap
-            CrossfadeExecutor.auditEQState(
-                source: "onComplete+postSwap",
-                eqA: self.eqA, eqB: self.eqB,
-                mixerA: self.mixerA, mixerB: self.mixerB,
-                timePitchA: self.timePitchA, timePitchB: self.timePitchB
-            )
-
-            // Periodic audit: verify at 5s and 30s that filters remain clean
+            // Backstop: staggered EQ resets on automationQueue to catch any
+            // ghost filterTick that was in-flight during completion.
             let bsEqA = self.eqA, bsEqB = self.eqB
             let bsMixA = self.mixerA, bsMixB = self.mixerB
-            let bsTpA = self.timePitchA, bsTpB = self.timePitchB
-            for delay in [5.0, 30.0] {
-                CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    guard let self = self, !self.isCrossfading else { return }
-                    CrossfadeExecutor.auditEQState(source: "periodic+\(Int(delay))s", eqA: bsEqA, eqB: bsEqB,
-                                                   mixerA: bsMixA, mixerB: bsMixB,
-                                                   timePitchA: bsTpA, timePitchB: bsTpB)
+            for delay in [0.1, 0.3, 0.6] {
+                CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + delay) {
+                    CrossfadeExecutor.resetBandsStatic(bsEqA)
+                    CrossfadeExecutor.resetBandsStatic(bsEqB)
+                    bsMixA.pan = 0
+                    bsMixB.pan = 0
                 }
             }
 
@@ -1176,11 +1159,11 @@ class AudioEngineManager {
             swap(&self.eqA, &self.eqB)
             swap(&self.timePitchA, &self.timePitchB)
             swap(&self.mixerA, &self.mixerB)
-            // Nuclear reconnect: force CoreAudio to rebuild DSP state
-            self.reconnectProcessingChain(
-                player: self.playerA, timePitch: self.timePitchA,
-                eq: self.eqA, mixer: self.mixerA, label: "playerBEnded-A"
-            )
+            // Active chain (A after swap): reset bands + AudioUnitReset only.
+            // Do NOT reconnectProcessingChain on active chain — disconnecting a
+            // playing AVAudioPlayerNode causes silence.
+            self.resetCrossfadeBands(self.eqA)
+            // Idle chain (B after swap): full nuclear reconnect is safe
             self.reconnectProcessingChain(
                 player: self.playerB, timePitch: self.timePitchB,
                 eq: self.eqB, mixer: self.mixerB, label: "playerBEnded-B"
@@ -1226,19 +1209,24 @@ class AudioEngineManager {
         streamFadeWatchdog?.cancel()
         streamFadeWatchdog = nil
         isCrossfading = false
-        // Replace EQ on A (active, playing) with a fresh instance.
-        // disconnectNodeOutput is just routing — only engine.detach() triggers
-        // CleanupMemory, destroying stale IIR coefficients. A new AudioUnit has zero history.
-        eqA = CrossfadeExecutor.replaceEQNode(
-            engine: engine, oldEQ: eqA,
-            timePitch: timePitchA, mixer: mixerA,
-            label: "cancelCrossfade-activeA")
-        // Nuclear reconnect on B (idle) — safe to disconnect/reconnect
+        // Active chain (A): reset bands + AudioUnitReset flushes IIR state.
+        // Do NOT replaceEQNode — detach/reattach on rendering chain causes silence.
+        resetCrossfadeBands(eqA)
+        // Idle chain (B): full nuclear reconnect is safe (nothing playing)
         reconnectProcessingChain(player: playerB, timePitch: timePitchB,
                                  eq: eqB, mixer: mixerB, label: "cancelCrossfade-B")
         // Reset stereo pan
         mixerA.pan = 0
         mixerB.pan = 0
+        // Backstop on automationQueue: serialize after any in-flight filterTick
+        let bsEqA = self.eqA, bsEqB = self.eqB
+        let bsMixA = self.mixerA, bsMixB = self.mixerB
+        CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.15) {
+            CrossfadeExecutor.resetBandsStatic(bsEqA)
+            CrossfadeExecutor.resetBandsStatic(bsEqB)
+            bsMixA.pan = 0
+            bsMixB.pan = 0
+        }
         stopStreamPlayer()  // Clean up stream observer to prevent stale callbacks
     }
 

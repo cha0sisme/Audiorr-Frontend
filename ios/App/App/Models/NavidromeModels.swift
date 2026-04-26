@@ -355,6 +355,19 @@ struct ArtistInfo: Hashable {
     let similarArtists: [SimilarArtist]
 }
 
+// MARK: - Album Info (getAlbumInfo2)
+
+struct AlbumInfoResponse: Decodable {
+    let status: String
+    let albumInfo: AlbumInfo2?
+
+    struct AlbumInfo2: Decodable {
+        let notes: String?
+        let musicBrainzId: String?
+        let lastFmUrl: String?
+    }
+}
+
 // MARK: - getSong response
 
 struct GetSongResponse: Decodable {
@@ -504,6 +517,8 @@ struct DailyMix: Identifiable, Decodable {
     let enabled: Bool
     let createdAt: String
     let updatedAt: String
+    let coverContentHash: String?
+    let coverVersion: Int?
 
     var id: Int { mixNumber }
 }

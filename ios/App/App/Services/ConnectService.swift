@@ -511,6 +511,7 @@ final class ConnectService {
         state.duration = duration
         state.progress = position
         state.isPlaying = playing
+        state.refreshBpm()
         state.contextUri = dict["contextUri"] as? String ?? ""
         state.isRemote = true
         remoteSourceDeviceId = remoteDeviceId

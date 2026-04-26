@@ -160,6 +160,7 @@ private struct SongRowView: View {
                             .frame(width: 44, height: 44)
                         NowPlayingIndicator(
                             isPlaying: nowPlaying.isPlaying,
+                            bpm: nowPlaying.currentBpm,
                             color: .white,
                             barWidth: 2.5,
                             height: 12
@@ -171,6 +172,7 @@ private struct SongRowView: View {
                 if isCurrentSong {
                     NowPlayingIndicator(
                         isPlaying: nowPlaying.isPlaying,
+                        bpm: nowPlaying.currentBpm,
                         color: isLight ? Color.black : Color.white,
                         barWidth: 2.5,
                         height: 12

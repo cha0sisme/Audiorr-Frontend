@@ -130,6 +130,7 @@ enum L {
     static var noArtistsFound: String { isEn ? "No artists found on your server." : "No se encontraron artistas en tu servidor." }
     static var popular: String { isEn ? "Popular" : "Populares" }
     static func aboutArtist(_ name: String) -> String { isEn ? "About \(name)" : "Acerca de \(name)" }
+    static func aboutAlbum(_ name: String) -> String { isEn ? "About \(name)" : "Acerca de \(name)" }
 
     // MARK: - Artists / Playlists — not configured
 

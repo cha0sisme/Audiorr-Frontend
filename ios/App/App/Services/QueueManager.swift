@@ -1386,6 +1386,7 @@ final class QueueManager: AudioEngineDelegate {
             state.isExplicit = song.isExplicit
             state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
             state.isVisible = true
+            state.refreshBpm()
         }
 
         state.isPlaying = isPlaying
@@ -1479,6 +1480,7 @@ final class QueueManager: AudioEngineDelegate {
             state.isVisible = true
             state.duration = song.duration
             state.progress = savedPos
+            state.refreshBpm()
         }
 
         // Sync queue to NowPlayingState
@@ -1543,6 +1545,7 @@ final class QueueManager: AudioEngineDelegate {
                     state.duration = song.duration
                     state.progress = last.position
                     state.queue = queue.map { $0.toQueueSong() }
+                    state.refreshBpm()
                 }
             }
         }
@@ -1577,6 +1580,7 @@ final class QueueManager: AudioEngineDelegate {
             state.duration = song.duration
             state.progress = position
             state.queue = queue.map { $0.toQueueSong() }
+            state.refreshBpm()
         }
     }
 }

@@ -52,13 +52,19 @@ final class PlaylistsViewModel: ObservableObject {
         isLoading = false
         lastLoadedAt = Date()
 
-        // Load backend-dependent sections (BackendState already checked centrally)
+        // Load backend-dependent sections + cover hashes in parallel
         if BackendState.shared.isAvailable {
-            let fetched = await api.getHomepageLayout()
+            async let layoutTask = api.getHomepageLayout()
+            async let hashesTask: Void = api.refreshPlaylistCoverHashes()
+            let fetched = await layoutTask
+            _ = await hashesTask
             sections = fetched.isEmpty ? defaultSections : fetched
         } else {
             sections = []
         }
+
+        // Prefetch covers (after hashes are registered so ?v= is used)
+        PlaylistCoverCache.shared.prefetch(playlists: Array(playlists.prefix(20)))
     }
 
     func createPlaylist(name: String) async -> NavidromePlaylist? {

@@ -62,6 +62,7 @@ struct AlbumCardView: View {
                 if isCurrentContext {
                     NowPlayingIndicator(
                         isPlaying: nowPlaying.isPlaying,
+                        bpm: nowPlaying.currentBpm,
                         color: Color.white,
                         barWidth: 3, height: 14
                     )
@@ -189,34 +190,57 @@ extension View {
 
 // MARK: - Animated equalizer bars (now-playing indicator)
 
-/// Apple Music-style animated equalizer. Three bars animate independently
-/// with staggered phase offsets, producing organic-looking bouncing bars.
-/// Uses a single TimelineView (no Timer, no manual state management) —
-/// the system drives the animation at display refresh rate.
-/// When paused, bars smoothly animate down to a low resting height.
+/// Realistic equalizer indicator. Each bar layers 5 sine waves at
+/// incommensurate frequencies — the result is quasi-random, aperiodic
+/// motion that never visibly repeats, similar to real audio levels.
+/// BPM scales the overall tempo; without BPM a natural ~120 BPM feel is used.
+/// TimelineView drives at display refresh rate — no Timer/state needed.
 struct NowPlayingIndicator: View {
     var isPlaying: Bool
+    var bpm: Double? = nil
     var color: Color = .accentColor
     var barWidth: CGFloat = 3
     var height: CGFloat = 14
     var spacing: CGFloat = 1.5
 
-    // Phase offsets per bar (radians) — staggered for organic feel
-    private let phases: [Double] = [0, 2.1, 4.2]
+    /// Per-bar frequency seeds (irrational ratios → never repeats).
+    /// Each bar simulates a different frequency band (bass / mid / treble).
+    private static let seeds: [[Double]] = [
+        [3.07, 5.13, 8.91, 1.53, 13.27],  // bass — heavier, slower swings
+        [4.31, 7.29, 2.17, 11.03, 6.43],   // mid — medium movement
+        [5.67, 3.41, 9.73, 7.19, 2.89],    // treble — more erratic
+    ]
+
+    private var speedScale: Double {
+        guard let bpm else { return 1.0 }
+        return max(0.5, min(2.5, bpm / 120.0))
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: nil, paused: !isPlaying)) { timeline in
             let t = isPlaying ? timeline.date.timeIntervalSinceReferenceDate : 0
             HStack(alignment: .bottom, spacing: spacing) {
                 ForEach(0..<3, id: \.self) { i in
-                    let speed = 1.6 + Double(i) * 0.4
+                    let f = Self.seeds[i]
+                    let s = speedScale
+                    // 5 layered sines at incommensurate frequencies → aperiodic motion
+                    let v = 0.35 * sin(t * f[0] * s)
+                          + 0.25 * sin(t * f[1] * s + 1.7)
+                          + 0.20 * sin(t * f[2] * s + 3.1)
+                          + 0.12 * sin(t * f[3] * s + 5.3)
+                          + 0.08 * sin(t * f[4] * s + 7.9)
+                    // v ∈ ~[-1,1], map to 0.10…1.0 with bias toward mid-range
+                    let norm = (v + 1) / 2            // 0…1
+                    let shaped = norm * norm * 0.6 + norm * 0.4  // slight peak bias
                     let fraction = isPlaying
-                        ? 0.3 + 0.7 * (0.5 + 0.5 * sin(t * speed + phases[i]))
-                        : 0.15
+                        ? 0.10 + 0.90 * shaped
+                        : 0.12
                     RoundedRectangle(cornerRadius: barWidth / 2)
                         .fill(color)
                         .frame(width: barWidth, height: height * fraction)
-                        .animation(.easeInOut(duration: isPlaying ? 0.2 : 0.4), value: fraction)
+                        // No animation during playback — TimelineView drives at 60/120fps.
+                        // Slow ease-out only for the pause→rest transition.
+                        .animation(isPlaying ? nil : .easeOut(duration: 0.4), value: isPlaying)
                 }
             }
             .frame(height: height, alignment: .bottom)
