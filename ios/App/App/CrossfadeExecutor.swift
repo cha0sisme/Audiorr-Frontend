@@ -43,6 +43,7 @@ class CrossfadeExecutor {
         case cutAFadeInB = "CUT_A_FADE_IN_B"
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
+        case dropMix = "DROP_MIX"
     }
 
     struct Config {
@@ -203,6 +204,19 @@ class CrossfadeExecutor {
         highShelfA: .init(frequency: 8000, startGain: 0, endGain: -4)
     )
 
+    /// Drop-mix preset: aggressive HPF ramp on A pulling it out fast, B enters clean.
+    /// Used for hip hop/R&B drops where B's intro is short and needs to hit immediately.
+    /// A sweeps 600→6000Hz in the fade window (fast, punchy), B bypassed via skipBFilters.
+    static let presetDropMix = FilterPreset(
+        highpassA: .init(startFreq: 600, midFreq: 3000, endFreq: 6000, q: 1.3),
+        highpassB: .init(startFreq: 200, midFreq: 100, endFreq: 40, q: 0.5),
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -14, endGain: -22),
+        lowshelfB: .init(frequency: 200, startGain: -10, midGain: -5, endGain: 0),
+        lowpassA: nil,
+        midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -14),
+        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
+    )
+
     /// Stem-mix preset: B enters filtered to vocals/mids only, A stays full then exits via highpass.
     /// Simulates DJ stem mixing without real stem separation.
     static let presetStemMix = FilterPreset(
@@ -259,6 +273,7 @@ class CrossfadeExecutor {
     private var diagFreqB: Float = 20
     private var diagLsGainA: Float = 0
     private var diagLsGainB: Float = 0
+    private var diagQA: Float = 0.707
 
     var onComplete: ((Double) -> Void)?
     /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
@@ -320,7 +335,9 @@ class CrossfadeExecutor {
         let isEnergyDown = config.energyB < config.energyA - 0.2
         // Both sides instrumental = clean transition, lighter filters suffice
         let bothInstrumental = config.isOutroInstrumental && config.isIntroInstrumental
-        if config.transitionType == .stemMix {
+        if config.transitionType == .dropMix {
+            preset = Self.presetDropMix
+        } else if config.transitionType == .stemMix {
             preset = Self.presetStemMix
         } else if config.transitionType == .naturalBlend {
             // Natural blend = invisible transition. Gentle filters to avoid
@@ -399,7 +416,8 @@ class CrossfadeExecutor {
 
         // Publish to diagnostics UI
         let presetName: String
-        if config.transitionType == .stemMix { presetName = "stem-mix" }
+        if config.transitionType == .dropMix { presetName = "drop-mix" }
+        else if config.transitionType == .stemMix { presetName = "stem-mix" }
         else if config.transitionType == .naturalBlend { presetName = "gentle" }
         else if config.needsAnticipation { presetName = "anticipation" }
         else if preset.lowpassA != nil { presetName = "energy-down" }
@@ -418,6 +436,8 @@ class CrossfadeExecutor {
             filterPreset: presetName,
             useMidScoop: useMidScoop,
             useHighShelfCut: useHighShelfCut,
+            useBassKill: useBassKill,
+            useDynamicQ: useDynamicQ,
             skipBFilters: config.skipBFilters,
             energyA: config.energyA,
             energyB: config.energyB,
@@ -425,9 +445,12 @@ class CrossfadeExecutor {
             isIntroInstrumental: config.isIntroInstrumental,
             danceability: config.danceability,
             isBeatSynced: hasBeatData,
-            beatSyncInfo: config.beatIntervalA > 0 || config.beatIntervalB > 0
-                ? "A=\(String(format: "%.1f", 60.0 / max(0.001, config.beatIntervalA)))bpm B=\(String(format: "%.1f", 60.0 / max(0.001, config.beatIntervalB)))bpm"
-                : "No beat data",
+            beatSyncInfo: {
+                let bpmA = config.beatIntervalA > 0.15 ? String(format: "%.1f", 60.0 / config.beatIntervalA) : "N/A"
+                let bpmB = config.beatIntervalB > 0.15 ? String(format: "%.1f", 60.0 / config.beatIntervalB) : "N/A"
+                return config.beatIntervalA > 0 || config.beatIntervalB > 0
+                    ? "A=\(bpmA)bpm B=\(bpmB)bpm" : "No beat data"
+            }(),
             beatIntervalA: config.beatIntervalA,
             beatIntervalB: config.beatIntervalB,
             useTimeStretch: config.useTimeStretch,
@@ -502,6 +525,9 @@ class CrossfadeExecutor {
             // A holds full volume until the last 3s, so swapping bass at 25%
             // creates a bass-less hole. Align with B's entry.
             targetPercent = 0.75
+        } else if config.transitionType == .dropMix {
+            // DROP_MIX: early bass swap (20%) — A drops fast, B needs bass immediately.
+            targetPercent = 0.20
         } else if config.transitionType == .stemMix {
             targetPercent = 0.35
         } else {
@@ -930,6 +956,19 @@ class CrossfadeExecutor {
             let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
             return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
 
+        case .dropMix:
+            // Drop mix: A drops fast — short hold then aggressive exponential exit.
+            // Designed for 2-7s fades where B needs to take over quickly.
+            let holdLevel: Float = 0.80
+            let holdEnd = 0.30
+            if progress < holdEnd {
+                let p = Float(progress / holdEnd)
+                let eased = p * p
+                return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
+            }
+            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
+            return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
+
         case .crossfade:
             // Standard crossfade: gentle descent with S-curve character.
             // A eases to 70% by 45%, then cos² drop for smooth power handoff.
@@ -1068,6 +1107,17 @@ class CrossfadeExecutor {
             let rampP = Float((progress - rampStart) / (1.0 - rampStart))
             let eased = rampP * rampP * (3.0 - 2.0 * rampP)
             return maxVolumeB * (0.40 + 0.60 * eased)
+
+        case .dropMix:
+            // Drop mix: B enters fast and reaches full volume by 60% of the fade.
+            // Complements A's aggressive exit — minimal overlap at high volumes.
+            let rampEnd = 0.60
+            if progress < rampEnd {
+                let p = Float(progress / rampEnd)
+                let eased = p * p * (3.0 - 2.0 * p)
+                return maxVolumeB * (baseLevel + (1.0 - baseLevel) * eased)
+            }
+            return maxVolumeB
 
         case .crossfade:
             // Complementary to A's gradual descent (holdEnd=0.45):
@@ -1208,6 +1258,7 @@ class CrossfadeExecutor {
                 filterTypeA: useLowpassA ? "lp" : "hp",
                 lowshelfGainA: diagLsGainA,
                 lowshelfGainB: diagLsGainB,
+                dynamicQA: diagQA,
                 panA: mixerA.pan,
                 panB: mixerB.pan,
                 currentRateA: timePitchA?.rate ?? 1.0
@@ -1273,6 +1324,7 @@ class CrossfadeExecutor {
             } else {
                 qValue = preset.highpassA.q
             }
+            diagQA = qValue
             band0A = BiquadCoefficientCalculator.highpass(frequency: freqA, sampleRate: sampleRate, Q: qValue)
         }
         diagFreqA = freqA

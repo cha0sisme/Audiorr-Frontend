@@ -33,6 +33,8 @@ final class TransitionDiagnostics {
     var filterPreset = ""       // "normal", "aggressive", "anticipation", "energy-down"
     var useMidScoop = false
     var useHighShelfCut = false
+    var useBassKill = false
+    var useDynamicQ = false
     var skipBFilters = false
 
     // Analysis
@@ -77,6 +79,7 @@ final class TransitionDiagnostics {
     var filterTypeA: String = "hp"  // "hp" or "lp" (lowpass for energy-down)
     var lowshelfGainA: Float = 0
     var lowshelfGainB: Float = 0
+    var dynamicQA: Float = 0.707
     var panA: Float = 0
     var panB: Float = 0
     var currentRateA: Float = 1.0
@@ -100,6 +103,8 @@ final class TransitionDiagnostics {
         let filtersEnabled: Bool
         let useMidScoop: Bool
         let useHighShelfCut: Bool
+        let useBassKill: Bool
+        let useDynamicQ: Bool
         let skipBFilters: Bool
         // Beat / BPM
         let beatSynced: Bool
@@ -218,6 +223,8 @@ final class TransitionDiagnostics {
         filterPreset: String,
         useMidScoop: Bool,
         useHighShelfCut: Bool,
+        useBassKill: Bool,
+        useDynamicQ: Bool,
         skipBFilters: Bool,
         energyA: Double,
         energyB: Double,
@@ -248,6 +255,8 @@ final class TransitionDiagnostics {
             self.filterPreset = filterPreset
             self.useMidScoop = useMidScoop
             self.useHighShelfCut = useHighShelfCut
+            self.useBassKill = useBassKill
+            self.useDynamicQ = useDynamicQ
             self.skipBFilters = skipBFilters
             self.energyA = energyA
             self.energyB = energyB
@@ -287,6 +296,7 @@ final class TransitionDiagnostics {
         filterTypeA: String = "hp",
         lowshelfGainA: Float,
         lowshelfGainB: Float,
+        dynamicQA: Float = 0.707,
         panA: Float,
         panB: Float,
         currentRateA: Float
@@ -302,13 +312,15 @@ final class TransitionDiagnostics {
             self.filterTypeA = filterTypeA
             self.lowshelfGainA = lowshelfGainA
             self.lowshelfGainB = lowshelfGainB
+            self.dynamicQA = dynamicQA
             self.panA = panA
             self.panB = panB
             self.currentRateA = currentRateA
 
             // Buffer tick for log
             let label = filterTypeA == "lp" ? "lpA" : "hpA"
-            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz hpB=%.0fHz | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
+            let qLabel = self.useDynamicQ ? String(format: " Q=%.2f", dynamicQA) : ""
+            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz\(qLabel) hpB=%.0fHz | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
                               elapsed, volumeA, volumeB, masterVolume,
                               highpassFreqA, highpassFreqB,
                               lowshelfGainA, lowshelfGainB,
@@ -336,6 +348,8 @@ final class TransitionDiagnostics {
                 filtersEnabled: self.filtersEnabled,
                 useMidScoop: self.useMidScoop,
                 useHighShelfCut: self.useHighShelfCut,
+                useBassKill: self.useBassKill,
+                useDynamicQ: self.useDynamicQ,
                 skipBFilters: self.skipBFilters,
                 beatSynced: self.isBeatSynced,
                 beatSyncInfo: self.beatSyncInfo,
@@ -542,6 +556,7 @@ final class TransitionDiagnostics {
         FILTERS:
           enabled=\(filtersEnabled)  preset=\(filterPreset)
           midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
+          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)
 
         ANALYSIS:
           energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))

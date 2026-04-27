@@ -54,6 +54,7 @@ enum DJMixingService {
         case cutAFadeInB = "CUT_A_FADE_IN_B"
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
+        case dropMix = "DROP_MIX"
     }
 
     struct MixModeConfig {
@@ -272,11 +273,13 @@ enum DJMixingService {
         else if diff <= 12 { bpmRel = .compatible }
         else { bpmRel = .incompatible }
 
-        // BPM confidence: both songs must have confidence ≥ 0.5 for trusted BPM decisions.
-        // When untrusted, time-stretch and aggressive beat sync should be disabled.
+        // BPM confidence: both songs must have confidence ≥ 0.5 AND valid BPM data for trusted decisions.
+        // When untrusted, time-stretch, beat sync, and bass kill should be conservative.
         let confA = currentAnalysis?.bpmConfidence ?? 1.0
         let confB = nextAnalysis?.bpmConfidence ?? 1.0
-        let trusted = confA >= 0.5 && confB >= 0.5
+        let hasBeatDataA = bA > 20 && bA < 300
+        let hasBeatDataB = bB > 20 && bB < 300
+        let trusted = confA >= 0.5 && confB >= 0.5 && hasBeatDataA && hasBeatDataB
         if !trusted {
             let lowConf = confA < 0.5 ? "A" : "B"
             let val = confA < 0.5 ? confA : confB
@@ -484,8 +487,8 @@ enum DJMixingService {
             entryPoint: entry.entryPoint, fadeDuration: fade.duration
         )
 
-        // Only skip B filters for very short fades where there's no time for a sweep
-        let skipBFilters = fade.duration <= 3.0
+        // Skip B filters for very short fades or DROP_MIX (B enters clean and full)
+        let skipBFilters = fade.duration <= 3.0 || transition.type == .dropMix
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
@@ -1137,6 +1140,34 @@ enum DJMixingService {
             decision = "Sin analisis — duracion \(String(format: "%.0f", fadeDuration))s."
         }
 
+        // ── Cap by B's intro instrumental window ──
+        // The fade should not extend past B's vocal entry. Using the heuristic
+        // intro end (percussion/energy-based), not the ML model value which is
+        // often 2-3x longer and includes vocal sections.
+        // Allow 85% of the intro window so the fade finishes before vocals hit.
+        if let next = nextAnalysis, next.hasError != true {
+            let introWindow = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+            if introWindow > 2 {
+                let introCap = introWindow * 0.85
+                if fadeDuration > introCap {
+                    fadeDuration = max(2, introCap)
+                    decision += " Capped por intro B (\(String(format: "%.1f", introWindow))s×0.85) a \(String(format: "%.1f", fadeDuration))s."
+                }
+            }
+        }
+
+        // ── Shorten when A has no instrumental outro ──
+        // If A's outro is vocal (or unconfirmed), A likely has voice until the end.
+        // Reduce fade to minimize vocal overlap from the outgoing track.
+        if let current = currentAnalysis, current.hasError != true {
+            let aOutroVocal = current.hasOutroVocals
+                || (!current.hasOutroData && current.vocalStartTime > 0)
+            if aOutroVocal && fadeDuration > 4 {
+                fadeDuration = max(3, fadeDuration * 0.80)
+                decision += " Reducido 20% por outro vocal A a \(String(format: "%.1f", fadeDuration))s."
+            }
+        }
+
         // Absolute max: 25% of the shorter track
         let absoluteMax = min(bufferADuration * 0.25, bufferBDuration * 0.25)
         if fadeDuration > absoluteMax {
@@ -1309,7 +1340,7 @@ enum DJMixingService {
         //   5. Fade is long enough for the effect to register (>4s)
         let bassKillCompatibleType: Bool
         switch transitionType {
-        case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB:
+        case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB, .dropMix:
             bassKillCompatibleType = true
         case .cut, .naturalBlend:
             bassKillCompatibleType = false
@@ -1355,6 +1386,12 @@ enum DJMixingService {
 
     static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType) -> AnticipationResult {
         let hasEnoughIntro = entryPoint >= 5
+
+        // DROP_MIX: no anticipation — B enters clean and punchy, no teasing.
+        if transitionType == .dropMix {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: DROP_MIX — entrada directa")
+        }
 
         // CUT-specific: tease B filtered before the hard swap — this is how DJs
         // preview the next track even when BPMs are incompatible.
@@ -1550,8 +1587,22 @@ enum DJMixingService {
                 }
 
             case .punch:
-                // Compatible BPMs, good affinity — full DJ treatment
-                if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
+                // ── DROP_MIX: short intro on B or very short fade ──
+                // Hip hop / R&B / K-Pop technique: quick HPF ramp out on A, B enters clean.
+                // Triggers when B's intro is too short for a long blend, or the fade
+                // was already capped short by the intro window.
+                let bIntroLen: Double = {
+                    guard let next = nextAnalysis, next.hasError != true else { return 30 }
+                    return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 30)
+                }()
+                let useDropMix = fadeDuration < 5 || (bIntroLen < 12 && fadeDuration < 7)
+
+                if useDropMix && fadeDuration >= 2 {
+                    type = .dropMix
+                    reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
+                }
+                // ── Full DJ treatment ──
+                else if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
                     type = .stemMix
                     reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))"
                 } else if isBeatSynced && !isAAbrupt && !isBAbrupt {

@@ -180,6 +180,10 @@ struct TransitionDiagnosticsView: View {
                     color: diag.useMidScoop ? .orange : .secondary)
             diagRow("Hi-Shelf Cut", value: diag.useHighShelfCut ? "ACTIVE" : "Off",
                     color: diag.useHighShelfCut ? .orange : .secondary)
+            diagRow("Bass Kill", value: diag.useBassKill ? "ACTIVE" : "Off",
+                    color: diag.useBassKill ? .red : .secondary)
+            diagRow("Dynamic Q", value: diag.useDynamicQ ? "ACTIVE" : "Off",
+                    color: diag.useDynamicQ ? .cyan : .secondary)
             diagRow("B Filters", value: diag.skipBFilters ? "SKIPPED" : "Active",
                     color: diag.skipBFilters ? .yellow : .green)
         }
@@ -229,33 +233,48 @@ struct TransitionDiagnosticsView: View {
         Section("Real-time (1Hz)") {
             diagRow("Elapsed", value: String(format: "%.1fs / %.1fs", diag.elapsed, diag.fadeDuration))
 
-            // Volume bars
+            // Volume bars — plain rectangles, no ProgressView animation
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Vol A").font(.caption).frame(width: 40, alignment: .leading)
-                    ProgressView(value: Double(diag.volumeA), total: 1.0)
-                        .tint(.red)
-                    Text(String(format: "%.3f", diag.volumeA))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 50, alignment: .trailing)
-                }
-                HStack {
-                    Text("Vol B").font(.caption).frame(width: 40, alignment: .leading)
-                    ProgressView(value: Double(diag.volumeB), total: 1.0)
-                        .tint(.green)
-                    Text(String(format: "%.3f", diag.volumeB))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 50, alignment: .trailing)
-                }
+                volumeBar(label: "Vol A", value: diag.volumeA, color: .red)
+                volumeBar(label: "Vol B", value: diag.volumeB, color: .green)
             }
 
             diagRow("Master Vol", value: String(format: "%.2f", diag.masterVolume))
             diagRow("HP Freq A", value: String(format: "%.0f Hz", diag.highpassFreqA))
             diagRow("HP Freq B", value: String(format: "%.0f Hz", diag.highpassFreqB))
-            diagRow("Lowshelf A", value: String(format: "%.1f dB", diag.lowshelfGainA))
+            if diag.useDynamicQ {
+                diagRow("Q (Dynamic)", value: String(format: "%.2f", diag.dynamicQA),
+                        color: diag.dynamicQA > 2.0 ? .cyan : .secondary)
+            }
+            diagRow("Lowshelf A", value: String(format: "%.1f dB", diag.lowshelfGainA),
+                    color: diag.useBassKill && diag.lowshelfGainA < -30 ? .red : .primary)
             diagRow("Lowshelf B", value: String(format: "%.1f dB", diag.lowshelfGainB))
             diagRow("Pan A", value: String(format: "%.3f", diag.panA))
             diagRow("Pan B", value: String(format: "%.3f", diag.panB))
+        }
+    }
+
+    /// Static volume bar — no implicit animation, no AnimatablePair issues.
+    private func volumeBar(label: String, value: Float, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(color.opacity(0.15))
+                    Capsule()
+                        .fill(color)
+                        .frame(width: max(0, geo.size.width * CGFloat(min(1, max(0, value)))))
+                }
+            }
+            .frame(height: 6)
+            Text(String(format: "%.3f", value))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .trailing)
         }
     }
 
@@ -292,41 +311,47 @@ struct TransitionDiagnosticsView: View {
                 NavigationLink {
                     TransitionDetailView(record: record)
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        // Row 1: Type + timestamp
+                        HStack(alignment: .firstTextBaseline) {
                             Text(record.type)
-                                .font(.caption.bold())
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(typeColor(record.type))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(typeColor(record.type).opacity(0.15), in: Capsule())
+                            Text(String(format: "%.1fs", record.fadeDuration))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                             Spacer()
                             Text(record.date, format: .dateTime.hour().minute().second())
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.quaternary)
                         }
+
+                        // Row 2: Song titles
                         Text("\(record.fromTitle) → \(record.toTitle)")
-                            .font(.caption)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
-                        HStack(spacing: 8) {
-                            Label(String(format: "%.1fs", record.fadeDuration), systemImage: "timer")
-                            if record.beatSynced {
-                                Label("Beat", systemImage: "metronome")
-                                    .foregroundStyle(.cyan)
-                            }
-                            if record.timeStretched {
-                                Label("Stretch", systemImage: "waveform")
-                                    .foregroundStyle(.purple)
-                            }
-                            Label(record.filterPreset, systemImage: "slider.horizontal.3")
+
+                        // Row 3: Compact summary — colored text tokens, no icons
+                        HStack(spacing: 4) {
+                            historyToken(record.filterPreset, color: presetColor(record.filterPreset))
+                            if record.beatSynced   { historyToken("beat", color: .cyan) }
+                            if record.timeStretched { historyToken("stretch", color: .purple) }
+                            if record.useBassKill   { historyToken("kill", color: .red) }
+                            if record.useDynamicQ   { historyToken("dynQ", color: .teal) }
                         }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 2)
                 }
             }
         }
+    }
+
+    /// Minimal colored text token for history rows — no icons, no backgrounds.
+    private func historyToken(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
     }
 
     // MARK: - Log file
@@ -400,6 +425,8 @@ struct TransitionDiagnosticsView: View {
         case "BEAT_MATCH_BLEND": return .cyan
         case "CUT_A_FADE_IN_B":  return .orange
         case "FADE_OUT_A_CUT_B": return .yellow
+        case "STEM_MIX":         return .mint
+        case "DROP_MIX":         return .pink
         default:                 return .secondary
         }
     }
@@ -409,6 +436,9 @@ struct TransitionDiagnosticsView: View {
         case "aggressive":   return .red
         case "anticipation": return .purple
         case "energy-down":  return .blue
+        case "gentle":       return .mint
+        case "stem-mix":     return .teal
+        case "drop-mix":     return .pink
         case "normal":       return .green
         default:             return .secondary
         }
@@ -468,6 +498,10 @@ struct TransitionDetailView: View {
                     color: record.useMidScoop ? .orange : .secondary)
                 row("Hi-Shelf Cut", value: record.useHighShelfCut ? "ACTIVE" : "Off",
                     color: record.useHighShelfCut ? .orange : .secondary)
+                row("Bass Kill", value: record.useBassKill ? "ACTIVE" : "Off",
+                    color: record.useBassKill ? .red : .secondary)
+                row("Dynamic Q", value: record.useDynamicQ ? "ACTIVE" : "Off",
+                    color: record.useDynamicQ ? .cyan : .secondary)
                 row("B Filters", value: record.skipBFilters ? "SKIPPED" : "Active",
                     color: record.skipBFilters ? .yellow : .green)
             }
@@ -548,6 +582,7 @@ struct TransitionDetailView: View {
         case "CUT_A_FADE_IN_B":  return .orange
         case "FADE_OUT_A_CUT_B": return .yellow
         case "STEM_MIX":         return .mint
+        case "DROP_MIX":         return .pink
         default:                 return .secondary
         }
     }
@@ -559,6 +594,7 @@ struct TransitionDetailView: View {
         case "energy-down":  return .blue
         case "gentle":       return .mint
         case "stem-mix":     return .teal
+        case "drop-mix":     return .pink
         case "normal":       return .green
         default:             return .secondary
         }
