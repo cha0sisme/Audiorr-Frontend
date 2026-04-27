@@ -61,6 +61,11 @@ struct TransitionDiagnosticsView: View {
                     } label: {
                         Label("Clear Log", systemImage: "trash")
                     }
+                    Button(role: .destructive) {
+                        diag.deleteLog()
+                    } label: {
+                        Label("Delete Log File", systemImage: "trash.slash")
+                    }
                 } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
@@ -343,6 +348,12 @@ struct TransitionDiagnosticsView: View {
                 diag.clearLog()
             } label: {
                 Label("Clear Log", systemImage: "trash")
+            }
+
+            Button(role: .destructive) {
+                diag.deleteLog()
+            } label: {
+                Label("Delete Log File", systemImage: "trash.slash")
             }
         }
     }

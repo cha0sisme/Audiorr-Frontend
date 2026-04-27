@@ -581,6 +581,17 @@ final class TransitionDiagnostics {
         history.removeAll()
     }
 
+    /// Delete the log file entirely from disk.
+    func deleteLog() {
+        try? FileManager.default.removeItem(at: logFileURL)
+        history.removeAll()
+    }
+
+    /// Log file size in bytes (0 if missing).
+    var logFileSize: Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: logFileURL.path)[.size] as? Int64) ?? 0
+    }
+
     /// Copy log contents to clipboard.
     func copyLogToClipboard() {
         UIPasteboard.general.string = readLog()
