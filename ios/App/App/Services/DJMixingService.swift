@@ -213,6 +213,9 @@ enum DJMixingService {
         let isIntroInstrumental: Bool
         let danceability: Double
         let skipBFilters: Bool
+        // DJ effects (Sprint 1)
+        let useBassKill: Bool
+        let useDynamicQ: Bool
         let transitionReason: String
         /// Trigger bias: how many seconds earlier (negative) or later (positive) the trigger
         /// should fire relative to the default "latest possible" position.
@@ -487,6 +490,15 @@ enum DJMixingService {
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
 
+        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance) ──
+        let isEnergyDown = profile.energyB < profile.energyA - 0.2
+        let djEffects = decideDJEffects(
+            profile: profile,
+            transitionType: transition.type,
+            fadeDuration: fade.duration,
+            isEnergyDown: isEnergyDown
+        )
+
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
             fadeDuration: fade.duration,
@@ -512,6 +524,8 @@ enum DJMixingService {
             isIntroInstrumental: introInstrumental,
             danceability: profile.avgDanceability,
             skipBFilters: skipBFilters,
+            useBassKill: djEffects.useBassKill,
+            useDynamicQ: djEffects.useDynamicQ,
             transitionReason: transition.reason,
             triggerBias: trigger.bias,
             triggerBiasReason: trigger.reason
@@ -1263,6 +1277,72 @@ enum DJMixingService {
 
         let reason = reasons.isEmpty ? "DJ filters OFF" : "DJ filters ON: \(reasons.joined(separator: ", "))"
         return DJFilterResult(useMidScoop: useMidScoop, useHighShelfCut: useHighShelf, reason: reason)
+    }
+
+    // MARK: - DJ Effects Decision (Bass Kill + Dynamic Q)
+
+    struct DJEffectsResult {
+        let useBassKill: Bool
+        let useDynamicQ: Bool
+        let reason: String
+    }
+
+    /// Decide whether to activate DJ effects based on the transition profile.
+    /// Both effects are conservative: they only activate when conditions guarantee
+    /// they'll sound good and won't interfere with the transition quality.
+    static func decideDJEffects(
+        profile: TransitionProfile,
+        transitionType: TransitionType,
+        fadeDuration: Double,
+        isEnergyDown: Bool
+    ) -> DJEffectsResult {
+        var useBassKill = false
+        var useDynamicQ = false
+        var reasons: [String] = []
+
+        // ── Bass Kill: instant low-frequency cut at bassSwapTime ──
+        // Requirements:
+        //   1. Transition character is punch or dramatic-up (groove-driven, intentional)
+        //   2. BPM is trusted (so bassSwapTime is accurate)
+        //   3. Danceability > 0.5 (bass-driven music benefits from the kill)
+        //   4. Not a CUT/NATURAL_BLEND (too short or too invisible)
+        //   5. Fade is long enough for the effect to register (>4s)
+        let bassKillCompatibleType: Bool
+        switch transitionType {
+        case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB:
+            bassKillCompatibleType = true
+        case .cut, .naturalBlend:
+            bassKillCompatibleType = false
+        }
+
+        if bassKillCompatibleType
+            && profile.bpmTrusted
+            && profile.avgDanceability > 0.5
+            && fadeDuration > 4.0
+            && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow == .energyUp)) {
+            useBassKill = true
+            reasons.append("bassKill: dance=\(String(format: "%.2f", profile.avgDanceability)) bpmOK")
+        }
+
+        // ── Dynamic Q Resonance: bell-shaped Q sweep on highpass ──
+        // Requirements:
+        //   1. Not energy-down (uses lowpass, not highpass)
+        //   2. Fade > 4s (sweep needs time for resonance to be audible)
+        //   3. Character is punch or dramatic (not minimal/smooth — those should be invisible)
+        //   4. Danceability > 0.45 (filter sweeps are a club/DJ technique)
+        if !isEnergyDown
+            && fadeDuration > 4.0
+            && profile.avgDanceability > 0.45
+            && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow != .energyDown)) {
+            useDynamicQ = true
+            reasons.append("dynQ: dance=\(String(format: "%.2f", profile.avgDanceability)) fade=\(String(format: "%.1f", fadeDuration))s")
+        }
+
+        let reason = reasons.isEmpty
+            ? "DJ effects OFF"
+            : "DJ effects ON: \(reasons.joined(separator: ", "))"
+        print("[DJMixingService] \(reason)")
+        return DJEffectsResult(useBassKill: useBassKill, useDynamicQ: useDynamicQ, reason: reason)
     }
 
     // MARK: - Anticipation

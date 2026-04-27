@@ -917,7 +917,9 @@ final class QueueManager: AudioEngineDelegate {
                     isOutroInstrumental: crossfadeResult.isOutroInstrumental,
                     isIntroInstrumental: crossfadeResult.isIntroInstrumental,
                     danceability: crossfadeResult.danceability,
-                    skipBFilters: crossfadeResult.skipBFilters
+                    skipBFilters: crossfadeResult.skipBFilters,
+                    useBassKill: crossfadeResult.useBassKill,
+                    useDynamicQ: crossfadeResult.useDynamicQ
                 )
 
                 // Publish transition reason to diagnostics
@@ -970,7 +972,9 @@ final class QueueManager: AudioEngineDelegate {
                         isOutroInstrumental: config.isOutroInstrumental,
                         isIntroInstrumental: config.isIntroInstrumental,
                         danceability: config.danceability,
-                        skipBFilters: config.skipBFilters
+                        skipBFilters: config.skipBFilters,
+                        useBassKill: config.useBassKill,
+                        useDynamicQ: config.useDynamicQ
                     )
                 } else {
                     finalConfig = config

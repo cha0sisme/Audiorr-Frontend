@@ -73,6 +73,9 @@ class CrossfadeExecutor {
         let isIntroInstrumental: Bool   // B's intro is instrumental — skip mid-scoop
         let danceability: Double        // High = preserve bass/groove (less aggressive HPF/lowshelf)
         let skipBFilters: Bool          // Short outro/fade — B enters clean (no highpass/lowshelf)
+        // DJ effects (Sprint 1)
+        let useBassKill: Bool           // Instant bass cut at bassSwapTime (DJ bass kill fader)
+        let useDynamicQ: Bool           // Bell-shaped Q resonance sweep on highpass
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -83,7 +86,8 @@ class CrossfadeExecutor {
              downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = [],
              useMidScoop: Bool = false, useHighShelfCut: Bool = false,
              isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
-             danceability: Double = 0.5, skipBFilters: Bool = false) {
+             danceability: Double = 0.5, skipBFilters: Bool = false,
+             useBassKill: Bool = false, useDynamicQ: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -106,6 +110,8 @@ class CrossfadeExecutor {
             self.isIntroInstrumental = isIntroInstrumental
             self.danceability = danceability
             self.skipBFilters = skipBFilters
+            self.useBassKill = useBassKill
+            self.useDynamicQ = useDynamicQ
         }
     }
 
@@ -354,13 +360,20 @@ class CrossfadeExecutor {
         hasBeatData = config.beatIntervalA > 0 || config.beatIntervalB > 0
         bassSwapTime = Self.computeBassSwapTime(config: config, timings: timings)
 
-        // Pre-compute DJ filter flags so diagnostics reflect the final state
+        // Pre-compute ALL effect flags so diagnostics/logging reflect the final state.
+        // These are also set in setupInitialEQ() but we need them here for the log below.
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
         useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
+        let useLowpass = preset.lowpassA != nil
+        let hasBassManagement = preset.lowshelfA != nil ||
+            config.transitionType == .beatMatchBlend || config.transitionType == .eqMix || config.transitionType == .stemMix
+        useBassKill = config.useBassKill && hasBassManagement && preset.lowshelfA != nil
+        useDynamicQ = config.useDynamicQ && !useLowpass
 
         // Log
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
-        let djDesc = [useMidScoop ? "midScoop" : nil, useHighShelfCut ? "hiShelf" : nil]
+        let djDesc = [useMidScoop ? "midScoop" : nil, useHighShelfCut ? "hiShelf" : nil,
+                      useBassKill ? "bassKill" : nil, useDynamicQ ? "dynQ" : nil]
             .compactMap { $0 }.joined(separator: "+")
         let analysisDesc = [config.isOutroInstrumental ? "outroInst" : nil,
                            config.isIntroInstrumental ? "introInst" : nil,
@@ -731,6 +744,10 @@ class CrossfadeExecutor {
     private var useMidScoop: Bool = false
     /// Whether high-shelf cut is active on A (hi-hat/cymbal cleanup).
     private var useHighShelfCut: Bool = false
+    /// Whether Bass Kill DJ effect is active (instant low-frequency cut at bassSwapTime).
+    private var useBassKill: Bool = false
+    /// Whether Dynamic Q Resonance is active (bell-shaped Q sweep on highpass Band 0).
+    private var useDynamicQ: Bool = false
     /// Danceability scaling factor for bass filters (0.5–1.0).
     /// High danceability → less aggressive bass cut to preserve groove.
     private var danceabilityBassScale: Float = 1.0
@@ -761,6 +778,9 @@ class CrossfadeExecutor {
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
         // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup) ──
         useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
+        // ── DJ effects: Bass Kill + Dynamic Q Resonance ──
+        useBassKill = config.useBassKill && useBassManagement && preset.lowshelfA != nil
+        useDynamicQ = config.useDynamicQ && !useLowpassA  // Only with highpass sweep, not lowpass
 
         // ── Compute initial biquad coefficients for A ──
         let band0A: BiquadCoefficients
@@ -1233,26 +1253,63 @@ class CrossfadeExecutor {
                 let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
                 freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
-            band0A = BiquadCoefficientCalculator.highpass(frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
+            // Dynamic Q Resonance: bell-shaped Q curve that peaks mid-crossfade.
+            // Creates the classic DJ "sweeping filter" resonance at the cutoff frequency.
+            // Q rises from the preset's base Q to a peak (3.5) and back down.
+            // Hard-clamped at 4.0 to prevent filter instability/self-oscillation.
+            let qValue: Float
+            if useDynamicQ, totalFilterDur > 0 {
+                let qProgress = Float((t - timings.filterStartTime) / totalFilterDur)
+                // Gaussian bell: center at 55% of crossfade, width 30% — peaks during
+                // the most active filter sweep phase (around pivotTime).
+                let bellCenter: Float = 0.55
+                let bellWidth: Float = 0.30
+                let exponent = -powf((qProgress - bellCenter) / bellWidth, 2) / 2.0
+                // Clamp exponent to avoid expf underflow on extreme values
+                let bellValue = expf(max(-10, exponent))
+                let baseQ = preset.highpassA.q
+                let peakQ: Float = 3.5
+                qValue = min(4.0, baseQ + (peakQ - baseQ) * bellValue)
+            } else {
+                qValue = preset.highpassA.q
+            }
+            band0A = BiquadCoefficientCalculator.highpass(frequency: freqA, sampleRate: sampleRate, Q: qValue)
         }
         diagFreqA = freqA
 
-        // ── Band 1: Bass swap lowshelf ──
+        // ── Band 1: Bass swap lowshelf (or Bass Kill) ──
         var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
             let filterDur = timings.transitionEndTime - timings.filterStartTime
             if filterDur > 0 {
-                let scaledMidGain = lsA.midGain * danceabilityBassScale
-                let scaledEndGain = lsA.endGain * danceabilityBassScale
                 var lsGain: Float
-                if t < bassSwapTime {
-                    let preDur = bassSwapTime - timings.filterStartTime
-                    let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
-                    lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
+                if useBassKill {
+                    // Bass Kill: hold at natural level, then instant cut at bassSwapTime.
+                    // 100ms anti-click ramp — imperceptible but prevents clicks/pops
+                    // from abrupt coefficient changes in the biquad delay line.
+                    let killRampDuration: Double = 0.1
+                    let killDepth: Float = -60.0  // effectively silence below shelf freq
+                    if t < bassSwapTime {
+                        lsGain = lsA.startGain  // 0dB — full bass until the kill
+                    } else if t < bassSwapTime + killRampDuration {
+                        let rampP = Float((t - bassSwapTime) / killRampDuration)
+                        lsGain = linInterp(lsA.startGain, killDepth, rampP)
+                    } else {
+                        lsGain = killDepth  // -60dB — bass is dead
+                    }
                 } else {
-                    let postDur = timings.transitionEndTime - bassSwapTime
-                    let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
-                    lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
+                    // Standard gradual bass swap
+                    let scaledMidGain = lsA.midGain * danceabilityBassScale
+                    let scaledEndGain = lsA.endGain * danceabilityBassScale
+                    if t < bassSwapTime {
+                        let preDur = bassSwapTime - timings.filterStartTime
+                        let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
+                        lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
+                    } else {
+                        let postDur = timings.transitionEndTime - bassSwapTime
+                        let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
+                        lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
+                    }
                 }
                 diagLsGainA = lsGain
                 band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain)
@@ -1323,6 +1380,20 @@ class CrossfadeExecutor {
                 hpFreq = preset.highpassB.endFreq
                 lsGain = preset.lowshelfB.endGain
             }
+            // Bass Kill override: even with anticipation, B's bass must stay held
+            // until the kill moment. Without this, anticipation gradually opens B's
+            // lowshelf while A still has full bass → bass pile-up before the kill.
+            if useBassKill {
+                let killRampDuration: Double = 0.1
+                if t < bassSwapTime {
+                    lsGain = preset.lowshelfB.startGain
+                } else if t < bassSwapTime + killRampDuration {
+                    let rampP = Float((t - bassSwapTime) / killRampDuration)
+                    lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, rampP)
+                } else {
+                    lsGain = preset.lowshelfB.endGain
+                }
+            }
         } else {
             guard t >= timings.fadeInStartTime else { return }
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
@@ -1330,9 +1401,25 @@ class CrossfadeExecutor {
             let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
             hpFreq = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
             if useBassManagement {
-                let bassDur = bassSwapTime - timings.fadeInStartTime
-                let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
-                lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, bassP)
+                if useBassKill {
+                    // Bass Kill coordination: B keeps bass filtered (startGain, e.g. -8dB)
+                    // until bassSwapTime, then opens instantly via same 100ms ramp.
+                    // This prevents bass pile-up: A has full bass + B with partial bass
+                    // would create excess low-end before the kill moment.
+                    let killRampDuration: Double = 0.1
+                    if t < bassSwapTime {
+                        lsGain = preset.lowshelfB.startGain  // held filtered
+                    } else if t < bassSwapTime + killRampDuration {
+                        let rampP = Float((t - bassSwapTime) / killRampDuration)
+                        lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, rampP)
+                    } else {
+                        lsGain = preset.lowshelfB.endGain  // 0dB — B bass fully open
+                    }
+                } else {
+                    let bassDur = bassSwapTime - timings.fadeInStartTime
+                    let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
+                    lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, bassP)
+                }
             } else {
                 lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, p)
             }
