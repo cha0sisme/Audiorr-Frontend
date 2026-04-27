@@ -583,11 +583,21 @@ enum DJMixingService {
             // so the listener hears the song's "real start."
             let baseEntry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
 
-            // Prefer entering after the intro if the intro is long enough to matter
-            if next.hasIntroData && next.introEndTime > baseEntry + 3 {
-                entryPoint = next.introEndTime
-            } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < 25 {
-                // Chorus as fallback when intro data isn't useful
+            // Vocal-aware entry reference: prefer actual vocal/energy onset
+            // over ML-derived introEndTime (which can report 40-60s for
+            // songs with immediate vocals — it detects "dense section start").
+            // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
+            let entryRef: Double = {
+                if next.vocalStartTime > 0 { return next.vocalStartTime }
+                if let h = next.introEndTimeHeuristic, h > 0 { return h }
+                if let first = next.speechSegments.first, first.start > 0 { return first.start }
+                if next.hasIntroData { return next.introEndTime }
+                return 0
+            }()
+            if entryRef > baseEntry + 3 {
+                entryPoint = entryRef
+            } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < bufferDuration * 0.25 {
+                // Chorus as fallback — capped at 25% of song to avoid entering too deep
                 entryPoint = next.chorusStartTime
             } else {
                 entryPoint = baseEntry
@@ -655,9 +665,17 @@ enum DJMixingService {
         bufferDuration: Double,
         config: MixModeConfig
     ) -> Double {
-        let introEnd = next.introEndTime
         let vocalStart = next.vocalStartTime
         let chorusStart = next.chorusStartTime
+
+        // Vocal-aware entry reference (same chain as smooth/punch)
+        let entryRef: Double = {
+            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let h = next.introEndTimeHeuristic, h > 0 { return h }
+            if let first = next.speechSegments.first, first.start > 0 { return first.start }
+            if next.hasIntroData { return next.introEndTime }
+            return 0
+        }()
 
         switch profile.energyFlow {
         case .energyUp:
@@ -669,8 +687,8 @@ enum DJMixingService {
             } else if vocalStart > 3 {
                 print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalStart))s")
                 return vocalStart
-            } else if next.hasIntroData && introEnd > 3 {
-                return introEnd
+            } else if entryRef > 3 {
+                return entryRef
             } else {
                 return min(config.fallbackMaxSeconds, bufferDuration * 0.03)
             }
@@ -686,8 +704,8 @@ enum DJMixingService {
             // Harmonic clash with steady energy: moderate entry, avoid extending overlap.
             if vocalStart > 3 {
                 return vocalStart
-            } else if next.hasIntroData && introEnd > 3 {
-                return introEnd
+            } else if entryRef > 3 {
+                return entryRef
             } else {
                 return min(config.fallbackMaxSeconds, bufferDuration * 0.02)
             }
@@ -718,16 +736,18 @@ enum DJMixingService {
 
         var entry: Double
 
-        // ── Cross-validate vocalStartTime against early speech/vocal data ──
-        // If speech segments show vocals in the first 10s, but backend says vocalStart is
-        // way later, the backend value is unreliable (it may be detecting a different vocal
-        // section, not the first occurrence). Only trust vocalStart for entry logic when
-        // the intro is genuinely instrumental.
-        let hasEarlyVocals = next.hasIntroVocals ||
-            next.speechSegments.contains(where: { $0.start < 10 })
-        let introIsInstrumental = !hasEarlyVocals
-        // vocalStart is only reliable for "enter before vocals" if the intro is truly
-        // instrumental, OR if the value is reasonably small (< 20s).
+        // ── Vocal-aware entry reference: when B's "real content" starts ──
+        // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
+        // introEndTime from ML can report 40-60s for songs with immediate vocals.
+        // introEndTimeHeuristic (percussive/energy detector) is more reliable.
+        let entryReference: Double = {
+            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let h = next.introEndTimeHeuristic, h > 0 { return h }
+            if let first = next.speechSegments.first, first.start > 0 { return first.start }
+            if next.hasIntroData { return next.introEndTime }
+            return 0
+        }()
+        let introIsInstrumental = entryReference > 8.0
         let vocalStartReliable = vocalStart > 0 && (introIsInstrumental || vocalStart < 20)
 
         // ── Vocal overlap avoidance: if both songs have vocals, prefer entering B
@@ -745,35 +765,40 @@ enum DJMixingService {
         }
 
         // ── Style affinity modulates how aggressively we target ──
-        // High affinity (>0.7): same genre feel — aggressive targeting (chorus, introEnd)
-        // Medium affinity (0.4-0.7): compatible — moderate targeting (vocalStart, introEnd)
+        // High affinity (>0.7): same genre feel — aggressive targeting
+        // Medium affinity (0.4-0.7): compatible — moderate targeting
         // Low affinity (<0.4): would have been .smooth, shouldn't reach here
+        //
+        // NOTE: entryReference (vocal-aware) replaces raw introEnd for entry
+        // assignment. introEnd from the ML model can report 40-60s for songs
+        // with immediate vocals. entryReference uses the fallback chain:
+        // vocalStartTime → speechSegments[0] → introEndTime.
 
         if profile.styleAffinity > 0.7 {
             // Same "world" — go for the most impactful entry
             if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalStart
-            } else if hasReliableIntro && !introVocalDiverge {
-                entry = introEnd
+            } else if entryReference > 3 && !introVocalDiverge {
+                entry = entryReference
             } else if chorusStart > 4 {
                 entry = chorusStart
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalStart
-            } else if hasReliableIntro {
-                entry = introEnd
+            } else if entryReference > 3 {
+                entry = entryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
             }
         } else {
-            // Moderate affinity — less aggressive, prefer introEnd over chorus
-            if hasReliableIntro && !introVocalDiverge {
-                entry = introEnd
+            // Moderate affinity — less aggressive
+            if entryReference > 3 && !introVocalDiverge {
+                entry = entryReference
             } else if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalStart
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalStart
-            } else if hasReliableIntro {
-                entry = introEnd
+            } else if entryReference > 3 {
+                entry = entryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
             }
@@ -1767,7 +1792,9 @@ enum DJMixingService {
         return false
     }
 
-    /// Detect if B's intro is instrumental in the actual entry zone.
+    /// Detect if B's intro is instrumental in the actual entry/fade zone.
+    /// Uses the same vocal-aware reference as entry point calculation:
+    /// vocalStartTime → speechSegments[0] → backend flags.
     private static func detectIntroInstrumental(
         nextAnalysis: SongAnalysis?,
         profile: TransitionProfile,
@@ -1777,16 +1804,26 @@ enum DJMixingService {
         guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
         let bEnd = entryPoint + fadeDuration
 
-        if nxt.hasVocalData && nxt.hasEnergyProfile && !nxt.hasIntroVocals {
-            if nxt.vocalStartTime > 0 && nxt.vocalStartTime <= bEnd {
-                print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalStart (\(String(format: "%.1f", nxt.vocalStartTime))s) is within fade zone")
+        // Vocal onset: when B's vocals actually start
+        let vocalOnset: Double = {
+            if nxt.vocalStartTime > 0 { return nxt.vocalStartTime }
+            if let first = nxt.speechSegments.first, first.start > 0 { return first.start }
+            return 0
+        }()
+
+        if vocalOnset > 0 {
+            if vocalOnset <= bEnd {
+                if nxt.hasVocalData && !nxt.hasIntroVocals {
+                    print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalOnset (\(String(format: "%.1f", vocalOnset))s) is within fade zone")
+                }
                 return false
             }
             return true
-        } else if nxt.vocalStartTime > bEnd {
+        }
+
+        // No vocal timing data — fall back to backend flags
+        if nxt.hasVocalData && nxt.hasEnergyProfile && !nxt.hasIntroVocals {
             return true
-        } else if !nxt.speechSegments.isEmpty {
-            return !nxt.speechSegments.contains { $0.start < bEnd && $0.end > entryPoint }
         }
         return false
     }

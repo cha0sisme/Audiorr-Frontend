@@ -185,6 +185,8 @@ actor AnalysisCacheService {
     }
 
     /// Get analysis for a song, fetching from backend if not cached.
+    /// When the cached result lacks speechSegments, a background re-fetch
+    /// updates the cache for future crossfades (stale-while-revalidate).
     func getAnalysis(songId: String, streamURL: URL?) async -> AnalysisResult? {
         // Memory cache
         if let cached = memoryCache[songId] {
