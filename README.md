@@ -16,7 +16,7 @@
 
 ---
 
-Audiorr is a fully native iOS music player built on [Navidrome](https://www.navidrome.org/) (Subsonic-compatible). It features a custom real-time DSP pipeline written entirely in Swift — 4 cascaded biquad filters per channel with lock-free coefficient passing, beat-aligned bass management, DJ effects, and 8 transition algorithms — all running on CoreAudio's render thread at sample-level precision.
+Audiorr is a fully native iOS music player built on [Navidrome](https://www.navidrome.org/) (Subsonic-compatible). It features a custom real-time DSP pipeline written entirely in Swift — 4 cascaded biquad filters per channel with lock-free coefficient passing, beat-aligned bass management, DJ effects, and 9 transition algorithms — all running on CoreAudio's render thread at sample-level precision.
 
 ## Standalone vs Bundle
 
@@ -26,7 +26,7 @@ Audiorr ships in two configurations:
 |---|---|---|
 | **Requires** | Any Navidrome/Subsonic server | Navidrome + Audiorr Backend (Node.js) |
 | **Audio engine** | Full native DSP pipeline | Same |
-| **Crossfade** | DJ-grade with 8 transition types | Same + backend audio analysis (BPM, key, energy, vocals, structure) |
+| **Crossfade** | DJ-grade with 9 transition types | Same + backend audio analysis (BPM, key, energy, vocals, structure) |
 | **Smart Mix** | -- | v3.0 "Harmonic Flow" playlist reordering |
 | **Daily Mixes** | -- | 5 personalized mixes |
 | **Multi-device sync** | -- | Audiorr Connect (Socket.io) |
@@ -144,9 +144,9 @@ Pure analysis engine — no side effects, no audio. Computes the optimal transit
 | Decision | Data Used | Output |
 |----------|-----------|--------|
 | **Entry point** | `introEndTime`, `chorusStartTime`, `vocalStartTime`, `phraseBoundaries`, `downbeatTimes` | Where B starts playing |
-| **Fade duration** | `outroStartTime`, `backendFadeInDuration`, energy profile, style affinity | 2-15s adaptive |
-| **Transition type** | BPM relationship, energy flow, vocal overlap risk, harmonic compatibility | 1 of 8 types |
-| **Filter preset** | Energy direction, instrumental detection, danceability | 1 of 6 presets |
+| **Fade duration** | `outroStartTime`, `backendFadeInDuration`, energy profile, style affinity, intro cap (B intro × 0.85), outro vocal shortening | 2-15s adaptive |
+| **Transition type** | BPM relationship, energy flow, vocal overlap risk, harmonic compatibility | 1 of 9 types |
+| **Filter preset** | Energy direction, instrumental detection, danceability | 1 of 7 presets |
 | **Bass swap timing** | `downbeatTimesB`, `beatIntervalB`, transition type | Downbeat-aligned wall-clock time |
 | **DJ effects** | `bpmConfidence`, `danceability`, character, energy flow | Bass Kill, Dynamic Q on/off |
 | **Time-stretch** | BPM diff (harmonic-normalized), confidence, max 8% rate change | A and B rates |
@@ -164,7 +164,7 @@ The A-B relationship is captured as a `TransitionProfile` — computed once, dri
 - **Style Affinity**: 0-1 composite (BPM 35%, energy 25%, harmony 25%, danceability 15%)
 - **Character**: punch / smooth / dramatic / minimal — determines the transition's personality
 
-#### 8 Transition Types
+#### 9 Transition Types
 
 | Type | Volume Curve A | Volume Curve B | When |
 |------|---------------|----------------|------|
@@ -176,8 +176,9 @@ The A-B relationship is captured as a `TransitionProfile` — computed once, dri
 | `CUT_A_FADE_IN_B` | Hold 85% to 45%, exponential drop | S-curve ease | A abrupt ending |
 | `FADE_OUT_A_CUT_B` | Hold full to 75%, exponential drop | Late firm entry at 55% | B abrupt start |
 | `STEM_MIX` | Hold 95% to 75%, fast exit | Filtered to vocals/mids, late ramp | Vocal overlap + beat sync |
+| `DROP_MIX` | Short hold (80% at 30%), fast exponential exit | Fast S-curve, full by 60% | Hip hop/R&B drops, short B intro |
 
-#### 6 Filter Presets
+#### 7 Filter Presets
 
 | Preset | HPF A Sweep | Lowshelf A | Mid Scoop | Hi-Shelf | When |
 |--------|------------|------------|-----------|----------|------|
@@ -187,8 +188,11 @@ The A-B relationship is captured as a `TransitionProfile` — computed once, dri
 | **Energy-Down** | Bypassed (40 Hz) | 0 -> -4 -> -10 dB | 1.5 kHz, -8 dB | None (LPF handles) | B less energetic than A |
 | **Gentle** | 60 -> 150 -> 300 Hz, Q 0.5 | 0 -> -4 -> -8 dB | 1.5 kHz, -6 dB | 8 kHz, -4 dB | NATURAL_BLEND |
 | **Stem Mix** | 200 -> 1.5k -> 6k Hz, Q 1.0 | 0 -> -12 -> -20 dB | 1.5 kHz, -14 dB | 8 kHz, -10 dB | STEM_MIX |
+| **Drop Mix** | 600 -> 3k -> 6k Hz, Q 1.3 | 0 -> -14 -> -22 dB | 1.5 kHz, -14 dB | 8 kHz, -10 dB | DROP_MIX (B enters clean) |
 
 Energy-Down uses a **lowpass sweep** (20 kHz -> 800 Hz) on Band 0 instead of highpass — the outgoing song "goes dark" instead of thinning out.
+
+Drop Mix uses the most aggressive HPF sweep (Q 1.3, resonant) with deep bass cut (-22 dB). B enters with **all filters bypassed** (`skipBFilters`) — clean and full from frame one. Designed for hip hop/R&B where B's intro is short (<12s) and needs to hit immediately without any filter ramp-up.
 
 ### Additional Audio Features (Standalone)
 
@@ -209,7 +213,7 @@ Energy-Down uses a **lowpass sweep** (20 kHz -> 800 Hz) on Band 0 instead of hig
 
 #### Playback
 - Native AVAudioEngine dual-player pipeline with custom DSP
-- Gapless crossfade with 8 transition algorithms and 6 filter presets
+- Gapless crossfade with 9 transition algorithms and 7 filter presets
 - DJ effects: Bass Kill (beat-synced instant low cut) + Dynamic Q Resonance (filter sweep with bell-shaped Q)
 - Beat-aligned bass swap on actual downbeats
 - ReplayGain v2 / EBU R128 normalization with True Peak limiter
