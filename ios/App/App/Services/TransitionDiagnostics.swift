@@ -8,8 +8,8 @@ import AVFoundation
 @MainActor @Observable
 final class TransitionDiagnostics {
 
-    /// When false, diagnostics data is not collected and the UI section is hidden.
-    /// Set to true for internal debug builds only.
+    /// When false, diagnostics data is not collected and detail views are hidden.
+    /// The settings section itself is gated by BackendState.isAvailable.
     nonisolated(unsafe) static var debugModeEnabled = true
 
     static let shared = TransitionDiagnostics()
