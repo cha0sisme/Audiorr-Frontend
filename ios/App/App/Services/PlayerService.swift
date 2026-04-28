@@ -23,7 +23,7 @@ final class PlayerService {
 
     // MARK: - Playback Context (feeds Jump Back In / wrapped stats)
 
-    /// Current playback context — e.g. "playlist:abc123", "album:xyz", "smartmix:abc123"
+    /// Current playback context — e.g. "playlist:abc123", "album:xyz"
     private(set) var currentContextUri: String?
     /// Human-readable name of the current context.
     private(set) var currentContextName: String?
@@ -138,9 +138,9 @@ final class PlayerService {
             ConnectService.shared.sendRemotePlaylist(mix, startIndex: 0)
             return
         }
-        currentContextUri = "smartmix:\(playlistId)"
-        currentContextName = playlistName ?? "SmartMix"
-        QueueManager.shared.play(songs: mix, startIndex: 0)
+        currentContextUri = "playlist:\(playlistId)"
+        currentContextName = playlistName
+        QueueManager.shared.play(songs: mix, startIndex: startIdx)
     }
 
     func updateSmartMixStatus(playlistId: String, status: String) {

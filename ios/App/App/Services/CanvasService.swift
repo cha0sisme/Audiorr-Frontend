@@ -16,6 +16,8 @@ final class CanvasService {
 
     // In-memory cache: songId → resolved URL (nil = confirmed no canvas)
     private var cache: [String: URL?] = [:]
+    private var cacheOrder: [String] = [] // insertion order for FIFO eviction
+    private let maxCacheSize = 200
     // Pending fetches to avoid duplicate requests
     private var pending: [String: Task<URL?, Never>] = [:]
 
@@ -42,6 +44,15 @@ final class CanvasService {
         pending[songId] = task
         let result = await task.value
         pending[songId] = nil
+
+        // FIFO eviction when cache is full
+        if cache[songId] == nil { // new entry, not an update
+            if cacheOrder.count >= maxCacheSize, let oldest = cacheOrder.first {
+                cacheOrder.removeFirst()
+                cache.removeValue(forKey: oldest)
+            }
+            cacheOrder.append(songId)
+        }
         cache[songId] = result
 
         if let url = result { return classify(url) }

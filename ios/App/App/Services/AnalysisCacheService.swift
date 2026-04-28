@@ -171,6 +171,9 @@ actor AnalysisCacheService {
 
     // MARK: - Get Analysis
 
+    /// Track songs already queued for speechSegments revalidation (prevent repeated re-fetches).
+    private var revalidatingIds: Set<String> = []
+
     /// Instant cache-only lookup (memory + disk). No network requests.
     func getCachedAnalysis(songId: String) -> AnalysisResult? {
         if let cached = memoryCache[songId] { return cached }
@@ -182,15 +185,19 @@ actor AnalysisCacheService {
     }
 
     /// Get analysis for a song, fetching from backend if not cached.
+    /// When the cached result lacks speechSegments, a background re-fetch
+    /// updates the cache for future crossfades (stale-while-revalidate).
     func getAnalysis(songId: String, streamURL: URL?) async -> AnalysisResult? {
         // Memory cache
         if let cached = memoryCache[songId] {
+            revalidateSpeechSegmentsIfNeeded(songId: songId, cached: cached, streamURL: streamURL)
             return cached
         }
 
         // Disk cache
         if let disk = loadFromDisk(songId: songId) {
             memoryCache[songId] = disk
+            revalidateSpeechSegmentsIfNeeded(songId: songId, cached: disk, streamURL: streamURL)
             return disk
         }
 
@@ -223,7 +230,10 @@ actor AnalysisCacheService {
     /// for future calls or Phase 2 recalculation.
     func getAnalysisWithTimeout(songId: String, streamURL: URL?, timeout: TimeInterval) async -> AnalysisResult? {
         // Instant cache hit (memory + disk)
-        if let cached = getCachedAnalysis(songId: songId) { return cached }
+        if let cached = getCachedAnalysis(songId: songId) {
+            revalidateSpeechSegmentsIfNeeded(songId: songId, cached: cached, streamURL: streamURL)
+            return cached
+        }
         guard let streamURL else { return nil }
 
         // Ensure backend fetch is running (deduped via inFlightTasks).
@@ -389,6 +399,37 @@ actor AnalysisCacheService {
         } catch {
             print("[AnalysisCacheService] Fetch failed for \(songId): \(error)")
             return nil
+        }
+    }
+
+    // MARK: - Speech Segments Revalidation
+
+    /// Stale-while-revalidate: if a cached result has empty speechSegments,
+    /// trigger a background re-fetch from backend (which now populates them via v2 detector).
+    /// Returns the stale cache immediately; the refreshed data is available on next access.
+    private func revalidateSpeechSegmentsIfNeeded(songId: String, cached: AnalysisResult, streamURL: URL?) {
+        // Already has speech segments — nothing to do
+        if let segs = cached.speechSegments, !segs.isEmpty { return }
+        // No stream URL — can't re-fetch
+        guard let streamURL else { return }
+        // Already revalidating or fetching this song
+        guard !revalidatingIds.contains(songId), inFlightTasks[songId] == nil else { return }
+
+        revalidatingIds.insert(songId)
+        print("[AnalysisCacheService] Revalidating speechSegments for \(songId)")
+
+        Task {
+            if let fresh = await fetchFromBackend(songId: songId, streamURL: streamURL) {
+                let hasNewSegments = fresh.speechSegments?.isEmpty == false
+                if hasNewSegments {
+                    memoryCache[songId] = fresh
+                    saveToDisk(songId: songId, result: fresh)
+                    print("[AnalysisCacheService] ✅ speechSegments refreshed for \(songId): \(fresh.speechSegments?.count ?? 0) segments")
+                } else {
+                    print("[AnalysisCacheService] speechSegments still empty for \(songId) — backend may not have backfilled yet")
+                }
+            }
+            revalidatingIds.remove(songId)
         }
     }
 

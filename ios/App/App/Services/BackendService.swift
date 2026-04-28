@@ -329,11 +329,19 @@ final class BackendService {
     func checkHealth() async -> Bool {
         guard let url = try? url("/api/health") else { return false }
         var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 5
-        return (try? await session.data(for: request)).map { _, r in
-            (r as? HTTPURLResponse)?.statusCode == 200
-        } ?? false
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
+        guard let (data, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200 else { return false }
+        // Validate service identity when field is present
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let service = json["service"] as? String {
+            return service == "audiorr"
+        }
+        // No service field → legacy backend, accept transitionally
+        // TODO(backend-v2.0): Return false here once all backends include service field.
+        return true
     }
 
     // MARK: - Private HTTP helpers

@@ -167,6 +167,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Task { @MainActor in
             QueueManager.shared.savePositionNow()
         }
+
+        // Release audio hardware when not playing — saves battery in background
+        if let engine = AudioEngineManager.shared, !engine.isPlaying {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            } catch {
+                print("[Audiorr] Failed to deactivate AVAudioSession on background: \(error)")
+            }
+        }
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {

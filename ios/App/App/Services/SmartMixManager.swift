@@ -187,6 +187,15 @@ final class SmartMixManager {
         var bpmConfidence: Double { analysis?.bpmConfidence ?? 1.0 }
         var bpmEssentia: Double? { analysis?.bpmEssentia }
 
+        /// BPM normalized to the DJ-standard 70-140 range.
+        /// Songs analyzed as double-time (>150) are halved; half-time (<70) doubled.
+        var perceivedBPM: Double {
+            let b = bpm
+            if b > 150 { return b / 2.0 }
+            if b < 70 { return b * 2.0 }
+            return b
+        }
+
         // ── Structure ──
         var chorusStructure: [AnalysisCacheService.AnalysisResult.StructureSegment]? { analysis?.chorusStructure ?? analysis?.structure }
 
@@ -286,8 +295,8 @@ final class SmartMixManager {
             guard song.analysis != nil else { continue }
             var score: Double = 0
 
-            // Comfortable BPM
-            let bpm = song.bpm
+            // Comfortable BPM (use perceived to handle half/double-time)
+            let bpm = song.perceivedBPM
             if bpm >= 80 && bpm <= 120 { score += 5 }
             if bpm >= 90 && bpm <= 110 { score += 3 }
 
@@ -345,9 +354,10 @@ final class SmartMixManager {
             if song.energy < 0.55 { score += 4 }
             if song.energy > 0.80 { score -= 20 }
 
-            // Comfortable/slow BPM
-            if song.bpm >= 70 && song.bpm <= 110 { score += 5 }
-            if song.bpm < 90 { score += 3 }
+            // Comfortable/slow BPM (use perceived to handle half/double-time)
+            let bpm = song.perceivedBPM
+            if bpm >= 70 && bpm <= 110 { score += 5 }
+            if bpm < 90 { score += 3 }
 
             // Low danceability is fine for closing
             if song.danceability < 0.50 { score += 3 }
@@ -675,7 +685,7 @@ final class SmartMixManager {
     // MARK: - BPM Arc (#10)
 
     private static func bpmArcPenalty(_ song: AnalyzedSong, _ index: Int, _ total: Int) -> Double {
-        let bpm = song.bpm
+        let bpm = song.perceivedBPM
         let progress = Double(index) / Double(total)
         var penalty: Double = 0
 

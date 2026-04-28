@@ -86,10 +86,10 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     var dailyMixes: [NavidromePlaylist] {
-        let user = currentUsername
+        guard let user = currentUsername else { return [] }
         return playlists.filter {
             $0.name.lowercased().hasPrefix("mix diario")
-            && (user == nil || $0.owner?.lowercased() == user)
+            && $0.owner?.lowercased() == user
         }
     }
 
@@ -98,12 +98,12 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     var userPlaylists: [NavidromePlaylist] {
-        let user = currentUsername
+        guard let user = currentUsername else { return [] }
         return playlists.filter { pl in
             !pl.name.lowercased().hasPrefix("mix diario")
             && pl.comment?.contains("Smart Playlist") != true
             && pl.comment?.contains("[Editorial]")    != true
-            && (user == nil || pl.owner?.lowercased() == user)
+            && pl.owner?.lowercased() == user
         }
     }
 

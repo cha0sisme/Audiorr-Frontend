@@ -190,10 +190,11 @@ struct SettingsView: View {
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
             vm.load()
-            if UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
+            if BackendState.shared.isAvailable,
+               UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
                 TransitionDiagnostics.debugModeEnabled = UserDefaults.standard.bool(forKey: "audiorr_diagnostics_enabled")
             }
-            if TransitionDiagnostics.debugModeEnabled {
+            if TransitionDiagnostics.debugModeEnabled && BackendState.shared.isAvailable {
                 backendURLOverride = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
             }
         }
@@ -363,8 +364,8 @@ struct SettingsView: View {
                 }
             }
 
-            // ── Transition Diagnostics ──
-            if TransitionDiagnostics.debugModeEnabled {
+            // ── Transition Diagnostics (backend-only) ──
+            if BackendState.shared.isAvailable {
                 settingsSection(header: "Diagnostics") {
                     settingsRow {
                         Toggle(isOn: Binding(

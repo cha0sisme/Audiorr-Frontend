@@ -185,6 +185,10 @@ struct TransitionDiagnosticsView: View {
                     color: diag.useMidScoop ? .orange : .secondary)
             diagRow("Hi-Shelf Cut", value: diag.useHighShelfCut ? "ACTIVE" : "Off",
                     color: diag.useHighShelfCut ? .orange : .secondary)
+            diagRow("Bass Kill", value: diag.useBassKill ? "ACTIVE" : "Off",
+                    color: diag.useBassKill ? .red : .secondary)
+            diagRow("Dynamic Q", value: diag.useDynamicQ ? "ACTIVE" : "Off",
+                    color: diag.useDynamicQ ? .cyan : .secondary)
             diagRow("B Filters", value: diag.skipBFilters ? "SKIPPED" : "Active",
                     color: diag.skipBFilters ? .yellow : .green)
         }
@@ -234,33 +238,48 @@ struct TransitionDiagnosticsView: View {
         Section("Real-time (1Hz)") {
             diagRow("Elapsed", value: String(format: "%.1fs / %.1fs", diag.elapsed, diag.fadeDuration))
 
-            // Volume bars
+            // Volume bars — plain rectangles, no ProgressView animation
             VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Vol A").font(.caption).frame(width: 40, alignment: .leading)
-                    ProgressView(value: Double(diag.volumeA), total: 1.0)
-                        .tint(.red)
-                    Text(String(format: "%.3f", diag.volumeA))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 50, alignment: .trailing)
-                }
-                HStack {
-                    Text("Vol B").font(.caption).frame(width: 40, alignment: .leading)
-                    ProgressView(value: Double(diag.volumeB), total: 1.0)
-                        .tint(.green)
-                    Text(String(format: "%.3f", diag.volumeB))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 50, alignment: .trailing)
-                }
+                volumeBar(label: "Vol A", value: diag.volumeA, color: .red)
+                volumeBar(label: "Vol B", value: diag.volumeB, color: .green)
             }
 
             diagRow("Master Vol", value: String(format: "%.2f", diag.masterVolume))
             diagRow("HP Freq A", value: String(format: "%.0f Hz", diag.highpassFreqA))
             diagRow("HP Freq B", value: String(format: "%.0f Hz", diag.highpassFreqB))
-            diagRow("Lowshelf A", value: String(format: "%.1f dB", diag.lowshelfGainA))
+            if diag.useDynamicQ {
+                diagRow("Q (Dynamic)", value: String(format: "%.2f", diag.dynamicQA),
+                        color: diag.dynamicQA > 2.0 ? .cyan : .secondary)
+            }
+            diagRow("Lowshelf A", value: String(format: "%.1f dB", diag.lowshelfGainA),
+                    color: diag.useBassKill && diag.lowshelfGainA < -30 ? .red : .primary)
             diagRow("Lowshelf B", value: String(format: "%.1f dB", diag.lowshelfGainB))
             diagRow("Pan A", value: String(format: "%.3f", diag.panA))
             diagRow("Pan B", value: String(format: "%.3f", diag.panB))
+        }
+    }
+
+    /// Static volume bar — no implicit animation, no AnimatablePair issues.
+    private func volumeBar(label: String, value: Float, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(color.opacity(0.15))
+                    Capsule()
+                        .fill(color)
+                        .frame(width: max(0, geo.size.width * CGFloat(min(1, max(0, value)))))
+                }
+            }
+            .frame(height: 6)
+            Text(String(format: "%.3f", value))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .trailing)
         }
     }
 
@@ -294,48 +313,70 @@ struct TransitionDiagnosticsView: View {
     private var historySection: some View {
         Section("History (last \(diag.history.count))") {
             ForEach(diag.history) { record in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(record.type)
-                            .font(.caption.bold())
-                            .foregroundStyle(typeColor(record.type))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(typeColor(record.type).opacity(0.15), in: Capsule())
-                        Spacer()
-                        Text(record.date, format: .dateTime.hour().minute().second())
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text("\(record.fromTitle) → \(record.toTitle)")
-                        .font(.caption)
-                        .lineLimit(1)
-                    HStack(spacing: 8) {
-                        Label(String(format: "%.1fs", record.fadeDuration), systemImage: "timer")
-                        if record.beatSynced {
-                            Label("Beat", systemImage: "metronome")
-                                .foregroundStyle(.cyan)
+                NavigationLink {
+                    TransitionDetailView(record: record)
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        // Row 1: Type + timestamp
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(record.type)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(typeColor(record.type))
+                            Text(String(format: "%.1fs", record.fadeDuration))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                            Spacer()
+                            Text(record.date, format: .dateTime.hour().minute().second())
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.quaternary)
                         }
-                        if record.timeStretched {
-                            Label("Stretch", systemImage: "waveform")
-                                .foregroundStyle(.purple)
+
+                        // Row 2: Song titles
+                        Text("\(record.fromTitle) → \(record.toTitle)")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        // Row 3: Compact summary — colored text tokens, no icons
+                        HStack(spacing: 4) {
+                            historyToken(record.filterPreset, color: presetColor(record.filterPreset))
+                            if record.beatSynced   { historyToken("beat", color: .cyan) }
+                            if record.timeStretched { historyToken("stretch", color: .purple) }
+                            if record.useBassKill   { historyToken("kill", color: .red) }
+                            if record.useDynamicQ   { historyToken("dynQ", color: .teal) }
                         }
-                        Label(record.filtersUsed, systemImage: "slider.horizontal.3")
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
             }
         }
     }
 
+    /// Minimal colored text token for history rows — no icons, no backgrounds.
+    private func historyToken(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
+    }
+
     // MARK: - Log file
+
+    @State private var showShareSheet = false
 
     private var logFileSection: some View {
         Section("Log File") {
             diagRow("Path", value: diag.logFilePath)
             diagRow("Size", value: logFileSize)
+
+            Button {
+                showShareSheet = true
+            } label: {
+                Label("Export Log File", systemImage: "square.and.arrow.up")
+            }
+            .sheet(isPresented: $showShareSheet) {
+                let url = URL(fileURLWithPath: diag.logFilePath)
+                ShareSheet(activityItems: [url])
+            }
 
             Button {
                 diag.copyLogToClipboard()
@@ -395,6 +436,8 @@ struct TransitionDiagnosticsView: View {
         case "BEAT_MATCH_BLEND": return .cyan
         case "CUT_A_FADE_IN_B":  return .orange
         case "FADE_OUT_A_CUT_B": return .yellow
+        case "STEM_MIX":         return .mint
+        case "DROP_MIX":         return .pink
         default:                 return .secondary
         }
     }
@@ -404,6 +447,165 @@ struct TransitionDiagnosticsView: View {
         case "aggressive":   return .red
         case "anticipation": return .purple
         case "energy-down":  return .blue
+        case "gentle":       return .mint
+        case "stem-mix":     return .teal
+        case "drop-mix":     return .pink
+        case "normal":       return .green
+        default:             return .secondary
+        }
+    }
+
+    private func energyColor(_ energy: Double) -> Color {
+        if energy > 0.7 { return .red }
+        if energy > 0.4 { return .orange }
+        return .green
+    }
+}
+
+// MARK: - Share Sheet
+
+private struct ShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Transition Detail View
+
+struct TransitionDetailView: View {
+    let record: TransitionDiagnostics.TransitionRecord
+
+    var body: some View {
+        List {
+            // ── Decision ──
+            Section("Decision") {
+                row("Type", value: record.type, color: typeColor(record.type))
+                row("Reason", value: record.transitionReason)
+                row("From", value: record.fromTitle)
+                row("To", value: record.toTitle)
+                row("Time", value: record.date.formatted(.dateTime.month().day().hour().minute().second()))
+            }
+
+            // ── Timing ──
+            Section("Timing") {
+                row("Fade Duration", value: String(format: "%.1fs", record.fadeDuration))
+                row("Entry Point", value: String(format: "%.1fs", record.entryPoint))
+                row("Start Offset", value: String(format: "%.1fs", record.startOffset))
+                if record.anticipationTime > 0 {
+                    row("Anticipation", value: String(format: "%.1fs", record.anticipationTime), color: .purple)
+                }
+            }
+
+            // ── Filters ──
+            Section("Filters") {
+                row("Enabled", value: record.filtersEnabled ? "YES" : "NO",
+                    color: record.filtersEnabled ? .green : .red)
+                row("Preset", value: record.filterPreset, color: presetColor(record.filterPreset))
+                row("Mid Scoop", value: record.useMidScoop ? "ACTIVE" : "Off",
+                    color: record.useMidScoop ? .orange : .secondary)
+                row("Hi-Shelf Cut", value: record.useHighShelfCut ? "ACTIVE" : "Off",
+                    color: record.useHighShelfCut ? .orange : .secondary)
+                row("Bass Kill", value: record.useBassKill ? "ACTIVE" : "Off",
+                    color: record.useBassKill ? .red : .secondary)
+                row("Dynamic Q", value: record.useDynamicQ ? "ACTIVE" : "Off",
+                    color: record.useDynamicQ ? .cyan : .secondary)
+                row("B Filters", value: record.skipBFilters ? "SKIPPED" : "Active",
+                    color: record.skipBFilters ? .yellow : .green)
+            }
+
+            // ── Beat Sync ──
+            Section("Beat Sync") {
+                row("Beat Synced", value: record.beatSynced ? "YES" : "No",
+                    color: record.beatSynced ? .green : .secondary)
+                if record.bpmA > 0 {
+                    row("BPM A", value: String(format: "%.1f", record.bpmA))
+                }
+                if record.bpmB > 0 {
+                    row("BPM B", value: String(format: "%.1f", record.bpmB))
+                }
+                if record.bpmA > 0 && record.bpmB > 0 {
+                    let diff = abs(record.bpmA - record.bpmB)
+                    row("BPM Diff", value: String(format: "%.1f", diff),
+                        color: diff < 3 ? .green : diff < 8 ? .yellow : .red)
+                }
+                if !record.beatSyncInfo.isEmpty {
+                    row("Info", value: record.beatSyncInfo)
+                }
+            }
+
+            // ── Time Stretch ──
+            Section("Time Stretch") {
+                row("Enabled", value: record.timeStretched ? "YES" : "No",
+                    color: record.timeStretched ? .cyan : .secondary)
+                if record.timeStretched {
+                    row("Rate A", value: String(format: "%.3f", record.rateA))
+                    row("Rate B", value: String(format: "%.3f", record.rateB))
+                }
+            }
+
+            // ── Energy / Analysis ──
+            Section("Analysis") {
+                row("Energy A", value: String(format: "%.3f", record.energyA), color: energyColor(record.energyA))
+                row("Energy B", value: String(format: "%.3f", record.energyB), color: energyColor(record.energyB))
+                row("Danceability", value: String(format: "%.3f", record.danceability))
+                row("Outro Instrumental", value: record.isOutroInstrumental ? "Yes" : "No",
+                    color: record.isOutroInstrumental ? .cyan : .secondary)
+                row("Intro Instrumental", value: record.isIntroInstrumental ? "Yes" : "No",
+                    color: record.isIntroInstrumental ? .cyan : .secondary)
+            }
+
+            // ── ReplayGain ──
+            Section("ReplayGain") {
+                row("Track A", value: String(format: "%.3f", record.replayGainA))
+                row("Track B", value: String(format: "%.3f", record.replayGainB))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Transition")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func row(_ label: String, value: String, color: Color = .primary) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .font(.subheadline)
+            Spacer()
+            Text(value)
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(color)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func typeColor(_ type: String) -> Color {
+        switch type {
+        case "CROSSFADE":        return .blue
+        case "EQ_MIX":           return .purple
+        case "CUT":              return .red
+        case "NATURAL_BLEND":    return .green
+        case "BEAT_MATCH_BLEND": return .cyan
+        case "CUT_A_FADE_IN_B":  return .orange
+        case "FADE_OUT_A_CUT_B": return .yellow
+        case "STEM_MIX":         return .mint
+        case "DROP_MIX":         return .pink
+        default:                 return .secondary
+        }
+    }
+
+    private func presetColor(_ preset: String) -> Color {
+        switch preset {
+        case "aggressive":   return .red
+        case "anticipation": return .purple
+        case "energy-down":  return .blue
+        case "gentle":       return .mint
+        case "stem-mix":     return .teal
+        case "drop-mix":     return .pink
         case "normal":       return .green
         default:             return .secondary
         }

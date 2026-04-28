@@ -23,6 +23,7 @@ struct SongListView: View {
 
     @State private var navAlbum:  NavidromeAlbum?  = nil
     @State private var navArtist: NavidromeArtist? = nil
+    @State private var addToPlaylistSong: NavidromeSong? = nil
 
     private var isLight: Bool { palette.isPrimaryLight }
 
@@ -46,6 +47,9 @@ struct SongListView: View {
         // Navigation driven by Button state — avoids NavigationLink-inside-Menu bug
         .navigationDestination(item: $navAlbum)  { album  in AlbumDetailView(album: album) }
         .navigationDestination(item: $navArtist) { artist in ArtistDetailView(artist: artist) }
+        .sheet(item: $addToPlaylistSong) { song in
+            AddToPlaylistView(songId: song.id, songTitle: song.title)
+        }
     }
 
     // MARK: - Row
@@ -114,6 +118,17 @@ struct SongListView: View {
                 }
                 sections.append(UIMenu(title: "", options: .displayInline, children: [goArtist]))
             }
+
+            // — Add to playlist
+            let addToPlaylist = UIAction(
+                title: L.addToPlaylist,
+                image: UIImage(systemName: "music.note.list")
+            ) { _ in
+                DispatchQueue.main.async {
+                    addToPlaylistSong = song
+                }
+            }
+            sections.append(UIMenu(title: "", options: .displayInline, children: [addToPlaylist]))
 
             return UIMenu(children: sections)
         }

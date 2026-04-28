@@ -54,6 +54,7 @@ enum DJMixingService {
         case cutAFadeInB = "CUT_A_FADE_IN_B"
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
+        case dropMix = "DROP_MIX"
     }
 
     struct MixModeConfig {
@@ -213,6 +214,9 @@ enum DJMixingService {
         let isIntroInstrumental: Bool
         let danceability: Double
         let skipBFilters: Bool
+        // DJ effects (Sprint 1)
+        let useBassKill: Bool
+        let useDynamicQ: Bool
         let transitionReason: String
         /// Trigger bias: how many seconds earlier (negative) or later (positive) the trigger
         /// should fire relative to the default "latest possible" position.
@@ -269,11 +273,13 @@ enum DJMixingService {
         else if diff <= 12 { bpmRel = .compatible }
         else { bpmRel = .incompatible }
 
-        // BPM confidence: both songs must have confidence ≥ 0.5 for trusted BPM decisions.
-        // When untrusted, time-stretch and aggressive beat sync should be disabled.
+        // BPM confidence: both songs must have confidence ≥ 0.5 AND valid BPM data for trusted decisions.
+        // When untrusted, time-stretch, beat sync, and bass kill should be conservative.
         let confA = currentAnalysis?.bpmConfidence ?? 1.0
         let confB = nextAnalysis?.bpmConfidence ?? 1.0
-        let trusted = confA >= 0.5 && confB >= 0.5
+        let hasBeatDataA = bA > 20 && bA < 300
+        let hasBeatDataB = bB > 20 && bB < 300
+        let trusted = confA >= 0.5 && confB >= 0.5 && hasBeatDataA && hasBeatDataB
         if !trusted {
             let lowConf = confA < 0.5 ? "A" : "B"
             let val = confA < 0.5 ? confA : confB
@@ -481,11 +487,20 @@ enum DJMixingService {
             entryPoint: entry.entryPoint, fadeDuration: fade.duration
         )
 
-        // Only skip B filters for very short fades where there's no time for a sweep
-        let skipBFilters = fade.duration <= 3.0
+        // Skip B filters for very short fades or DROP_MIX (B enters clean and full)
+        let skipBFilters = fade.duration <= 3.0 || transition.type == .dropMix
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
+
+        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance) ──
+        let isEnergyDown = profile.energyB < profile.energyA - 0.2
+        let djEffects = decideDJEffects(
+            profile: profile,
+            transitionType: transition.type,
+            fadeDuration: fade.duration,
+            isEnergyDown: isEnergyDown
+        )
 
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
@@ -512,6 +527,8 @@ enum DJMixingService {
             isIntroInstrumental: introInstrumental,
             danceability: profile.avgDanceability,
             skipBFilters: skipBFilters,
+            useBassKill: djEffects.useBassKill,
+            useDynamicQ: djEffects.useDynamicQ,
             transitionReason: transition.reason,
             triggerBias: trigger.bias,
             triggerBiasReason: trigger.reason
@@ -566,11 +583,21 @@ enum DJMixingService {
             // so the listener hears the song's "real start."
             let baseEntry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
 
-            // Prefer entering after the intro if the intro is long enough to matter
-            if next.hasIntroData && next.introEndTime > baseEntry + 3 {
-                entryPoint = next.introEndTime
-            } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < 25 {
-                // Chorus as fallback when intro data isn't useful
+            // Vocal-aware entry reference: prefer actual vocal/energy onset
+            // over ML-derived introEndTime (which can report 40-60s for
+            // songs with immediate vocals — it detects "dense section start").
+            // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
+            let entryRef: Double = {
+                if next.vocalStartTime > 0 { return next.vocalStartTime }
+                if let h = next.introEndTimeHeuristic, h > 0 { return h }
+                if let first = next.speechSegments.first, first.start > 0 { return first.start }
+                if next.hasIntroData { return next.introEndTime }
+                return 0
+            }()
+            if entryRef > baseEntry + 3 {
+                entryPoint = entryRef
+            } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < bufferDuration * 0.25 {
+                // Chorus as fallback — capped at 25% of song to avoid entering too deep
                 entryPoint = next.chorusStartTime
             } else {
                 entryPoint = baseEntry
@@ -638,9 +665,17 @@ enum DJMixingService {
         bufferDuration: Double,
         config: MixModeConfig
     ) -> Double {
-        let introEnd = next.introEndTime
         let vocalStart = next.vocalStartTime
         let chorusStart = next.chorusStartTime
+
+        // Vocal-aware entry reference (same chain as smooth/punch)
+        let entryRef: Double = {
+            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let h = next.introEndTimeHeuristic, h > 0 { return h }
+            if let first = next.speechSegments.first, first.start > 0 { return first.start }
+            if next.hasIntroData { return next.introEndTime }
+            return 0
+        }()
 
         switch profile.energyFlow {
         case .energyUp:
@@ -652,8 +687,8 @@ enum DJMixingService {
             } else if vocalStart > 3 {
                 print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalStart))s")
                 return vocalStart
-            } else if next.hasIntroData && introEnd > 3 {
-                return introEnd
+            } else if entryRef > 3 {
+                return entryRef
             } else {
                 return min(config.fallbackMaxSeconds, bufferDuration * 0.03)
             }
@@ -669,8 +704,8 @@ enum DJMixingService {
             // Harmonic clash with steady energy: moderate entry, avoid extending overlap.
             if vocalStart > 3 {
                 return vocalStart
-            } else if next.hasIntroData && introEnd > 3 {
-                return introEnd
+            } else if entryRef > 3 {
+                return entryRef
             } else {
                 return min(config.fallbackMaxSeconds, bufferDuration * 0.02)
             }
@@ -701,16 +736,18 @@ enum DJMixingService {
 
         var entry: Double
 
-        // ── Cross-validate vocalStartTime against early speech/vocal data ──
-        // If speech segments show vocals in the first 10s, but backend says vocalStart is
-        // way later, the backend value is unreliable (it may be detecting a different vocal
-        // section, not the first occurrence). Only trust vocalStart for entry logic when
-        // the intro is genuinely instrumental.
-        let hasEarlyVocals = next.hasIntroVocals ||
-            next.speechSegments.contains(where: { $0.start < 10 })
-        let introIsInstrumental = !hasEarlyVocals
-        // vocalStart is only reliable for "enter before vocals" if the intro is truly
-        // instrumental, OR if the value is reasonably small (< 20s).
+        // ── Vocal-aware entry reference: when B's "real content" starts ──
+        // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
+        // introEndTime from ML can report 40-60s for songs with immediate vocals.
+        // introEndTimeHeuristic (percussive/energy detector) is more reliable.
+        let entryReference: Double = {
+            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let h = next.introEndTimeHeuristic, h > 0 { return h }
+            if let first = next.speechSegments.first, first.start > 0 { return first.start }
+            if next.hasIntroData { return next.introEndTime }
+            return 0
+        }()
+        let introIsInstrumental = entryReference > 8.0
         let vocalStartReliable = vocalStart > 0 && (introIsInstrumental || vocalStart < 20)
 
         // ── Vocal overlap avoidance: if both songs have vocals, prefer entering B
@@ -728,35 +765,40 @@ enum DJMixingService {
         }
 
         // ── Style affinity modulates how aggressively we target ──
-        // High affinity (>0.7): same genre feel — aggressive targeting (chorus, introEnd)
-        // Medium affinity (0.4-0.7): compatible — moderate targeting (vocalStart, introEnd)
+        // High affinity (>0.7): same genre feel — aggressive targeting
+        // Medium affinity (0.4-0.7): compatible — moderate targeting
         // Low affinity (<0.4): would have been .smooth, shouldn't reach here
+        //
+        // NOTE: entryReference (vocal-aware) replaces raw introEnd for entry
+        // assignment. introEnd from the ML model can report 40-60s for songs
+        // with immediate vocals. entryReference uses the fallback chain:
+        // vocalStartTime → speechSegments[0] → introEndTime.
 
         if profile.styleAffinity > 0.7 {
             // Same "world" — go for the most impactful entry
             if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalStart
-            } else if hasReliableIntro && !introVocalDiverge {
-                entry = introEnd
+            } else if entryReference > 3 && !introVocalDiverge {
+                entry = entryReference
             } else if chorusStart > 4 {
                 entry = chorusStart
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalStart
-            } else if hasReliableIntro {
-                entry = introEnd
+            } else if entryReference > 3 {
+                entry = entryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
             }
         } else {
-            // Moderate affinity — less aggressive, prefer introEnd over chorus
-            if hasReliableIntro && !introVocalDiverge {
-                entry = introEnd
+            // Moderate affinity — less aggressive
+            if entryReference > 3 && !introVocalDiverge {
+                entry = entryReference
             } else if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalStart
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalStart
-            } else if hasReliableIntro {
-                entry = introEnd
+            } else if entryReference > 3 {
+                entry = entryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
             }
@@ -1123,6 +1165,34 @@ enum DJMixingService {
             decision = "Sin analisis — duracion \(String(format: "%.0f", fadeDuration))s."
         }
 
+        // ── Cap by B's intro instrumental window ──
+        // The fade should not extend past B's vocal entry. Using the heuristic
+        // intro end (percussion/energy-based), not the ML model value which is
+        // often 2-3x longer and includes vocal sections.
+        // Allow 85% of the intro window so the fade finishes before vocals hit.
+        if let next = nextAnalysis, next.hasError != true {
+            let introWindow = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+            if introWindow > 2 {
+                let introCap = introWindow * 0.85
+                if fadeDuration > introCap {
+                    fadeDuration = max(2, introCap)
+                    decision += " Capped por intro B (\(String(format: "%.1f", introWindow))s×0.85) a \(String(format: "%.1f", fadeDuration))s."
+                }
+            }
+        }
+
+        // ── Shorten when A has no instrumental outro ──
+        // If A's outro is vocal (or unconfirmed), A likely has voice until the end.
+        // Reduce fade to minimize vocal overlap from the outgoing track.
+        if let current = currentAnalysis, current.hasError != true {
+            let aOutroVocal = current.hasOutroVocals
+                || (!current.hasOutroData && current.vocalStartTime > 0)
+            if aOutroVocal && fadeDuration > 4 {
+                fadeDuration = max(3, fadeDuration * 0.80)
+                decision += " Reducido 20% por outro vocal A a \(String(format: "%.1f", fadeDuration))s."
+            }
+        }
+
         // Absolute max: 25% of the shorter track
         let absoluteMax = min(bufferADuration * 0.25, bufferBDuration * 0.25)
         if fadeDuration > absoluteMax {
@@ -1265,6 +1335,72 @@ enum DJMixingService {
         return DJFilterResult(useMidScoop: useMidScoop, useHighShelfCut: useHighShelf, reason: reason)
     }
 
+    // MARK: - DJ Effects Decision (Bass Kill + Dynamic Q)
+
+    struct DJEffectsResult {
+        let useBassKill: Bool
+        let useDynamicQ: Bool
+        let reason: String
+    }
+
+    /// Decide whether to activate DJ effects based on the transition profile.
+    /// Both effects are conservative: they only activate when conditions guarantee
+    /// they'll sound good and won't interfere with the transition quality.
+    static func decideDJEffects(
+        profile: TransitionProfile,
+        transitionType: TransitionType,
+        fadeDuration: Double,
+        isEnergyDown: Bool
+    ) -> DJEffectsResult {
+        var useBassKill = false
+        var useDynamicQ = false
+        var reasons: [String] = []
+
+        // ── Bass Kill: instant low-frequency cut at bassSwapTime ──
+        // Requirements:
+        //   1. Transition character is punch or dramatic-up (groove-driven, intentional)
+        //   2. BPM is trusted (so bassSwapTime is accurate)
+        //   3. Danceability > 0.5 (bass-driven music benefits from the kill)
+        //   4. Not a CUT/NATURAL_BLEND (too short or too invisible)
+        //   5. Fade is long enough for the effect to register (>4s)
+        let bassKillCompatibleType: Bool
+        switch transitionType {
+        case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB, .dropMix:
+            bassKillCompatibleType = true
+        case .cut, .naturalBlend:
+            bassKillCompatibleType = false
+        }
+
+        if bassKillCompatibleType
+            && profile.bpmTrusted
+            && profile.avgDanceability > 0.5
+            && fadeDuration > 4.0
+            && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow == .energyUp)) {
+            useBassKill = true
+            reasons.append("bassKill: dance=\(String(format: "%.2f", profile.avgDanceability)) bpmOK")
+        }
+
+        // ── Dynamic Q Resonance: bell-shaped Q sweep on highpass ──
+        // Requirements:
+        //   1. Not energy-down (uses lowpass, not highpass)
+        //   2. Fade > 4s (sweep needs time for resonance to be audible)
+        //   3. Character is punch or dramatic (not minimal/smooth — those should be invisible)
+        //   4. Danceability > 0.45 (filter sweeps are a club/DJ technique)
+        if !isEnergyDown
+            && fadeDuration > 4.0
+            && profile.avgDanceability > 0.45
+            && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow != .energyDown)) {
+            useDynamicQ = true
+            reasons.append("dynQ: dance=\(String(format: "%.2f", profile.avgDanceability)) fade=\(String(format: "%.1f", fadeDuration))s")
+        }
+
+        let reason = reasons.isEmpty
+            ? "DJ effects OFF"
+            : "DJ effects ON: \(reasons.joined(separator: ", "))"
+        print("[DJMixingService] \(reason)")
+        return DJEffectsResult(useBassKill: useBassKill, useDynamicQ: useDynamicQ, reason: reason)
+    }
+
     // MARK: - Anticipation
 
     struct AnticipationResult {
@@ -1275,6 +1411,12 @@ enum DJMixingService {
 
     static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType) -> AnticipationResult {
         let hasEnoughIntro = entryPoint >= 5
+
+        // DROP_MIX: no anticipation — B enters clean and punchy, no teasing.
+        if transitionType == .dropMix {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: DROP_MIX — entrada directa")
+        }
 
         // CUT-specific: tease B filtered before the hard swap — this is how DJs
         // preview the next track even when BPMs are incompatible.
@@ -1470,8 +1612,22 @@ enum DJMixingService {
                 }
 
             case .punch:
-                // Compatible BPMs, good affinity — full DJ treatment
-                if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
+                // ── DROP_MIX: short intro on B or very short fade ──
+                // Hip hop / R&B / K-Pop technique: quick HPF ramp out on A, B enters clean.
+                // Triggers when B's intro is too short for a long blend, or the fade
+                // was already capped short by the intro window.
+                let bIntroLen: Double = {
+                    guard let next = nextAnalysis, next.hasError != true else { return 30 }
+                    return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 30)
+                }()
+                let useDropMix = fadeDuration < 5 || (bIntroLen < 12 && fadeDuration < 7)
+
+                if useDropMix && fadeDuration >= 2 {
+                    type = .dropMix
+                    reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
+                }
+                // ── Full DJ treatment ──
+                else if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
                     type = .stemMix
                     reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))"
                 } else if isBeatSynced && !isAAbrupt && !isBAbrupt {
@@ -1636,7 +1792,9 @@ enum DJMixingService {
         return false
     }
 
-    /// Detect if B's intro is instrumental in the actual entry zone.
+    /// Detect if B's intro is instrumental in the actual entry/fade zone.
+    /// Uses the same vocal-aware reference as entry point calculation:
+    /// vocalStartTime → speechSegments[0] → backend flags.
     private static func detectIntroInstrumental(
         nextAnalysis: SongAnalysis?,
         profile: TransitionProfile,
@@ -1646,16 +1804,26 @@ enum DJMixingService {
         guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
         let bEnd = entryPoint + fadeDuration
 
-        if nxt.hasVocalData && nxt.hasEnergyProfile && !nxt.hasIntroVocals {
-            if nxt.vocalStartTime > 0 && nxt.vocalStartTime <= bEnd {
-                print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalStart (\(String(format: "%.1f", nxt.vocalStartTime))s) is within fade zone")
+        // Vocal onset: when B's vocals actually start
+        let vocalOnset: Double = {
+            if nxt.vocalStartTime > 0 { return nxt.vocalStartTime }
+            if let first = nxt.speechSegments.first, first.start > 0 { return first.start }
+            return 0
+        }()
+
+        if vocalOnset > 0 {
+            if vocalOnset <= bEnd {
+                if nxt.hasVocalData && !nxt.hasIntroVocals {
+                    print("[DJMixingService] ⚠️ Backend says no intro vocals, but vocalOnset (\(String(format: "%.1f", vocalOnset))s) is within fade zone")
+                }
                 return false
             }
             return true
-        } else if nxt.vocalStartTime > bEnd {
+        }
+
+        // No vocal timing data — fall back to backend flags
+        if nxt.hasVocalData && nxt.hasEnergyProfile && !nxt.hasIntroVocals {
             return true
-        } else if !nxt.speechSegments.isEmpty {
-            return !nxt.speechSegments.contains { $0.start < bEnd && $0.end > entryPoint }
         }
         return false
     }

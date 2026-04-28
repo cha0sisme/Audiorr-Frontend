@@ -11,7 +11,6 @@ private let maxHistory = 5
 final class SearchViewModel: ObservableObject {
     static let shared = SearchViewModel()
 
-    @Published var query = ""
     @Published var results = SearchResults()
     @Published var isSearching = false
     @Published var history: [String] = []
@@ -107,54 +106,37 @@ final class SearchViewModel: ObservableObject {
     }
 }
 
-// MARK: - SearchView
+// MARK: - SearchView (iOS 26 — system .searchable with Tab(role: .search))
 
 struct SearchView: View {
     @ObservedObject private var vm = SearchViewModel.shared
-    @FocusState private var searchFocused: Bool
+    @State private var searchText = ""
     @Namespace private var heroNS
 
     var onPlaySong: ((NavidromeSong) -> Void)?
 
     private var hasQuery: Bool {
-        !vm.query.trimmingCharacters(in: .whitespaces).isEmpty
+        !searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    searchBar
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 16)
-
-                    if !NetworkMonitor.shared.isConnected && !hasQuery {
-                        offlineBanner
-                    }
-
-                    if vm.isSearching && vm.results.isEmpty {
-                        searchingSection
-                    } else if hasQuery && vm.results.isEmpty && !vm.isSearching {
-                        emptySection
-                    } else if hasQuery {
-                        resultsContent
-                    } else if !vm.history.isEmpty {
-                        historySection
-                    }
-
-                    Spacer(minLength: 80)
+            Group {
+                if vm.isSearching && vm.results.isEmpty {
+                    ProgressView()
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity, minHeight: 200)
+                } else if hasQuery && vm.results.isEmpty && !vm.isSearching {
+                    ContentUnavailableView.search(text: searchText)
+                } else if hasQuery {
+                    resultsContent
+                } else if !NetworkMonitor.shared.isConnected {
+                    offlineEmptyState
+                } else {
+                    browseContent
                 }
             }
-            .background(Color(.systemBackground))
             .navigationTitle(L.search)
-            .navigationBarTitleDisplayMode(.large)
-            .onAppear { searchFocused = true }
-            .onChange(of: vm.query) { _, newValue in
-                vm.onQueryChange(newValue)
-            }
-            .onDisappear {
-                vm.debounceTask?.cancel()
-            }
             .navigationDestination(for: NavidromeAlbum.self) { album in
                 AlbumDetailView(album: album)
                     .navigationTransition(.zoom(sourceID: album.id, in: heroNS))
@@ -169,218 +151,164 @@ struct SearchView: View {
             }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
         }
-    }
-
-    // MARK: - Search bar
-
-    private var searchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .font(.system(size: 15))
-
-            TextField(L.searchPlaceholder, text: $vm.query)
-                .focused($searchFocused)
-                .submitLabel(.search)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .onSubmit { vm.saveToHistory(vm.query) }
-
-            if !vm.query.isEmpty {
-                Button {
-                    vm.query = ""
-                    searchFocused = true
+        .searchable(text: $searchText, prompt: Text(L.searchPlaceholder))
+        .searchSuggestions {
+            if !hasQuery && !vm.history.isEmpty {
+                ForEach(vm.history, id: \.self) { item in
+                    Label(item, systemImage: "clock")
+                        .searchCompletion(item)
+                }
+                Button(role: .destructive) {
+                    withAnimation { vm.clearHistory() }
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                    Label(L.clearHistory, systemImage: "trash")
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onChange(of: searchText) { _, newValue in
+            vm.onQueryChange(newValue)
+        }
+        .onSubmit(of: .search) {
+            vm.saveToHistory(searchText)
+        }
+        .onDisappear {
+            vm.debounceTask?.cancel()
+        }
     }
 
-    // MARK: - Offline banner
+    // MARK: - Browse (empty state when no query)
 
-    private var offlineBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wifi.slash")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.orange)
+    private var browseContent: some View {
+        ScrollView {
+            VStack(spacing: 32) {
+                // History section (when suggestions overlay is dismissed)
+                if !vm.history.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(L.recents)
+                                .font(.title3.bold())
+                            Spacer()
+                            Button(L.clearHistory) {
+                                withAnimation { vm.clearHistory() }
+                            }
+                            .font(.subheadline)
+                        }
+                        .padding(.horizontal, 20)
+
+                        ForEach(vm.history, id: \.self) { item in
+                            Button {
+                                searchText = item
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "clock")
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 24)
+
+                                    Text(item)
+                                        .foregroundStyle(.primary)
+
+                                    Spacer()
+
+                                    Image(systemName: "arrow.up.left")
+                                        .foregroundStyle(.tertiary)
+                                        .font(.system(size: 13))
+                                }
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 80)
+        }
+    }
+
+    // MARK: - Offline empty state
+
+    private var offlineEmptyState: some View {
+        ContentUnavailableView {
+            Label(L.noConnection, systemImage: "wifi.slash")
+        } description: {
             Text(L.offlineSearchOnly)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
-    }
-
-    // MARK: - History
-
-    private var historySection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(L.recents)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                Spacer()
-                if vm.history.count > 1 {
-                    Button(L.clearHistory) {
-                        withAnimation(Anim.small) { vm.clearHistory() }
-                    }
-                    .font(.subheadline)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
-
-            ForEach(vm.history, id: \.self) { item in
-                Button {
-                    vm.query = item
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 15))
-                            .frame(width: 20)
-
-                        Text(item)
-                            .foregroundStyle(.primary)
-
-                        Spacer()
-
-                        Image(systemName: "arrow.up.left")
-                            .foregroundStyle(.tertiary)
-                            .font(.system(size: 13))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
-
-                if item != vm.history.last {
-                    Divider().padding(.leading, 48)
-                }
-            }
         }
     }
 
     // MARK: - Results
 
-    @ViewBuilder
     private var resultsContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if !vm.results.artists.isEmpty {
-                resultSection(title: L.artists) {
-                    ForEach(vm.results.artists) { artist in
-                        NavigationLink(value: artist) {
-                            ArtistSearchRow(artist: artist)
-                        }
-                        .buttonStyle(.plain)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            vm.saveToHistory(vm.query)
-                        })
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                if !vm.results.artists.isEmpty {
+                    resultSection(title: L.artists) {
+                        ForEach(vm.results.artists) { artist in
+                            NavigationLink(value: artist) {
+                                ArtistSearchRow(artist: artist)
+                            }
+                            .buttonStyle(.plain)
+                            .simultaneousGesture(TapGesture().onEnded {
+                                vm.saveToHistory(searchText)
+                            })
 
-                        if artist.id != vm.results.artists.last?.id {
-                            Divider().padding(.leading, 62)
+                            if artist.id != vm.results.artists.last?.id {
+                                Divider().padding(.leading, 62)
+                            }
+                        }
+                    }
+                }
+
+                if !vm.results.albums.isEmpty {
+                    resultSection(title: L.albumsSearch) {
+                        ForEach(vm.results.albums) { album in
+                            NavigationLink(value: album) {
+                                AlbumSearchRow(album: album)
+                            }
+                            .buttonStyle(.plain)
+                            .simultaneousGesture(TapGesture().onEnded {
+                                vm.saveToHistory(searchText)
+                            })
+
+                            if album.id != vm.results.albums.last?.id {
+                                Divider().padding(.leading, 62)
+                            }
+                        }
+                    }
+                }
+
+                if !vm.results.songs.isEmpty {
+                    resultSection(title: L.songsLabel) {
+                        ForEach(vm.results.songs) { song in
+                            Button {
+                                vm.saveToHistory(searchText)
+                                onPlaySong?(song)
+                            } label: {
+                                SongSearchRow(song: song)
+                            }
+                            .buttonStyle(.plain)
+
+                            if song.id != vm.results.songs.last?.id {
+                                Divider().padding(.leading, 62)
+                            }
                         }
                     }
                 }
             }
-
-            if !vm.results.albums.isEmpty {
-                resultSection(title: L.albumsSearch) {
-                    ForEach(vm.results.albums) { album in
-                        NavigationLink(value: album) {
-                            AlbumSearchRow(album: album)
-                        }
-                        .buttonStyle(.plain)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            vm.saveToHistory(vm.query)
-                        })
-
-                        if album.id != vm.results.albums.last?.id {
-                            Divider().padding(.leading, 62)
-                        }
-                    }
-                }
-            }
-
-            if !vm.results.songs.isEmpty {
-                resultSection(title: L.songsLabel) {
-                    ForEach(vm.results.songs) { song in
-                        Button {
-                            vm.saveToHistory(vm.query)
-                            onPlaySong?(song)
-                        } label: {
-                            SongSearchRow(song: song)
-                        }
-                        .buttonStyle(.plain)
-
-                        if song.id != vm.results.songs.last?.id {
-                            Divider().padding(.leading, 62)
-                        }
-                    }
-                }
-            }
+            .padding(.bottom, 80)
         }
     }
 
     private func resultSection<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .padding(.horizontal, 16)
+                .font(.title3.bold())
+                .padding(.horizontal, 20)
                 .padding(.bottom, 10)
 
             content()
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 20)
         }
-    }
-
-    // MARK: - States
-
-    private var searchingSection: some View {
-        HStack {
-            Spacer()
-            ProgressView()
-            Spacer()
-        }
-        .padding(.vertical, 32)
-    }
-
-    private var emptySection: some View {
-        VStack(spacing: 12) {
-            if !NetworkMonitor.shared.isConnected {
-                Image(systemName: "wifi.slash")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.tertiary)
-                Text(L.noConnection)
-                    .foregroundStyle(.secondary)
-                    .font(.subheadline.bold())
-                Text(L.offlineNoResults(vm.query))
-                    .foregroundStyle(.tertiary)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-            } else {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.tertiary)
-                Text(L.noResultsFor(vm.query))
-                    .foregroundStyle(.secondary)
-                    .font(.subheadline)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
     }
 }
 
@@ -399,7 +327,6 @@ private struct ArtistSearchRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            // Circular avatar — Apple Music style
             ZStack {
                 if let img = avatarImage {
                     Image(uiImage: img)
@@ -432,20 +359,17 @@ private struct ArtistSearchRow: View {
             Spacer(minLength: 0)
         }
         .task(id: artist.id) {
-            // 1) Check shared image cache first (instant)
             if let cached = ArtistImageCache.shared.image(for: artist.id) {
                 avatarImage = cached
                 didLoad = true
                 return
             }
 
-            // 2) Get avatar URL (may be cached in NavidromeService)
             guard let url = await NavidromeService.shared.artistAvatarURL(artistId: artist.id) else {
                 didLoad = true
                 return
             }
 
-            // 3) Download image
             guard let (data, _) = try? await URLSession.shared.data(from: url),
                   let img = UIImage(data: data) else {
                 didLoad = true
@@ -512,10 +436,6 @@ private struct SongSearchRow: View {
         }
     }
 }
-
-// MARK: - Cached cover thumbnail (uses AlbumCoverCache + URLSession instead of AsyncImage)
-
-// CachedCoverThumbnail is now shared — defined in AlbumCardView.swift
 
 // MARK: - Preview
 
