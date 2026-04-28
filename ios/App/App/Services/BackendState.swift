@@ -15,6 +15,7 @@ final class BackendState {
     private(set) var isChecking: Bool = false
 
     private var checkTask: Task<Void, Never>?
+    private var networkDebounceTask: Task<Void, Never>?
 
     private init() {
         // Re-check whenever the network comes back online
@@ -24,11 +25,21 @@ final class BackendState {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if NetworkMonitor.shared.isConnected {
-                    self.check()
+                    self.debouncedCheck()
                 } else {
                     self.isAvailable = false
                 }
             }
+        }
+    }
+
+    /// Debounce network-triggered checks to avoid hammering on flaky connections
+    private func debouncedCheck() {
+        networkDebounceTask?.cancel()
+        networkDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            self.check()
         }
     }
 
@@ -86,7 +97,12 @@ final class BackendState {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if NetworkMonitor.shared.isConnected {
-                    self.invalidateAndRecheck()
+                    self.networkDebounceTask?.cancel()
+                    self.networkDebounceTask = Task {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        self.invalidateAndRecheck()
+                    }
                 } else {
                     self.isAvailable = false
                     self.observeNetwork()

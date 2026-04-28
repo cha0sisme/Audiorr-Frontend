@@ -101,7 +101,7 @@ class AudioEngineManager {
     // MARK: - Progress timer
 
     private var progressTimer: Timer?
-    private let progressInterval: TimeInterval = 0.25 // 4Hz
+    private let progressInterval: TimeInterval = 0.5 // 2Hz — battery optimization
     private var lastReportedTime: Double = 0
     private var stalledTickCount: Int = 0
 

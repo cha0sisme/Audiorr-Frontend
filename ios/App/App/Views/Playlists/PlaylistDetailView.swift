@@ -391,7 +391,7 @@ struct PlaylistDetailView: View {
         let isPlaylistContext = nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(vm.displayPlaylist.id)"
         let isPlaylistPlaying = isPlaylistContext && nowPlaying.isPlaying
         let smartMixReady = vm.smartMixStatus == .ready && BackendState.shared.isAvailable
-        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
+        let isSmartMixContext = nowPlaying.isVisible && PlayerService.shared.smartMixPlaylistId == vm.initialPlaylist.id && vm.smartMixStatus != .idle
         let collapsePlay = smartMixReady || isSmartMixContext
 
         return HStack(spacing: 12) {
@@ -502,7 +502,7 @@ struct PlaylistDetailView: View {
     private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
         let status = vm.smartMixStatus
         let nowPlaying = NowPlayingState.shared
-        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
+        let isSmartMixContext = nowPlaying.isVisible && PlayerService.shared.smartMixPlaylistId == vm.initialPlaylist.id && status != .idle
         let isSmartMixPlaying = isSmartMixContext && nowPlaying.isPlaying
         let isExpanded = status == .ready || isSmartMixContext
 
@@ -762,16 +762,24 @@ final class PlaylistCoverCache: @unchecked Sendable {
     }
 
     /// Register content hashes from backend API responses.
-    /// Automatically invalidates covers whose hash changed.
+    /// Automatically invalidates covers whose hash changed or that were cached
+    /// without hash tracking (legacy entries from before content-addressed caching).
     func registerContentHashes(_ hashes: [String: String]) {
         for (id, newHash) in hashes {
             let oldHash = contentHashes[id]
             contentHashes[id] = newHash
 
-            // If hash changed and we have a cached version with the old hash, invalidate
-            if let cachedHash = cachedHashes[id], cachedHash != newHash {
-                invalidate(playlistId: id)
+            if let cachedHash = cachedHashes[id] {
+                // Cover was cached with a known hash — only invalidate if hash changed
+                if cachedHash != newHash {
+                    invalidate(playlistId: id)
+                }
             } else if oldHash != nil && oldHash != newHash {
+                // Hash changed within this session
+                invalidate(playlistId: id)
+            } else if oldHash == nil {
+                // No hash record on disk — cover may be stale (pre-hash-tracking legacy).
+                // Invalidate to force re-fetch with proper ?v= content-addressed URL.
                 invalidate(playlistId: id)
             }
         }

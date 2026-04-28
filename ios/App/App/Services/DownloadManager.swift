@@ -72,6 +72,7 @@ final class DownloadManager: NSObject {
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.allowsCellularAccess = true
+        config.waitsForConnectivity = true
         config.httpMaximumConnectionsPerHost = maxConcurrent
         self.backgroundSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 
@@ -211,6 +212,7 @@ final class DownloadManager: NSObject {
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
         config.allowsCellularAccess = true
+        config.waitsForConnectivity = true
         config.httpMaximumConnectionsPerHost = maxConcurrent
         backgroundSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
 

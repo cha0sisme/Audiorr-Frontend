@@ -7,6 +7,7 @@ struct CanvasView: View {
     let url: URL
 
     @State private var player: AVPlayer?
+    @State private var loopObserver: NSObjectProtocol?
 
     var body: some View {
         CanvasPlayerView(player: player)
@@ -35,20 +36,13 @@ struct CanvasView: View {
         p.allowsExternalPlayback = false
         player = p
 
-        // Loop: observe end and seek to start
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { _ in
-            p.seek(to: .zero)
-            p.play()
-        }
+        addLoopObserver(for: item, player: p)
 
         if NowPlayingState.shared.isPlaying { p.play() }
     }
 
     private func teardownPlayer() {
+        removeLoopObserver()
         player?.pause()
         player = nil
     }
@@ -66,7 +60,14 @@ struct CanvasView: View {
         let item = AVPlayerItem(url: newUrl)
         player?.replaceCurrentItem(with: item)
 
-        NotificationCenter.default.addObserver(
+        removeLoopObserver()
+        addLoopObserver(for: item, player: player)
+
+        if NowPlayingState.shared.isPlaying { player?.play() }
+    }
+
+    private func addLoopObserver(for item: AVPlayerItem, player: AVPlayer?) {
+        loopObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
@@ -74,8 +75,13 @@ struct CanvasView: View {
             player?.seek(to: .zero)
             player?.play()
         }
+    }
 
-        if NowPlayingState.shared.isPlaying { player?.play() }
+    private func removeLoopObserver() {
+        if let obs = loopObserver {
+            NotificationCenter.default.removeObserver(obs)
+            loopObserver = nil
+        }
     }
 }
 

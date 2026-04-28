@@ -7,11 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		725590D8D88644269AF896F0 /* BiquadDSPNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF29A26B9EDB46C9A3187286 /* BiquadDSPNode.swift */; };
-		4BF16E76F545454C83E7F8DB /* BiquadDSPKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660E775D93EC476786BA5DB0 /* BiquadDSPKernel.swift */; };
-		DBB02AE80E614DAFAD79E48A /* BiquadCoefficientCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D8B455C82ED45E8823B51E2 /* BiquadCoefficientCalculator.swift */; };
-		2F57D96FD38346B69140C55C /* BiquadCoefficients.swift in Sources */ = {isa = PBXBuildFile; fileRef = E32679434F1D4DAA8FAE63C7 /* BiquadCoefficients.swift */; };
 		29B84DA1A967A87CE2DE1162 /* LocalizationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */; };
+		2F57D96FD38346B69140C55C /* BiquadCoefficients.swift in Sources */ = {isa = PBXBuildFile; fileRef = E32679434F1D4DAA8FAE63C7 /* BiquadCoefficients.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		3400AA012FA1000000000001 /* ArtistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400AA002FA1000000000001 /* ArtistsView.swift */; };
 		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
@@ -66,14 +63,17 @@
 		3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA072FA3000000000001 /* ArtistCardView.swift */; };
 		3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA092FA5000000000001 /* AlbumCardView.swift */; };
 		3499AA0C2FA7000000000001 /* AnimationPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA0B2FA7000000000001 /* AnimationPresets.swift */; };
+		4BF16E76F545454C83E7F8DB /* BiquadDSPKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660E775D93EC476786BA5DB0 /* BiquadDSPKernel.swift */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
+		725590D8D88644269AF896F0 /* BiquadDSPNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF29A26B9EDB46C9A3187286 /* BiquadDSPNode.swift */; };
 		AA11BB22CC33DD44EE55FF10 /* AudioEngineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */; };
 		AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */; };
 		AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */; };
 		CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */; };
 		DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */; };
+		DBB02AE80E614DAFAD79E48A /* BiquadCoefficientCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D8B455C82ED45E8823B51E2 /* BiquadCoefficientCalculator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -137,7 +137,9 @@
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		660E775D93EC476786BA5DB0 /* BiquadDSPKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadDSPKernel.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
+		9D8B455C82ED45E8823B51E2 /* BiquadCoefficientCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadCoefficientCalculator.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF11 /* AudioEngineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineManager.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF13 /* AudioFileLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileLoader.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD44EE55FF17 /* CrossfadeExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfadeExecutor.swift; sourceTree = "<group>"; };
@@ -145,8 +147,6 @@
 		CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarPlaySceneDelegate.swift; sourceTree = "<group>"; };
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
 		E32679434F1D4DAA8FAE63C7 /* BiquadCoefficients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadCoefficients.swift; sourceTree = "<group>"; };
-		9D8B455C82ED45E8823B51E2 /* BiquadCoefficientCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadCoefficientCalculator.swift; sourceTree = "<group>"; };
-		660E775D93EC476786BA5DB0 /* BiquadDSPKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadDSPKernel.swift; sourceTree = "<group>"; };
 		EF29A26B9EDB46C9A3187286 /* BiquadDSPNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadDSPNode.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -633,7 +633,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 0;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -643,7 +643,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 6.6;
+				MARKETING_VERSION = 6.7;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
 				PRODUCT_BUNDLE_IDENTIFIER = com.leandro.audiorr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -660,7 +660,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 0;
 				DEVELOPMENT_TEAM = 7G32X7LQ35;
 				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Audiorr;
@@ -670,7 +670,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 6.6;
+				MARKETING_VERSION = 6.7;
 				PRODUCT_BUNDLE_IDENTIFIER = com.leandro.audiorr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";

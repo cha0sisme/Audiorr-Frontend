@@ -49,6 +49,9 @@ final class QueueManager: AudioEngineDelegate {
     /// Set during restoreState()/restoreLastPlayback(), consumed by playCurrentSong().
     private var pendingResumePosition: Double = 0
 
+    /// Last time we persisted position locally (throttled to every ~15s during playback).
+    private var lastLocalPositionSave: Date = .distantPast
+
     /// Read user settings from UserDefaults (audiorr_settings JSON dict).
     private var settingsDict: [String: Any]? {
         guard let json = UserDefaults.standard.string(forKey: "audiorr_settings"),
@@ -454,6 +457,14 @@ final class QueueManager: AudioEngineDelegate {
             self.currentTime = current
             self.duration = duration
             syncNowPlayingState()
+
+            // Periodic local position save (every 15s) — crash resilience.
+            // If iOS kills the app without lifecycle callbacks, position is at most 15s stale.
+            let now = Date()
+            if now.timeIntervalSince(self.lastLocalPositionSave) >= 15 {
+                self.lastLocalPositionSave = now
+                self.persistence.position = current
+            }
 
             // Throttled progress broadcast to Audiorr Connect
             ConnectService.shared.broadcastStateIfNeeded(significantChange: false)
@@ -1427,6 +1438,10 @@ final class QueueManager: AudioEngineDelegate {
     private var saveToBackendWork: DispatchWorkItem?
 
     private func saveToBackend() {
+        // When the socket is connected, broadcastPlaybackState() already persists
+        // the playback state server-side. Skip the REST PUT to avoid double-write.
+        guard !ConnectService.shared.hubConnected else { return }
+
         saveToBackendWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let song = self.currentSong,

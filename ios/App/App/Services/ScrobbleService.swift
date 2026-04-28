@@ -89,10 +89,20 @@ final class ScrobbleService {
         }
 
         // Scrobble to Audiorr backend (for wrapped.db / stats)
+        // Prefer socket when connected — avoids double-write with REST
         let song = QueueManager.shared.currentSong
         if let song {
-            Task {
-                await scrobbleToBackend(song: song, timestamp: timestamp)
+            if ConnectService.shared.hubConnected {
+                ConnectService.shared.emitScrobble(
+                    song: song,
+                    playedAt: startTime,
+                    contextUri: PlayerService.shared.currentContextUri,
+                    contextName: PlayerService.shared.currentContextName
+                )
+            } else {
+                Task {
+                    await scrobbleToBackend(song: song, timestamp: timestamp)
+                }
             }
         }
 

@@ -516,7 +516,7 @@ struct NowPlayingViewerView: View {
 
         Task.detached(priority: .userInitiated) {
             var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.cachePolicy = .useProtocolCachePolicy
             guard let (data, _) = try? await URLSession.shared.data(for: request),
                   let image = UIImage(data: data) else { return }
             let palette = ColorExtractor.extract(from: image)

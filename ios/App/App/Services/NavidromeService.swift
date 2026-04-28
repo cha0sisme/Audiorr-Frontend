@@ -135,31 +135,79 @@ final class NavidromeService: ObservableObject {
         return URL(string: baseURL)
     }
 
-    /// Check if the Audiorr backend is reachable (GET /api/health, 5s timeout).
+    /// Check if the Audiorr backend is reachable and verified.
+    /// Validates `service: "audiorr"` in the response body to avoid connecting to unrelated services.
     /// Positive results cached for 30s, negative for 10s (retry sooner on failure).
     func checkBackendAvailable() async -> Bool {
         let cacheKey = "backendAvailable"
         if let cached = cacheGet(cacheKey) as? Bool { return cached }
 
-        guard let base = backendURL(),
-              let url = URL(string: "\(base)/api/health")
-        else { return false }
+        guard let base = backendURL() else { return false }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 5  // generous for slow networks (was 2s)
-
-        // Any HTTP response means the server is running.
-        // Only network errors (timeout, unreachable) count as unavailable.
-        let available: Bool
-        if let (_, response) = try? await URLSession.shared.data(for: request),
-           response is HTTPURLResponse {
-            available = true
-        } else {
-            available = false
-        }
+        let available = await verifyAudiorrBackend(base: base)
         cacheSet(cacheKey, value: available, ttl: available ? 30 : 10)
         return available
+    }
+
+    /// Verifies that the service at `base` is actually Audiorr.
+    /// Logic:
+    /// - Try GET /api/health first.
+    ///   - If response contains `"service"` field: accept only if value is `"audiorr"`, otherwise ABORT (no fallback).
+    ///   - If 404 / network error / response has no `"service"` field: fall through to legacy endpoint.
+    /// - Fallback: GET /health (legacy Docker healthcheck endpoint).
+    ///   - Same validation: if `"service"` field present, must be `"audiorr"`.
+    ///   - If no `"service"` field (legacy `{"status":"ok"}`): accept as valid (transitional).
+    private func verifyAudiorrBackend(base: String) async -> Bool {
+        // --- Primary: /api/health ---
+        if let url = URL(string: "\(base)/api/health") {
+            switch await checkEndpoint(url: url) {
+            case .confirmed: return true
+            case .rejected: return false  // service field present but not "audiorr" → abort
+            case .inconclusive: break     // 404, network error, or no service field → try fallback
+            }
+        }
+
+        // --- Fallback: /health (DEPRECATED — remove when backend >= v2.0 ships /api/health) ---
+        // TODO(backend-v2.0): Remove this fallback once all backends serve /api/health with service field.
+        if let url = URL(string: "\(base)/health") {
+            switch await checkEndpoint(url: url) {
+            case .confirmed: return true
+            case .rejected: return false
+            case .inconclusive: return true  // Legacy {"status":"ok"} without service field → accept
+            }
+        }
+
+        return false
+    }
+
+    private enum HealthCheckResult {
+        case confirmed      // service == "audiorr"
+        case rejected       // service field present but != "audiorr"
+        case inconclusive   // no response, 404, or no service field in body
+    }
+
+    private func checkEndpoint(url: URL) async -> HealthCheckResult {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 2
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200 else {
+            return .inconclusive
+        }
+
+        // Try to parse service identifier from body
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .inconclusive
+        }
+
+        if let service = json["service"] as? String {
+            return service == "audiorr" ? .confirmed : .rejected
+        }
+
+        // 200 OK with valid JSON but no "service" field → inconclusive (legacy format)
+        return .inconclusive
     }
 
     func streamURL(songId: String) -> URL? {

@@ -237,6 +237,26 @@ final class ConnectService {
         sendEvent("playback_state_update", data: payload)
     }
 
+    /// Emit a scrobble event through the socket (for wrapped.db / stats on the backend).
+    /// The backend deduplicates with a 600s window automatically.
+    func emitScrobble(song: PersistableSong, playedAt: Date, contextUri: String?, contextName: String?) {
+        guard isConnected else { return }
+
+        var payload: [String: Any] = [
+            "songId": song.id,
+            "title": song.title,
+            "artist": song.artist,
+            "album": song.album,
+            "duration": song.duration,
+            "playedAt": ISO8601DateFormatter().string(from: playedAt),
+        ]
+        if !song.albumId.isEmpty { payload["albumId"] = song.albumId }
+        if let contextUri, !contextUri.isEmpty { payload["contextUri"] = contextUri }
+        if let contextName, !contextName.isEmpty { payload["contextName"] = contextName }
+
+        sendEvent("scrobble", data: payload)
+    }
+
     // MARK: - Throttled broadcast
 
     private var lastBroadcastTime: Date = .distantPast
@@ -747,23 +767,32 @@ final class ConnectService {
 
     /// Observe network state and trigger reconnect when connectivity returns.
     private var networkWaitTimer: Timer?
+    private var networkWaitInterval: TimeInterval = 3
 
     private func observeNetworkForReconnect() {
         guard networkWaitTimer == nil else { return }
+        networkWaitInterval = 3 // reset backoff
 
-        networkWaitTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] t in
+        scheduleNetworkWaitTick()
+    }
+
+    private func scheduleNetworkWaitTick() {
+        networkWaitTimer = Timer.scheduledTimer(withTimeInterval: networkWaitInterval, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { t.invalidate(); return }
+                guard let self else { return }
                 guard self.shouldReconnect else {
-                    t.invalidate()
                     self.networkWaitTimer = nil
                     return
                 }
                 if NetworkMonitor.shared.isConnected {
-                    t.invalidate()
                     self.networkWaitTimer = nil
+                    self.networkWaitInterval = 3
                     print("[Connect] Network restored — attempting reconnect")
                     self.connect()
+                } else {
+                    // Exponential backoff: 3 → 6 → 12 → 24 → 30 (cap)
+                    self.networkWaitInterval = min(self.networkWaitInterval * 2, 30)
+                    self.scheduleNetworkWaitTick()
                 }
             }
         }

@@ -13,7 +13,6 @@ final class HomeViewModel: ObservableObject {
     @Published var dailyMixes: [DailyMix] = []
     @Published var dailyMixPlaylists: [NavidromePlaylist] = []
     @Published var latestAlbums: [NavidromeAlbum] = []
-    @Published var frequentAlbums: [NavidromeAlbum] = []
     @Published var randomAlbums: [NavidromeAlbum] = []
     @Published var recentlyPlayedAlbums: [NavidromeAlbum] = []
     @Published var pinnedPlaylists: [NavidromePlaylist] = []
@@ -51,7 +50,7 @@ final class HomeViewModel: ObservableObject {
     }
 
     /// True only on the very first load (no data yet).
-    private var hasData: Bool { !latestAlbums.isEmpty || !recentReleases.isEmpty || !frequentAlbums.isEmpty }
+    private var hasData: Bool { !latestAlbums.isEmpty || !recentReleases.isEmpty || !randomAlbums.isEmpty }
 
     func load() async {
         // Only show skeleton on first load — subsequent refreshes keep existing data visible
@@ -67,10 +66,9 @@ final class HomeViewModel: ObservableObject {
         // Load Navidrome-only sections (work without backend)
         async let releasesTask: Void = loadRecentReleases()
         async let latestTask: Void = loadLatestAlbums()
-        async let frequentTask: Void = loadFrequentAlbums()
         async let randomTask: Void = loadRandomAlbums()
         async let recentPlayedTask: Void = loadRecentlyPlayed()
-        _ = await (releasesTask, latestTask, frequentTask, randomTask, recentPlayedTask)
+        _ = await (releasesTask, latestTask, randomTask, recentPlayedTask)
 
         // Navidrome content is ready — show it immediately
         isLoading = false
@@ -90,7 +88,8 @@ final class HomeViewModel: ObservableObject {
         async let mixesTask: Void = loadDailyMixes()
         async let pinnedTask: Void = loadPinnedPlaylists()
         async let statsTask: Void = loadWeeklyStats()
-        _ = await (topTask, recentCtxTask, mixesTask, pinnedTask, statsTask)
+        async let hashesTask: Void = api.refreshPlaylistCoverHashes()
+        _ = await (topTask, recentCtxTask, mixesTask, pinnedTask, statsTask, hashesTask)
     }
 
     // MARK: - Section loaders
@@ -132,9 +131,17 @@ final class HomeViewModel: ObservableObject {
         guard BackendState.shared.isAvailable else { return }
         // Only albums, playlists, and artists — smartmixes don't have proper
         // cover art / metadata and cause blank tiles in the grid.
-        var contexts = Array(await api.getRecentContexts()
+        var contexts = await api.getRecentContexts()
             .filter { $0.type == "album" || $0.type == "playlist" || $0.type == "artist" }
-            .prefix(12))
+
+        // Retain previous items that fell off the backend's window but are still
+        // valid — prevents the grid from shrinking as smartmix/other entries
+        // displace album/playlist/artist entries in the backend's response.
+        if !recentContexts.isEmpty {
+            let freshIds = Set(contexts.map(\.id))
+            let retained = recentContexts.filter { !freshIds.contains($0.id) }
+            contexts.append(contentsOf: retained)
+        }
 
         // Enrich playlist contexts with real name, song count, and cover from Navidrome
         let playlistIndices = contexts.enumerated().compactMap { (i, ctx) -> (Int, String)? in
@@ -165,6 +172,17 @@ final class HomeViewModel: ObservableObject {
         guard BackendState.shared.isAvailable else { return }
         let mixes = await api.getDailyMixes()
         dailyMixes = mixes
+
+        // Register content hashes immediately so cover views use ?v= URLs
+        var mixHashes: [String: String] = [:]
+        for mix in mixes {
+            if let id = mix.navidromeId, let hash = mix.coverContentHash {
+                mixHashes[id] = hash
+            }
+        }
+        if !mixHashes.isEmpty {
+            PlaylistCoverCache.shared.registerContentHashes(mixHashes)
+        }
 
         if mixes.isEmpty {
             // Auto-generate on first visit
@@ -201,10 +219,6 @@ final class HomeViewModel: ObservableObject {
 
     private func loadLatestAlbums() async {
         latestAlbums = await api.getAlbumList(type: "newest", size: 50)
-    }
-
-    private func loadFrequentAlbums() async {
-        frequentAlbums = await api.getAlbumList(type: "frequent", size: 20)
     }
 
     private func loadRandomAlbums() async {
@@ -274,7 +288,6 @@ struct HomeView: View {
                         pinnedPlaylistsSection
 
                         // Discovery
-                        heavyRotationSection
                         recentReleasesSection
                         dailyMixSection
                         randomDiscoverySection
@@ -746,34 +759,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Heavy Rotation (Navidrome frequent)
-
-    private let heavyRotationVisibleLimit = 8
-
-    @ViewBuilder
-    private var heavyRotationSection: some View {
-        if !vm.frequentAlbums.isEmpty {
-            let visible = Array(vm.frequentAlbums.prefix(heavyRotationVisibleLimit))
-            let overflow = vm.frequentAlbums.count - heavyRotationVisibleLimit
-
-            HorizontalScrollSection(title: L.heavyRotation) {
-                ForEach(visible) { album in
-                    NavigationLink(value: album) {
-                        AlbumCardView(album: album, size: 170, heroNamespace: heroNS)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.albums(
-                        title: L.heavyRotation, items: vm.frequentAlbums
-                    )) {
-                        SeeAllCard(remaining: overflow, size: 170)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
+    // MARK: - (Heavy Rotation removed)
 
     // MARK: - Random Discovery (Navidrome random)
 
@@ -1077,8 +1063,9 @@ private struct CachedCoverView: View {
                     image = cached
                     return
                 }
+                let hash = PlaylistCoverCache.shared.contentHash(for: pid)
                 if BackendState.shared.isAvailable,
-                   let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: pid),
+                   let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: pid, contentHash: hash),
                    let (data, resp) = try? await URLSession.shared.data(from: backendURL),
                    let http = resp as? HTTPURLResponse, http.statusCode == 200,
                    let img = UIImage(data: data) {
