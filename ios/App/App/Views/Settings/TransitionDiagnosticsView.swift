@@ -449,20 +449,22 @@ struct TransitionDiagnosticsView: View {
         case "FADE_OUT_A_CUT_B": return .yellow
         case "STEM_MIX":         return .mint
         case "DROP_MIX":         return .pink
+        case "CLEAN_HANDOFF":    return .gray
         default:                 return .secondary
         }
     }
 
     private func presetColor(_ preset: String) -> Color {
         switch preset {
-        case "aggressive":   return .red
-        case "anticipation": return .purple
-        case "energy-down":  return .blue
-        case "gentle":       return .mint
-        case "stem-mix":     return .teal
-        case "drop-mix":     return .pink
-        case "normal":       return .green
-        default:             return .secondary
+        case "aggressive":     return .red
+        case "anticipation":   return .purple
+        case "energy-down":    return .blue
+        case "gentle":         return .mint
+        case "stem-mix":       return .teal
+        case "drop-mix":       return .pink
+        case "normal":         return .green
+        case "clean-handoff":  return .gray
+        default:               return .secondary
         }
     }
 
@@ -607,20 +609,22 @@ struct TransitionDetailView: View {
         case "FADE_OUT_A_CUT_B": return .yellow
         case "STEM_MIX":         return .mint
         case "DROP_MIX":         return .pink
+        case "CLEAN_HANDOFF":    return .gray
         default:                 return .secondary
         }
     }
 
     private func presetColor(_ preset: String) -> Color {
         switch preset {
-        case "aggressive":   return .red
-        case "anticipation": return .purple
-        case "energy-down":  return .blue
-        case "gentle":       return .mint
-        case "stem-mix":     return .teal
-        case "drop-mix":     return .pink
-        case "normal":       return .green
-        default:             return .secondary
+        case "aggressive":     return .red
+        case "anticipation":   return .purple
+        case "energy-down":    return .blue
+        case "gentle":         return .mint
+        case "stem-mix":       return .teal
+        case "drop-mix":       return .pink
+        case "normal":         return .green
+        case "clean-handoff":  return .gray
+        default:               return .secondary
         }
     }
 

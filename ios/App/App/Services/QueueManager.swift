@@ -905,6 +905,7 @@ final class QueueManager: AudioEngineDelegate {
                 case .fadeOutACutB:   executorType = .fadeOutACutB
                 case .stemMix:        executorType = .stemMix
                 case .dropMix:        executorType = .dropMix
+                case .cleanHandoff:   executorType = .cleanHandoff
                 }
 
                 let config = CrossfadeExecutor.Config(

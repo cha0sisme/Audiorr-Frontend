@@ -44,6 +44,9 @@ class CrossfadeExecutor {
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
         case dropMix = "DROP_MIX"
+        /// Sequential handoff: A exp-decays (no overlap with B), tiny silent gap,
+        /// then B sin² ramps in. Used for fundamentally unmixable pairings.
+        case cleanHandoff = "CLEAN_HANDOFF"
     }
 
     struct Config {
@@ -199,16 +202,28 @@ class CrossfadeExecutor {
         highShelfA: nil
     )
 
-    /// Gentle preset: smooth transition with audible but non-aggressive filtering.
-    /// B enters with noticeable bass reduction that sweeps open gradually.
-    /// Used for NATURAL_BLEND — enough spectral separation to sound professional.
+    /// Gentle preset: smooth transition with subtle but real spectral separation.
+    /// B enters with noticeable bass reduction that sweeps open gradually, while A
+    /// thins out enough to leave room for B in the lower mids. Q stays at 0.5 (no
+    /// resonance) so the filtering is colourless — never sounds "DJ-y", just clean.
+    /// Used for NATURAL_BLEND (cases where the songs CAN actually share space —
+    /// minimal/ambient pairs, dramatic energy-down pairs, conservative non-DJ mode).
+    /// Incompatible-BPM pairs are routed to CLEAN_HANDOFF instead, not here.
     static let presetGentle = FilterPreset(
-        highpassA: .init(startFreq: 60, midFreq: 150, endFreq: 300, q: 0.5),
+        // endFreq raised 300→500Hz: previous value left A almost full-spectrum
+        // through the entire fade, undermining the "spectral separation" intent.
+        // 500Hz is still well below the vocal range — A keeps body and presence.
+        highpassA: .init(startFreq: 60, midFreq: 200, endFreq: 500, q: 0.5),
         highpassB: .init(startFreq: 250, midFreq: 150, endFreq: 40, q: 0.5),
-        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -8),
+        // endGain -8→-10dB: a touch more bass cut on A by the end so B's
+        // bass swap (rising to 0dB) doesn't fight residual low end from A.
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -4, endGain: -10),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
         lowpassA: nil,
-        midScoopA: .init(frequency: 1500, bandwidth: 1.0, startGain: 0, endGain: -6),
+        // endGain -6→-10dB: -6dB barely separated overlapping vocals. -10dB at
+        // 1.5kHz with 1-octave bandwidth audibly carves out a hole for B's voice
+        // without making A sound chewed-up.
+        midScoopA: .init(frequency: 1500, bandwidth: 1.0, startGain: 0, endGain: -10),
         highShelfA: .init(frequency: 8000, startGain: 0, endGain: -4)
     )
 
@@ -384,9 +399,11 @@ class CrossfadeExecutor {
             preset = Self.presetDropMix
         } else if config.transitionType == .stemMix {
             preset = Self.presetStemMix
-        } else if config.transitionType == .naturalBlend {
-            // Natural blend = invisible transition. Gentle filters to avoid
-            // transition fatigue — not every mix needs a dramatic moment.
+        } else if config.transitionType == .naturalBlend || config.transitionType == .cleanHandoff {
+            // Natural blend = invisible transition with subtle spectral separation.
+            // Clean handoff = sequential A→silence→B, filters bypassed at runtime
+            // (skipBFilters=true + applyFiltersA early return) so the preset choice
+            // here only seeds the initial coefficients, which never get exercised.
             preset = Self.presetGentle
         } else if config.needsAnticipation {
             preset = Self.presetAnticipation
@@ -471,6 +488,7 @@ class CrossfadeExecutor {
         if config.transitionType == .dropMix { presetName = "drop-mix" }
         else if config.transitionType == .stemMix { presetName = "stem-mix" }
         else if config.transitionType == .naturalBlend { presetName = "gentle" }
+        else if config.transitionType == .cleanHandoff { presetName = "clean-handoff" }
         else if config.needsAnticipation { presetName = "anticipation" }
         else if preset.lowpassA != nil { presetName = "energy-down" }
         else if config.useAggressiveFilters { presetName = "aggressive" }
@@ -519,7 +537,16 @@ class CrossfadeExecutor {
     static func calculateTimings(config: Config) -> Timings {
         let now = CACurrentMediaTime()
 
-        let filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
+        // CLEAN_HANDOFF: zero filterLead so A's exp decay starts immediately at trigger.
+        // Otherwise filterLead would let A play at full volume for ~0.7s before the
+        // fade-out begins, padding the transition with unintended music and pushing
+        // B's entry beyond the user's perceived "transition moment".
+        let filterLead: Double
+        if config.transitionType == .cleanHandoff {
+            filterLead = 0
+        } else {
+            filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
+        }
 
         // FadeOut = fadeDuration (1:1). No multiplier — A disappears cleanly
         // within the fade window so B arrives at its punch with A already gone.
@@ -1014,6 +1041,21 @@ class CrossfadeExecutor {
             let angle = Float(progress) * .pi / 2.0
             return maxVolumeA * cosf(angle) * cosf(angle)
 
+        case .cleanHandoff:
+            // Sequential: A exp-decays to silence over the first 55% of the window,
+            // then stays muted through the gap (55–65%) and B's ramp-in (65–100%).
+            // No overlap with B at any point — the whole purpose of this type is to
+            // avoid two unmixable tracks sounding simultaneously.
+            // Exp decay rather than linear so the perceptual fade-out feels natural
+            // (matches how the ear processes loudness logarithmically).
+            let aFadeEnd = 0.55
+            if progress < aFadeEnd {
+                let p = Float(progress / aFadeEnd)
+                // 1.0 → ~0.001 over the window. Final value is sub-audible.
+                return maxVolumeA * powf(0.001, p)
+            }
+            return 0
+
         case .fadeOutACutB:
             // A fades out ahead of B's firm entry at ~55%.
             // Shorter hold, earlier drop so A is low when B enters.
@@ -1165,6 +1207,22 @@ class CrossfadeExecutor {
             let angle = Float(progress) * .pi / 2.0
             let sinSq = sinf(angle) * sinf(angle)
             return maxVolumeB * (baseLevel + (1.0 - baseLevel) * sinSq)
+
+        case .cleanHandoff:
+            // Sequential complement to A: silent until the gap ends (65% of window),
+            // then sin² ramp to full over the last 35%. The 10% gap (55–65%) is the
+            // "respiro" — short enough to not feel like dead air, long enough that the
+            // ear perceives B as a fresh start rather than a continuation of A.
+            // anticipation is forced off in the decision layer for cleanHandoff, so
+            // baseLevel is always 0 here — no need to apply it.
+            let bRampStart = 0.65
+            if progress < bRampStart {
+                return 0
+            }
+            let rampP = Float((progress - bRampStart) / (1.0 - bRampStart))
+            let angle = rampP * .pi / 2.0
+            let sinSq = sinf(angle) * sinf(angle)
+            return maxVolumeB * sinSq
 
         case .cutAFadeInB:
             // A stays full then hard-cuts → B must be at ~100% BEFORE the cut.
@@ -1361,6 +1419,14 @@ class CrossfadeExecutor {
         // Short CUT: highpass ramp is pointless — the quick fade handles separation.
         if (config.transitionType == .cut || config.transitionType == .cutAFadeInB),
            config.fadeDuration < 5.0 {
+            return
+        }
+
+        // CLEAN_HANDOFF: A and B never overlap, so spectral shaping serves no purpose.
+        // The volume curve does all the work (exp decay → silence). Skipping filter
+        // automation also avoids the audible "swept" character that would otherwise
+        // bleed into A's outro and contradict the "clean radio handoff" intent.
+        if config.transitionType == .cleanHandoff {
             return
         }
 

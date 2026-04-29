@@ -45,6 +45,8 @@ enum DJMixingService {
         case dj, normal
     }
 
+    /// Possible high-level shapes a transition can take. CrossfadeExecutor.TransitionType
+    /// must mirror this exactly (the rawValue is the wire format used to bridge them).
     enum TransitionType: String {
         case crossfade = "CROSSFADE"
         case eqMix = "EQ_MIX"
@@ -55,6 +57,12 @@ enum DJMixingService {
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
         case dropMix = "DROP_MIX"
+        /// Sequential handoff with a tiny gap. A fades out fast (~55% of the window
+        /// with exponential decay), short respiro of dead air (~10% of the window),
+        /// then B sin² ramps in (~35%). NO overlap of the two tracks. Used when the
+        /// pairing is fundamentally unmixable (incompatible BPMs) — blending them
+        /// for several seconds sounds worse than a clean radio-style handoff.
+        case cleanHandoff = "CLEAN_HANDOFF"
     }
 
     struct MixModeConfig {
@@ -466,8 +474,20 @@ enum DJMixingService {
             hasVocalOverlap: djFilters.useMidScoop
         )
 
+        // ── 6b. Fade duration override for CLEAN_HANDOFF ──
+        // The standard duration calculator targets musical blends (5-15s).
+        // For sequential handoffs, we want a tight 2.5-3.5s window: enough for A to
+        // fade out gracefully + a short respiro + B to ramp in cleanly. Anything
+        // longer becomes either dead air or an awkward double-pause.
+        let effectiveFadeDuration: Double
+        if transition.type == .cleanHandoff {
+            effectiveFadeDuration = max(2.5, min(3.5, fade.duration))
+        } else {
+            effectiveFadeDuration = fade.duration
+        }
+
         // ── 7. Anticipation — now CUT-aware, can "tease" B before the swap ──
-        let anticipation = decideAnticipation(fadeDuration: fade.duration, entryPoint: entry.entryPoint, transitionType: transition.type)
+        let anticipation = decideAnticipation(fadeDuration: effectiveFadeDuration, entryPoint: entry.entryPoint, transitionType: transition.type)
 
         // ── 8. Time-stretch ──
         let timeStretch = decideTimeStretch(profile: profile, transitionType: transition.type)
@@ -486,25 +506,28 @@ enum DJMixingService {
         // ── Instrumental detection (refined with actual fade zone) ──
         let outroInstrumental = detectOutroInstrumental(
             currentAnalysis: safeCurrent, profile: profile,
-            bufferADuration: bufferADuration, fadeDuration: fade.duration
+            bufferADuration: bufferADuration, fadeDuration: effectiveFadeDuration
         )
         let introInstrumental = detectIntroInstrumental(
             nextAnalysis: safeNext, profile: profile,
-            entryPoint: entry.entryPoint, fadeDuration: fade.duration
+            entryPoint: entry.entryPoint, fadeDuration: effectiveFadeDuration
         )
 
-        // Skip B filters for very short fades or DROP_MIX (B enters clean and full)
-        let skipBFilters = fade.duration <= 3.0 || transition.type == .dropMix
+        // Skip B filters for very short fades, DROP_MIX (B enters clean and full)
+        // or CLEAN_HANDOFF (sequential — B enters from silence, no spectral shaping needed).
+        let skipBFilters = effectiveFadeDuration <= 3.0
+            || transition.type == .dropMix
+            || transition.type == .cleanHandoff
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
-        let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
+        let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
 
         // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep) ──
         let isEnergyDown = profile.energyB < profile.energyA - 0.2
         let djEffects = decideDJEffects(
             profile: profile,
             transitionType: transition.type,
-            fadeDuration: fade.duration,
+            fadeDuration: effectiveFadeDuration,
             isEnergyDown: isEnergyDown,
             needsAnticipation: anticipation.needsAnticipation,
             skipBFilters: skipBFilters
@@ -512,7 +535,7 @@ enum DJMixingService {
 
         return CrossfadeResult(
             entryPoint: entry.entryPoint,
-            fadeDuration: fade.duration,
+            fadeDuration: effectiveFadeDuration,
             transitionType: transition.type,
             useFilters: filter.useFilters,
             useAggressiveFilters: filter.useAggressiveFilters,
@@ -1381,7 +1404,10 @@ enum DJMixingService {
         switch transitionType {
         case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB, .dropMix:
             bassKillCompatibleType = true
-        case .cut, .naturalBlend:
+        case .cut, .naturalBlend, .cleanHandoff:
+            // CLEAN_HANDOFF excluded explicitly: A and B never overlap, so there's
+            // no bass conflict to manage with a kill — and the swap moment is the
+            // silent gap, not a beat-aligned bassSwapTime.
             bassKillCompatibleType = false
         }
 
@@ -1451,6 +1477,13 @@ enum DJMixingService {
         if transitionType == .dropMix {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: DROP_MIX — entrada directa")
+        }
+
+        // CLEAN_HANDOFF: no anticipation — B enters from silence after a respiro,
+        // there's nothing to "tease" because the whole point is sequentiality.
+        if transitionType == .cleanHandoff {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: CLEAN_HANDOFF — entrada secuencial")
         }
 
         // CUT-specific: tease B filtered before the hard swap — this is how DJs
@@ -1620,8 +1653,12 @@ enum DJMixingService {
             case .smooth:
                 // Incompatible BPMs or low affinity — smooth crossfade
                 if profile.bpmRelationship == .incompatible {
-                    type = .naturalBlend
-                    reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff))) → NATURAL_BLEND"
+                    // Two unmixable tracks. A 5–10s blend would force them to share the
+                    // mid-crossfade at near-equal volumes (equal-power curve), and with
+                    // incompatible tempos that sounds like rhythmic mud. Use sequential
+                    // handoff instead: A exits cleanly, micro-respiro, B enters fresh.
+                    type = .cleanHandoff
+                    reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff))) → CLEAN_HANDOFF (sin overlap)"
                 } else {
                     type = .crossfade
                     reason = "Smooth blend (afinidad=\(String(format: "%.2f", profile.styleAffinity))) → CROSSFADE"
@@ -1751,9 +1788,9 @@ enum DJMixingService {
         transitionType: TransitionType
     ) -> TimeStretchResult {
         switch transitionType {
-        case .cut, .cutAFadeInB, .fadeOutACutB:
+        case .cut, .cutAFadeInB, .fadeOutACutB, .cleanHandoff:
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
-                                     reason: "No stretch: transicion tipo cut")
+                                     reason: "No stretch: transicion tipo cut/handoff")
         default: break
         }
 
