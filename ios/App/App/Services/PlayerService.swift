@@ -140,7 +140,7 @@ final class PlayerService {
         }
         currentContextUri = "playlist:\(playlistId)"
         currentContextName = playlistName
-        QueueManager.shared.play(songs: mix, startIndex: startIdx)
+        QueueManager.shared.play(songs: mix, startIndex: 0)
     }
 
     func updateSmartMixStatus(playlistId: String, status: String) {
