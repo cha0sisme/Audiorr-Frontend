@@ -129,8 +129,14 @@ enum DJMixingService {
 
     enum BPMRelationship {
         case identical      // diff < 3 after harmonic normalization
-        case compatible     // diff 3-12 (stretchable)
-        case incompatible   // diff > 12 (no beat match)
+        case compatible     // diff 3-12 (stretchable within 8% rate change)
+        /// diff 12-18: too far for invisible beat-match (would need >8% time-stretch),
+        /// but close enough that a subtle gentle crossfade still works musically.
+        /// Think: a DJ who can't beat-grid but blends with filters and longer fades
+        /// to mask the rhythmic mismatch — the most graceful "I can't match these"
+        /// move available.
+        case borderline
+        case incompatible   // diff > 18 (truly unmixable — sequential handoff only)
     }
 
     enum EnergyFlow {
@@ -285,6 +291,7 @@ enum DJMixingService {
         let bpmRel: BPMRelationship
         if diff < 3 { bpmRel = .identical }
         else if diff <= 12 { bpmRel = .compatible }
+        else if diff <= 18 { bpmRel = .borderline }
         else { bpmRel = .incompatible }
 
         // BPM confidence: both songs must have confidence ≥ 0.5 AND valid BPM data for trusted decisions.
@@ -1632,7 +1639,13 @@ enum DJMixingService {
             isBAbrupt = fadeDuration < 3
         }
 
-        let bpmCompatible = profile.bpmRelationship != .incompatible
+        // Beat-match eligibility: stricter than "mixable". A 12–18 BPM diff is
+        // close enough to blend gently but too far for time-stretch (>8% rate
+        // change becomes audible), and beat-grid alignment without time-stretch
+        // produces unaligned kicks across the fade. So beat-match requires
+        // identical or compatible (≤12 BPM diff), NOT borderline or incompatible.
+        let bpmBeatMatchable = profile.bpmRelationship == .identical
+            || profile.bpmRelationship == .compatible
 
         var type: TransitionType = .crossfade
         var reason = "Transicion normal"
@@ -1651,22 +1664,33 @@ enum DJMixingService {
                 reason = "Minimal (ambos baja energia) → NATURAL_BLEND suave"
 
             case .smooth:
-                // Incompatible BPMs or low affinity — smooth crossfade
-                if profile.bpmRelationship == .incompatible {
+                switch profile.bpmRelationship {
+                case .incompatible:
                     // Two unmixable tracks. A 5–10s blend would force them to share the
                     // mid-crossfade at near-equal volumes (equal-power curve), and with
                     // incompatible tempos that sounds like rhythmic mud. Use sequential
                     // handoff instead: A exits cleanly, micro-respiro, B enters fresh.
                     type = .cleanHandoff
                     reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff))) → CLEAN_HANDOFF (sin overlap)"
-                } else {
+                case .borderline:
+                    // 12–18 BPM diff — too far for invisible beat-match but close enough
+                    // that a thoughtful blend still works. Route to NATURAL_BLEND so we
+                    // get the gentle preset (subtle highpass on A, mild bass cut, mid
+                    // scoop) plus equal-power curve and zero DJ effects. The result
+                    // sounds like a DJ who can't beat-grid the pair but is doing the
+                    // most graceful blend possible — invisible filtering, no obvious
+                    // sweeps, no resonance tricks. Avoids both the rhythmic clash of
+                    // a punchy crossfade AND the dead-air of a clean handoff.
+                    type = .naturalBlend
+                    reason = "BPMs borderline (diff=\(String(format: "%.1f", profile.bpmDiff))) → NATURAL_BLEND sutil"
+                case .identical, .compatible:
                     type = .crossfade
                     reason = "Smooth blend (afinidad=\(String(format: "%.2f", profile.styleAffinity))) → CROSSFADE"
                 }
 
             case .dramatic:
                 // Big energy change or harmonic clash
-                if profile.energyFlow == .energyUp && bpmCompatible && isBeatSynced {
+                if profile.energyFlow == .energyUp && bpmBeatMatchable && isBeatSynced {
                     // Energy rising with compatible BPMs — can do an impactful beat-matched entry
                     type = .beatMatchBlend
                     reason = "Dramatic UP + BPMs compatibles → BEAT_MATCH_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
