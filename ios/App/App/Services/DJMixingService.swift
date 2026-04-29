@@ -539,6 +539,24 @@ enum DJMixingService {
             introInstrumental: preIntroInstrumental
         )
 
+        // ── 6c. CUT entry snap to downbeat ──
+        // Done AFTER the type is decided (we only snap CUT-family) and BEFORE
+        // anticipation/trigger/instrumental refinement (so they all see the
+        // same final entry). The pre-decision calcs (fade, djFilters, pre-detect
+        // instrumental) keep the original entry — they're heuristics tolerant
+        // of a 1-2s shift.
+        let snapResult = snapCutEntryToDownbeat(
+            entry: entry.entryPoint,
+            transitionType: transition.type,
+            next: safeNext,
+            bufferBDuration: bufferBDuration,
+            fadeDuration: fade.duration
+        )
+        let finalEntry = snapResult.entry
+        if snapResult.snapped {
+            print("[DJMixingService] 🎯 \(snapResult.info)")
+        }
+
         // ── 6b. Fade duration overrides per transition type ──
         // calculateAdaptiveFadeDuration assumes a graceful blend and returns
         // 5–15s based on outro structure. Some transition types (decided AFTER
@@ -574,7 +592,9 @@ enum DJMixingService {
         }
 
         // ── 7. Anticipation — now CUT-aware, can "tease" B before the swap ──
-        let anticipation = decideAnticipation(fadeDuration: effectiveFadeDuration, entryPoint: entry.entryPoint, transitionType: transition.type)
+        // Uses finalEntry so an entry that got snapped forward by P5.a still
+        // computes the right tease window relative to where B actually starts.
+        let anticipation = decideAnticipation(fadeDuration: effectiveFadeDuration, entryPoint: finalEntry, transitionType: transition.type)
 
         // ── 8. Time-stretch ──
         let timeStretch = decideTimeStretch(profile: profile, transitionType: transition.type)
@@ -597,7 +617,7 @@ enum DJMixingService {
         )
         let introInstrumental = detectIntroInstrumental(
             nextAnalysis: safeNext, profile: profile,
-            entryPoint: entry.entryPoint, fadeDuration: effectiveFadeDuration
+            entryPoint: finalEntry, fadeDuration: effectiveFadeDuration
         )
 
         // Skip B filters for very short fades, DROP_MIX (B enters clean and full),
@@ -624,7 +644,7 @@ enum DJMixingService {
         )
 
         return CrossfadeResult(
-            entryPoint: entry.entryPoint,
+            entryPoint: finalEntry,
             fadeDuration: effectiveFadeDuration,
             transitionType: transition.type,
             useFilters: filter.useFilters,
@@ -2132,6 +2152,83 @@ enum DJMixingService {
             return true
         }
         return false
+    }
+
+    // MARK: - CUT entry snap to downbeat
+
+    /// Snap `entry` to a clean musical landmark when the transition is CUT-family
+    /// and `next.chorusStartTime` is reachable. Without this, CUT can land in a
+    /// "dead zone" — typically 0.5–1.5s before the chorus drop — which sounds
+    /// like the cut fired half a beat early ("sosa", per the user's listening on
+    /// Stir Fry → Vamp Anthem).
+    ///
+    /// Strategy: candidates are `chorusStart`, `chorusStart - 1 bar`, and
+    /// `chorusStart - 2 bars`. Pick the first candidate that is meaningfully
+    /// after the original entry (≥ +0.5s) and within reach of B's playable
+    /// window. If `downbeatTimes` are available and one sits within 0.3s of
+    /// the candidate, snap to the actual downbeat (real grid > theoretical bar).
+    ///
+    /// No-op for non-cut transitions, missing analysis, or when chorusStart
+    /// already lies before/at the original entry. Reggaeton (STEM_MIX /
+    /// BEAT_MATCH_BLEND) never reaches this path.
+    private static func snapCutEntryToDownbeat(
+        entry: Double,
+        transitionType: TransitionType,
+        next: SongAnalysis?,
+        bufferBDuration: Double,
+        fadeDuration: Double
+    ) -> (entry: Double, snapped: Bool, info: String) {
+        guard transitionType == .cut || transitionType == .cutAFadeInB else {
+            return (entry, false, "")
+        }
+        guard let next = next, next.hasError != true else { return (entry, false, "") }
+        guard next.chorusStartTime > 0.5 else { return (entry, false, "") }
+
+        let chorusStart = next.chorusStartTime
+        // Already at/past the chorus — don't move (the rare case where the entry
+        // calc already targeted past the chorus, e.g. for repeat-chorus tracks).
+        if entry >= chorusStart - 0.3 { return (entry, false, "") }
+
+        // Reachability guard. If the chorus is far from the original entry, the
+        // user wasn't trying to enter at chorus — they wanted an early CUT. Cap
+        // the lead-in to fade + 8s. Example: I'M GOD with chorusStart=61s vs
+        // entry=3s would otherwise snap to a 50+s shift, destroying the
+        // transition. 8s of lead-in is the upper bound a DJ would tolerate.
+        let chorusReach = entry + fadeDuration + 8.0
+        guard chorusStart <= chorusReach else { return (entry, false, "") }
+
+        let beatInterval = next.beatInterval > 0 ? next.beatInterval : 0.5
+        let bar = beatInterval * 4
+        let maxEntry = max(0, bufferBDuration - fadeDuration - 0.5)
+
+        // Candidates: AT chorusStart (drop), 1 bar before, 2 bars before. Pick
+        // the one CLOSEST to the original entry — minimises the shift while
+        // still leaving the dead zone. This means a CUT whose entry was already
+        // far before the chorus stays mostly there (just snapped to a clean bar
+        // boundary), while a CUT whose entry was in the dead zone gets pushed
+        // to either chorusStart itself or the bar before (whichever is closer).
+        // Each candidate must be ≥ entry + 0.5s (avoid trivial snaps), ≥ 0 and
+        // ≤ maxEntry.
+        let candidates: [Double] = [chorusStart, chorusStart - bar, chorusStart - 2 * bar]
+            .filter { $0 >= 0 && $0 <= maxEntry && $0 >= entry + 0.5 }
+
+        guard let target = candidates.min(by: { abs($0 - entry) < abs($1 - entry) })
+        else { return (entry, false, "") }
+
+        // Snap to actual downbeat if available within 0.3s.
+        let snapped: Double
+        if !next.downbeatTimes.isEmpty,
+           let nearest = next.downbeatTimes.min(by: { abs($0 - target) < abs($1 - target) }),
+           abs(nearest - target) < 0.3 {
+            snapped = nearest
+        } else {
+            snapped = target
+        }
+
+        let label = snapped >= chorusStart - 0.2 ? "AT chorus" :
+                    snapped >= chorusStart - bar - 0.2 ? "−1 bar" : "−2 bars"
+        let info = "CUT snap \(String(format: "%.1f", entry))s → \(String(format: "%.1f", snapped))s (\(label) of chorus@\(String(format: "%.1f", chorusStart))s)"
+        return (snapped, true, info)
     }
 
     // MARK: - Harmonic BPM Normalization
