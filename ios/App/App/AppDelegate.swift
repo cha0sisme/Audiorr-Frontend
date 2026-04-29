@@ -168,8 +168,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             QueueManager.shared.savePositionNow()
         }
 
-        // Release audio hardware when not playing — saves battery in background
-        if let engine = AudioEngineManager.shared, !engine.isPlaying {
+        // Release audio hardware when truly idle — saves battery in background.
+        //
+        // We only deactivate when there's NO audio loaded at all (no file, no stream).
+        // When the user is just paused with a song loaded, iOS expects us to keep the
+        // session active so the lockscreen Now Playing widget stays bound to our app:
+        // deactivating in the paused-with-song state makes iOS revoke our primary-audio
+        // status, after which the widget falls back to a system-decided play/pause icon
+        // that doesn't match our actual state (typically shows "playing" while we're
+        // paused — the bug v6.7 silently introduced).
+        //
+        // Apple Music / Spotify follow the same rule: session stays active while a
+        // track is loaded, even when paused. The only "release" moment is genuine idle
+        // (queue exhausted, app launched without playback yet, etc.).
+        if let engine = AudioEngineManager.shared, !engine.isPlaying, !engine.hasLoadedAudio {
             do {
                 try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             } catch {

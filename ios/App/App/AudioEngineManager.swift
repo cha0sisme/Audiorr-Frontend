@@ -30,6 +30,20 @@ class AudioEngineManager {
     // MARK: - Estado
 
     private(set) var isPlaying = false
+
+    /// True when audio is conceptually "loaded" — a file or stream is currently
+    /// scheduled, regardless of play/pause state.
+    ///
+    /// Used by AppDelegate.applicationDidEnterBackground to decide whether
+    /// deactivating AVAudioSession is safe. When audio is paused with a song
+    /// loaded, the lockscreen widget needs the session to stay active so iOS
+    /// keeps treating us as the "Now Playing" app and respects our published
+    /// MPNowPlayingInfoCenter.playbackState. Deactivating in that state makes
+    /// iOS lose primary-audio status, and the widget falls back to a stale
+    /// or system-decided icon (typically showing playing when we're paused).
+    var hasLoadedAudio: Bool {
+        currentFile != nil || streamPlayer != nil
+    }
     private var volume: Float = 0.75
     private(set) var currentSongDuration: Double = 0
     /// Effective end of audio (excluding trailing silence). Set from analysis data.
