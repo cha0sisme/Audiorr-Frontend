@@ -86,6 +86,12 @@ class CrossfadeExecutor {
         /// Always rides alongside Twin dynQ (the Q bell on B's band 0) so B sounds
         /// like a DJ "riding the filter knob" as it comes in.
         let useNotchSweep: Bool
+        // DJ effects (Sprint 3 — hip-hop signature)
+        /// Stutter Cut: 1/8-note volume gate over A's last 2 beats before a CUT.
+        /// Gated by decideDJEffects to bpmTrusted + bpmA in [80,180] + danceability
+        /// > 0.55 + hasBeatGridA. The executor still performs an additional runtime
+        /// check (cut moment within beatInterval/4 of a real beat) before activating.
+        let useStutterCut: Bool
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -98,7 +104,8 @@ class CrossfadeExecutor {
              isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
              danceability: Double = 0.5, skipBFilters: Bool = false,
              useBassKill: Bool = false, useDynamicQ: Bool = false,
-             useNotchSweep: Bool = false) {
+             useNotchSweep: Bool = false,
+             useStutterCut: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -124,6 +131,7 @@ class CrossfadeExecutor {
             self.useBassKill = useBassKill
             self.useDynamicQ = useDynamicQ
             self.useNotchSweep = useNotchSweep
+            self.useStutterCut = useStutterCut
         }
     }
 
@@ -335,6 +343,24 @@ class CrossfadeExecutor {
     /// Phaser Notch Sweep — current notch depth (gain dB, negative = cut).
     private var diagNotchGainB: Float = 0
 
+    // MARK: - Stutter Cut state (Sprint 3)
+
+    /// A's file-time at executor start. Captured from caller. Only used by Stutter Cut.
+    private let startFileTimeA: Double
+    /// True when Stutter Cut passed BOTH the decision-layer gates and the runtime
+    /// beat-anchor check. Set in init after pre-computing the anchor; if false,
+    /// gainForPlayerA bypasses the gate entirely (graceful degradation — the CUT
+    /// still happens, just without the chop).
+    private var stutterActive: Bool = false
+    /// Wall-clock time at which the stutter pattern STARTS (= 2 beats before the
+    /// anchor). gainForPlayerA only applies the gate while t is in [start, anchor].
+    private var stutterStartWall: Double = 0
+    /// Wall-clock time at which the stutter pattern ENDS (= the anchor itself,
+    /// which is the wall-clock translation of A's nearest real beat to the cut).
+    private var stutterAnchorWall: Double = 0
+    /// Cell duration = beatInterval / 2 (1/8 note). Cached for the gate calculation.
+    private var stutterCellDuration: Double = 0
+
     var onComplete: ((Double) -> Void)?
     /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
     /// Permite que AudioEngineManager notifique onTrackEnd como safety net.
@@ -371,7 +397,13 @@ class CrossfadeExecutor {
         maxVolumeB: Float,
         getMasterVolume: @escaping () -> Float,
         currentTitle: String,
-        nextTitle: String
+        nextTitle: String,
+        /// A's file-time at the moment this executor is created. Required by Stutter
+        /// Cut to map wall-clock time back to A's beat grid. Captured by the caller
+        /// from AudioEngineManager.currentTime() to avoid coupling the executor to
+        /// player internals. Only meaningful when A plays at rate 1.0 (always true
+        /// for CUT — see decideTimeStretch).
+        startFileTimeA: Double = 0
     ) {
         self.config = config
         self.engine = engine
@@ -389,6 +421,7 @@ class CrossfadeExecutor {
         self.maxVolumeA = maxVolumeA
         self.maxVolumeB = maxVolumeB
         self.getMasterVolume = getMasterVolume
+        self.startFileTimeA = startFileTimeA
 
         // Seleccionar preset — informed by backend analysis
         // Energy-down: if B is significantly less energetic, use lowpass sweep on A
@@ -439,6 +472,59 @@ class CrossfadeExecutor {
         hasBeatData = config.beatIntervalA > 0 || config.beatIntervalB > 0
         bassSwapTime = Self.computeBassSwapTime(config: config, timings: timings)
 
+        // ── Stutter Cut anchor pre-computation (Sprint 3) ──
+        //
+        // The decision layer (DJMixingService.decideDJEffects) already gated on
+        // bpmTrusted, BPM range, danceability, beatGrid presence, etc. Here we do
+        // the FINAL runtime check: is the cut moment actually close enough to a
+        // real beat in A's grid? If not, we can't anchor the stutter musically and
+        // the effect must be bypassed (graceful degradation — CUT still happens
+        // cleanly, just no chop).
+        //
+        // Math:
+        //   1. cutFileTimeA = where A's playhead lands at transitionEndTime in
+        //      A's file-time coordinate system. Since useTimeStretch is forced
+        //      false for CUT (decideTimeStretch line 1791), A advances 1:1 with
+        //      wall-clock from startTime onward.
+        //   2. nearestBeat = closest entry in downbeatTimesA to cutFileTimeA.
+        //   3. If |nearestBeat - cutFileTimeA| > beatInterval/4, the cut is
+        //      mid-beat and the stutter would land off-grid. Skip.
+        //   4. Otherwise, anchor the stutter so its LAST 1/8 cell ends at the
+        //      anchor's wall-clock equivalent. Pattern: ON/OFF/ON/OFF (4 cells
+        //      of beatInterval/2 each, totaling 2 beats).
+        if config.useStutterCut
+            && config.beatIntervalA > 0
+            && !config.downbeatTimesA.isEmpty
+            && (config.transitionType == .cut || config.transitionType == .cutAFadeInB) {
+
+            let totalTime = timings.totalTime
+            let cutFileTimeA = startFileTimeA + totalTime
+            let beatInterval = config.beatIntervalA
+
+            // Find the beat closest to cutFileTimeA — could be slightly after
+            // (typical when trigger snapped to a downbeat) or slightly before.
+            if let nearestBeat = config.downbeatTimesA.min(by: {
+                abs($0 - cutFileTimeA) < abs($1 - cutFileTimeA)
+            }) {
+                let beatOffset = abs(nearestBeat - cutFileTimeA)
+                let snapTolerance = beatInterval / 4.0  // ±25% of a beat = ±125ms at 120 BPM
+
+                if beatOffset <= snapTolerance {
+                    // Convert anchor's file-time back to wall-clock.
+                    // Wall-clock at startTime corresponds to file-time startFileTimeA.
+                    let anchorWall = timings.startTime + (nearestBeat - startFileTimeA)
+                    // Stutter zone = 2 beats ending at the anchor.
+                    stutterStartWall = anchorWall - 2.0 * beatInterval
+                    stutterAnchorWall = anchorWall
+                    stutterCellDuration = beatInterval / 2.0
+                    stutterActive = true
+                    print("[CrossfadeExecutor] 🎚️ Stutter Cut ARMED: anchor=\(String(format: "%.3f", nearestBeat))s file (offset \(String(format: "%.0f", beatOffset * 1000))ms from cut), cell=\(String(format: "%.0f", stutterCellDuration * 1000))ms, BPM=\(String(format: "%.0f", 60.0 / beatInterval))")
+                } else {
+                    print("[CrossfadeExecutor] Stutter Cut bypassed: cut is \(String(format: "%.0f", beatOffset * 1000))ms from nearest beat (>\(Int(snapTolerance * 1000))ms tolerance)")
+                }
+            }
+        }
+
         // Pre-compute ALL effect flags so diagnostics/logging reflect the final state.
         // These are also set in setupInitialEQ() but we need them here for the log below.
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
@@ -459,7 +545,7 @@ class CrossfadeExecutor {
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
         let djDesc = [useMidScoop ? "midScoop" : nil, useHighShelfCut ? "hiShelf" : nil,
                       useBassKill ? "bassKill" : nil, useDynamicQ ? "dynQ" : nil,
-                      useNotchSweep ? "notch" : nil]
+                      useNotchSweep ? "notch" : nil, stutterActive ? "stutter" : nil]
             .compactMap { $0 }.joined(separator: "+")
         let analysisDesc = [config.isOutroInstrumental ? "outroInst" : nil,
                            config.isIntroInstrumental ? "introInst" : nil,
@@ -509,6 +595,7 @@ class CrossfadeExecutor {
             useBassKill: useBassKill,
             useDynamicQ: useDynamicQ,
             useNotchSweep: useNotchSweep,
+            useStutterCut: stutterActive,
             skipBFilters: config.skipBFilters,
             energyA: config.energyA,
             energyB: config.energyB,
@@ -1001,6 +1088,38 @@ class CrossfadeExecutor {
     // MARK: - Volume curves for A (port exacto de AudioEffectsChain.ts líneas 152-204)
 
     func gainForPlayerA(at t: Double) -> Float {
+        let baseGain = unstutteredGainForPlayerA(at: t)
+        return applyStutterGate(baseGain: baseGain, at: t)
+    }
+
+    /// Stutter Cut gate: 1/8-note ON/OFF/ON/OFF pattern over A's last 2 beats.
+    /// No-op when stutterActive is false or t is outside [stutterStartWall, stutterAnchorWall).
+    /// Includes a 3ms anti-click ramp at each cell boundary to suppress pops.
+    private func applyStutterGate(baseGain: Float, at t: Double) -> Float {
+        guard stutterActive, t >= stutterStartWall, t < stutterAnchorWall, stutterCellDuration > 0 else {
+            return baseGain
+        }
+        let elapsed = t - stutterStartWall
+        let cellIndex = Int(floor(elapsed / stutterCellDuration))
+        let timeInCell = elapsed - Double(cellIndex) * stutterCellDuration
+        let isOnCell = (cellIndex % 2 == 0)
+        let targetGate: Float = isOnCell ? 1.0 : 0.0
+        // 3ms anti-click ramp at each cell start. Inaudible musically but eliminates
+        // the click that would otherwise come from instant 1↔0 gain transitions
+        // through the biquad filter chain.
+        let antiClick: Double = 0.003
+        let gate: Float
+        if timeInCell < antiClick && cellIndex > 0 {
+            let prevGate: Float = ((cellIndex - 1) % 2 == 0) ? 1.0 : 0.0
+            let p = Float(timeInCell / antiClick)
+            gate = prevGate + (targetGate - prevGate) * p
+        } else {
+            gate = targetGate
+        }
+        return baseGain * gate
+    }
+
+    private func unstutteredGainForPlayerA(at t: Double) -> Float {
         guard t >= timings.volumeFadeStartTime else { return maxVolumeA }
         guard t < timings.transitionEndTime else { return 0 }
 

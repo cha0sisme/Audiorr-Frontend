@@ -237,6 +237,10 @@ enum DJMixingService {
         /// (-6 → -24 → -6 dB). Adds a moving spectral hole that "rides" through B
         /// as it opens. Only activates alongside useDynamicQ when conditions allow.
         let useNotchSweep: Bool
+        // DJ effects (Sprint 3 — hip-hop signature)
+        /// Stutter Cut: 1/8-note volume gate over A's last 2 beats before a CUT,
+        /// anchored to A's beat grid. Sounds like a DJ Premier mixtape chop.
+        let useStutterCut: Bool
         let transitionReason: String
         /// Trigger bias: how many seconds earlier (negative) or later (positive) the trigger
         /// should fire relative to the default "latest possible" position.
@@ -529,7 +533,7 @@ enum DJMixingService {
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
 
-        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep) ──
+        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep + Stutter Cut) ──
         let isEnergyDown = profile.energyB < profile.energyA - 0.2
         let djEffects = decideDJEffects(
             profile: profile,
@@ -537,7 +541,8 @@ enum DJMixingService {
             fadeDuration: effectiveFadeDuration,
             isEnergyDown: isEnergyDown,
             needsAnticipation: anticipation.needsAnticipation,
-            skipBFilters: skipBFilters
+            skipBFilters: skipBFilters,
+            hasBeatGridA: !dbA.isEmpty
         )
 
         return CrossfadeResult(
@@ -568,6 +573,7 @@ enum DJMixingService {
             useBassKill: djEffects.useBassKill,
             useDynamicQ: djEffects.useDynamicQ,
             useNotchSweep: djEffects.useNotchSweep,
+            useStutterCut: djEffects.useStutterCut,
             transitionReason: transition.reason,
             triggerBias: trigger.bias,
             triggerBiasReason: trigger.reason
@@ -1381,6 +1387,11 @@ enum DJMixingService {
         let useDynamicQ: Bool
         /// Phaser-style narrow notch on B's band 2 (Sprint 2 — pairs with dynQ for "DJ knob ride" feel).
         let useNotchSweep: Bool
+        /// Stutter Cut: 1/8-note volume gate over A's last 2 beats before a CUT.
+        /// Anchored to A's nearest real beat in downbeatTimesA so the chops align
+        /// with the actual rhythmic grid. Strict gates protect against out-of-phase
+        /// stuttering that would sound like a glitch instead of a DJ chop.
+        let useStutterCut: Bool
         let reason: String
     }
 
@@ -1393,11 +1404,16 @@ enum DJMixingService {
         fadeDuration: Double,
         isEnergyDown: Bool,
         needsAnticipation: Bool = false,
-        skipBFilters: Bool = false
+        skipBFilters: Bool = false,
+        /// True when A has a non-empty beat grid that the executor can anchor to.
+        /// Without this, Stutter Cut would chop blindly relative to wall-clock and
+        /// land off-grid — sounding like a glitch rather than a DJ chop.
+        hasBeatGridA: Bool = false
     ) -> DJEffectsResult {
         var useBassKill = false
         var useDynamicQ = false
         var useNotchSweep = false
+        var useStutterCut = false
         var reasons: [String] = []
 
         // ── Bass Kill: instant low-frequency cut at bassSwapTime ──
@@ -1461,12 +1477,43 @@ enum DJMixingService {
             reasons.append("notchSweep: pair with dynQ, fade=\(String(format: "%.1f", fadeDuration))s")
         }
 
+        // ── Stutter Cut (Sprint 3): 1/8-note volume gate over A's last 2 beats ──
+        // Hip-hop DJ signature — DJ Premier mixtape style. The chops MUST land on
+        // A's actual beat grid, otherwise it sounds like a glitch instead of music.
+        // Strict gates protect against every known failure mode:
+        //   1. Only CUT-family transitions — blends already overlap, no need to chop
+        //   2. bpmTrusted: untrusted BPM means the beat grid is unreliable, the
+        //      stutter would be visibly out of phase
+        //   3. bpmA in [80, 180]: at <80, 1/8 = >375ms (too slow, sounds half-time);
+        //      at >180, 1/8 = <167ms (sounds like a buzz, not a chop)
+        //   4. Danceability > 0.55: rhythmic music only — stutter on ambient/jazz
+        //      kills the atmosphere
+        //   5. fadeDuration >= 1.5s: need at least 2 beats at 80 BPM (1.5s) to fit
+        //      the 4-cell pattern. Shorter fades skip the effect.
+        //   6. hasBeatGridA: required for runtime anchor lookup. Without it the
+        //      executor can't find the nearest real beat to the cut moment.
+        // The executor performs an additional runtime check: it verifies the cut
+        // moment is within beatInterval/4 of an actual beat. If not, the gate is
+        // bypassed (graceful degradation — the CUT still happens, just no chop).
+        let stutterCompatibleType = (transitionType == .cut || transitionType == .cutAFadeInB)
+        if stutterCompatibleType
+            && profile.bpmTrusted
+            && profile.bpmA >= 80
+            && profile.bpmA <= 180
+            && profile.avgDanceability > 0.55
+            && fadeDuration >= 1.5
+            && hasBeatGridA {
+            useStutterCut = true
+            reasons.append("stutter: cut@\(Int(profile.bpmA))BPM dance=\(String(format: "%.2f", profile.avgDanceability))")
+        }
+
         let reason = reasons.isEmpty
             ? "DJ effects OFF"
             : "DJ effects ON: \(reasons.joined(separator: ", "))"
         print("[DJMixingService] \(reason)")
         return DJEffectsResult(useBassKill: useBassKill, useDynamicQ: useDynamicQ,
-                               useNotchSweep: useNotchSweep, reason: reason)
+                               useNotchSweep: useNotchSweep, useStutterCut: useStutterCut,
+                               reason: reason)
     }
 
     // MARK: - Anticipation

@@ -935,7 +935,8 @@ final class QueueManager: AudioEngineDelegate {
                     skipBFilters: crossfadeResult.skipBFilters,
                     useBassKill: crossfadeResult.useBassKill,
                     useDynamicQ: crossfadeResult.useDynamicQ,
-                    useNotchSweep: crossfadeResult.useNotchSweep
+                    useNotchSweep: crossfadeResult.useNotchSweep,
+                    useStutterCut: crossfadeResult.useStutterCut
                 )
 
                 // Publish transition reason to diagnostics
@@ -991,7 +992,8 @@ final class QueueManager: AudioEngineDelegate {
                         skipBFilters: config.skipBFilters,
                         useBassKill: config.useBassKill,
                         useDynamicQ: config.useDynamicQ,
-                        useNotchSweep: config.useNotchSweep
+                        useNotchSweep: config.useNotchSweep,
+                        useStutterCut: config.useStutterCut
                     )
                 } else {
                     finalConfig = config

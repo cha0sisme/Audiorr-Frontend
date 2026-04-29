@@ -38,6 +38,11 @@ final class TransitionDiagnostics {
     /// Phaser Notch Sweep on B band 2 (Sprint 2). True when the narrow parametric
     /// notch with depth bell is active alongside Twin dynQ.
     var useNotchSweep = false
+    /// Stutter Cut on A's last 2 beats (Sprint 3). True when the 1/8-note gate is
+    /// armed AND the runtime beat-anchor check passed in CrossfadeExecutor init.
+    /// (decideDJEffects might say true while the executor bypasses if the cut is
+    /// off-grid; this flag reflects the decision-layer intent, not runtime state.)
+    var useStutterCut = false
     var skipBFilters = false
 
     // Analysis
@@ -115,6 +120,7 @@ final class TransitionDiagnostics {
         let useBassKill: Bool
         let useDynamicQ: Bool
         let useNotchSweep: Bool
+        let useStutterCut: Bool
         let skipBFilters: Bool
         // Beat / BPM
         let beatSynced: Bool
@@ -236,6 +242,7 @@ final class TransitionDiagnostics {
         useBassKill: Bool,
         useDynamicQ: Bool,
         useNotchSweep: Bool,
+        useStutterCut: Bool,
         skipBFilters: Bool,
         energyA: Double,
         energyB: Double,
@@ -269,6 +276,7 @@ final class TransitionDiagnostics {
             self.useBassKill = useBassKill
             self.useDynamicQ = useDynamicQ
             self.useNotchSweep = useNotchSweep
+            self.useStutterCut = useStutterCut
             self.skipBFilters = skipBFilters
             self.energyA = energyA
             self.energyB = energyB
@@ -373,6 +381,7 @@ final class TransitionDiagnostics {
                 useBassKill: self.useBassKill,
                 useDynamicQ: self.useDynamicQ,
                 useNotchSweep: self.useNotchSweep,
+                useStutterCut: self.useStutterCut,
                 skipBFilters: self.skipBFilters,
                 beatSynced: self.isBeatSynced,
                 beatSyncInfo: self.beatSyncInfo,
@@ -579,7 +588,7 @@ final class TransitionDiagnostics {
         FILTERS:
           enabled=\(filtersEnabled)  preset=\(filterPreset)
           midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
-          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)
+          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)  stutterCut=\(useStutterCut)
 
         ANALYSIS:
           energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))

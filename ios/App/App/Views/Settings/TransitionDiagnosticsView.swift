@@ -191,6 +191,8 @@ struct TransitionDiagnosticsView: View {
                     color: diag.useDynamicQ ? .cyan : .secondary)
             diagRow("Notch Sweep (B)", value: diag.useNotchSweep ? "ACTIVE" : "Off",
                     color: diag.useNotchSweep ? .purple : .secondary)
+            diagRow("Stutter Cut (A)", value: diag.useStutterCut ? "ACTIVE" : "Off",
+                    color: diag.useStutterCut ? .orange : .secondary)
             diagRow("B Filters", value: diag.skipBFilters ? "SKIPPED" : "Active",
                     color: diag.skipBFilters ? .yellow : .green)
         }
@@ -355,6 +357,7 @@ struct TransitionDiagnosticsView: View {
                             if record.useBassKill   { historyToken("kill", color: .red) }
                             if record.useDynamicQ   { historyToken("dynQ", color: .teal) }
                             if record.useNotchSweep { historyToken("notch", color: .purple) }
+                            if record.useStutterCut { historyToken("stutter", color: .orange) }
                         }
                     }
                     .padding(.vertical, 2)
@@ -528,6 +531,8 @@ struct TransitionDetailView: View {
                     color: record.useDynamicQ ? .cyan : .secondary)
                 row("Notch Sweep (B)", value: record.useNotchSweep ? "ACTIVE" : "Off",
                     color: record.useNotchSweep ? .purple : .secondary)
+                row("Stutter Cut (A)", value: record.useStutterCut ? "ACTIVE" : "Off",
+                    color: record.useStutterCut ? .orange : .secondary)
                 row("B Filters", value: record.skipBFilters ? "SKIPPED" : "Active",
                     color: record.skipBFilters ? .yellow : .green)
             }

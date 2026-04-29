@@ -1012,6 +1012,12 @@ class AudioEngineManager {
         crossfadeStartedAt = CFAbsoluteTimeGetCurrent()
         delegate?.audioEngineCrossfadeStarted()
 
+        // Capture A's file-time at trigger moment so the executor can map wall-clock
+        // back to A's beat grid for Stutter Cut. Only meaningful when A plays at
+        // rate 1.0 (always true for CUT-family transitions; for the rest, the
+        // executor ignores this value because useStutterCut is false anyway).
+        let startFileTimeA = currentTime()
+
         let executor = CrossfadeExecutor(
             config: config,
             engine: engine,
@@ -1029,7 +1035,8 @@ class AudioEngineManager {
             maxVolumeB: replayGainMultiplierB,
             getMasterVolume: { [weak self] in self?.volume ?? 1.0 },
             currentTitle: currentSongTitle,
-            nextTitle: nextSongTitle
+            nextTitle: nextSongTitle,
+            startFileTimeA: startFileTimeA
         )
 
         executor.onComplete = { [weak self] startOffset in
