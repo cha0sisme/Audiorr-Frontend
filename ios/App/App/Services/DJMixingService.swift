@@ -1425,12 +1425,19 @@ enum DJMixingService {
         //   5. Fade is long enough for the effect to register (>4s)
         let bassKillCompatibleType: Bool
         switch transitionType {
-        case .eqMix, .beatMatchBlend, .crossfade, .stemMix, .cutAFadeInB, .fadeOutACutB, .dropMix:
+        case .eqMix, .beatMatchBlend, .crossfade, .cutAFadeInB, .fadeOutACutB:
             bassKillCompatibleType = true
-        case .cut, .naturalBlend, .cleanHandoff:
-            // CLEAN_HANDOFF excluded explicitly: A and B never overlap, so there's
-            // no bass conflict to manage with a kill — and the swap moment is the
-            // silent gap, not a beat-aligned bassSwapTime.
+        case .cut, .naturalBlend, .cleanHandoff, .stemMix, .dropMix:
+            // CLEAN_HANDOFF: A and B never overlap, no bass conflict to manage.
+            // STEM_MIX: the stem swap IS the moment — A drops to stems, B enters
+            //   on vocals/mids. Adding a hard bass kill on top muddies the
+            //   intentional bass-less holding pattern of stem mix.
+            // DROP_MIX: a 2–7s drop already runs an aggressive HPF ramp on A
+            //   (600 → 6000Hz) and gradual bass swap. Adding bass kill on top
+            //   creates 3 effects fighting in <4 seconds — feels rushed and busy.
+            //   Trust the preset to do the work.
+            // CUT: too short to register a kill musically.
+            // NATURAL_BLEND: deliberately invisible, no DJ-y moments.
             bassKillCompatibleType = false
         }
 
@@ -1468,9 +1475,13 @@ enum DJMixingService {
         //      stacking a sweep on top would muddy the careful tease)
         //   4. Fade > 5s (notch needs room to sweep musically)
         //   5. Danceability > 0.5 (it's a club/DJ technique, suits groove music)
+        //   6. NOT a stem mix (the stem swap is its own dramatic moment — adding
+        //      a colorful notch on top obscures the intentional vocal/mid-only
+        //      character of B's entry; real DJs don't stack effects on stem moves)
         if useDynamicQ
             && !skipBFilters
             && !needsAnticipation
+            && transitionType != .stemMix
             && fadeDuration > 5.0
             && profile.avgDanceability > 0.5 {
             useNotchSweep = true
