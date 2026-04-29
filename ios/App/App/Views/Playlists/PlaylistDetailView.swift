@@ -59,6 +59,21 @@ final class PlaylistDetailViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Refresh cover + palette when the cache invalidates this playlist
+        // (e.g. backend hash changed mid-session). Without this, the @Published
+        // image preloaded for the hero transition would stick around stale.
+        let myId = playlist.id
+        PlaylistCoverCache.shared.coverInvalidated
+            .filter { $0 == myId }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.coverImage = nil
+                self.paletteReady = false
+                Task { await self.loadCover() }
+            }
+            .store(in: &cancellables)
     }
 
     var displayPlaylist: NavidromePlaylist { playlist ?? initialPlaylist }
@@ -66,6 +81,16 @@ final class PlaylistDetailViewModel: ObservableObject {
     func load() async {
         guard songs.isEmpty else { return }
         isLoading = true
+
+        // Fire-and-forget hash refresh: if the backend reports a newer cover
+        // for this playlist, the cache invalidates and our subscription above
+        // re-fetches. Closes the race when the user opens detail before the
+        // grid has had a chance to refresh hashes.
+        if BackendState.shared.isAvailable {
+            Task.detached(priority: .utility) {
+                await NavidromeService.shared.refreshPlaylistCoverHashes()
+            }
+        }
 
         // Songs first — don't let cover fetch block the list
         if let (pl, songs) = try? await api.getPlaylistSongs(playlistId: initialPlaylist.id) {
@@ -695,6 +720,12 @@ final class PlaylistCoverCache: @unchecked Sendable {
     /// Hashes that were active when covers were last cached to disk.
     private var cachedHashes: [String: String] = [:]
 
+    /// Fires the playlistId whenever a cover entry is invalidated. Views that
+    /// hold the previous image in @State subscribe and reload — without this,
+    /// a cached image survives in the view tree even after the disk entry was
+    /// dropped on hash change.
+    let coverInvalidated = PassthroughSubject<String, Never>()
+
     private init() {
         memory.countLimit = 200
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -759,6 +790,9 @@ final class PlaylistCoverCache: @unchecked Sendable {
         persistHashes()
         let path = diskPath(for: playlistId)
         ioQueue.async { try? FileManager.default.removeItem(at: path) }
+        // Palette is derived from the cover — keep them in sync.
+        PaletteCache.shared.invalidate(key: playlistId)
+        coverInvalidated.send(playlistId)
     }
 
     // MARK: Content hash management
@@ -919,6 +953,12 @@ struct PlaylistCoverView: View {
                         Task { await loadCover() }
                     }
                 }
+            }
+            .onReceive(PlaylistCoverCache.shared.coverInvalidated.receive(on: RunLoop.main)) { id in
+                guard id == playlist.id else { return }
+                coverImage = nil
+                didFail = false
+                Task { await loadCover() }
             }
     }
 
