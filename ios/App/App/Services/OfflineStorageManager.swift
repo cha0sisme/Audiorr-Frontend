@@ -32,7 +32,24 @@ actor OfflineStorageManager {
     // MARK: - State
 
     private let musicDir: URL
-    private let context: ModelContext
+
+    /// SwiftData context for this actor.
+    ///
+    /// Lazy by design: if we initialize this in `init()`, the context gets bound
+    /// to whatever thread first accessed `OfflineStorageManager.shared` — usually
+    /// the main thread. Then every actor-isolated method runs on the actor's
+    /// executor (NOT main), and SwiftData emits a "Unbinding from the main queue.
+    /// This context was instantiated on the main queue but is being used off it"
+    /// warning per access — with a stack trace each time. After many downloads/
+    /// saves/fetches that's heavy CPU overhead and console noise.
+    ///
+    /// Lazy initialization inside the actor guarantees the first access happens
+    /// on the actor's executor, so the context binds correctly.
+    private lazy var context: ModelContext = {
+        let ctx = ModelContext(Self.modelContainer)
+        ctx.autosaveEnabled = true
+        return ctx
+    }()
 
     private init() {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -46,8 +63,7 @@ actor OfflineStorageManager {
         var mutableBase = base
         try? mutableBase.setResourceValues(resourceValues)
 
-        self.context = ModelContext(Self.modelContainer)
-        self.context.autosaveEnabled = true
+        // context intentionally NOT created here — see lazy var docstring above.
     }
 
     // MARK: - Sync API (for AudioFileLoader, called from non-async context)

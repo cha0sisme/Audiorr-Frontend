@@ -47,6 +47,10 @@ final class ConnectService {
     private var pingTimeout: TimeInterval = 20
     private var pingTimer: Timer?
     private var reconnectTimer: Timer?
+    /// Number of consecutive failed reconnect attempts since the last successful
+    /// connection. Drives exponential backoff: 5s → 10s → 20s → 40s → 60s (cap).
+    /// Reset to 0 in openWebSocket() once the hub ACK arrives.
+    private var consecutiveReconnectFailures = 0
     private var isConnected = false
     private var shouldReconnect = true
     let deviceId = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
@@ -358,6 +362,9 @@ final class ConnectService {
         hubConnected = true
         reconnectTimer?.invalidate()
         reconnectTimer = nil
+        // Reset backoff: future disconnects start fresh from 5s, not whatever
+        // delay the previous failure storm escalated to.
+        consecutiveReconnectFailures = 0
         // Hub connection confirms backend is reachable — refresh centralized state
         BackendState.shared.invalidateAndRecheck()
         print("[Connect] Connected to hub (sid: \(engineSid ?? "?"))")
@@ -777,8 +784,21 @@ final class ConnectService {
             return
         }
 
-        print("[Connect] Will reconnect in 5s...")
-        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+        // Exponential backoff: 5s → 10s → 20s → 40s → 60s (cap).
+        // Previously a fixed 5s retry caused a storm whenever the backend was
+        // repeatedly failing (Cloudflare tunnel hiccups, server restarts) —
+        // 12 attempts/minute generating auth POSTs + websocket handshakes that
+        // kept piling up network noise. With backoff, an outage that lasts
+        // several minutes goes from ~720 attempts/hour down to ~60.
+        // consecutiveReconnectFailures is reset to 0 in openWebSocket() once
+        // the hub ACK arrives, so a single transient failure doesn't penalize
+        // the next outage.
+        consecutiveReconnectFailures += 1
+        let baseDelay: TimeInterval = 5
+        let maxDelay: TimeInterval = 60
+        let delay = min(maxDelay, baseDelay * pow(2.0, Double(consecutiveReconnectFailures - 1)))
+        print("[Connect] Will reconnect in \(Int(delay))s (attempt \(consecutiveReconnectFailures))")
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.reconnectTimer = nil
                 self?.connect()
