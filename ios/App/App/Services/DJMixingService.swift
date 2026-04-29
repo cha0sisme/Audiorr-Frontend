@@ -485,15 +485,31 @@ enum DJMixingService {
             hasVocalOverlap: djFilters.useMidScoop
         )
 
-        // ── 6b. Fade duration override for CLEAN_HANDOFF ──
-        // The standard duration calculator targets musical blends (5-15s).
-        // For sequential handoffs, we want a tight 2.5-3.5s window: enough for A to
-        // fade out gracefully + a short respiro + B to ramp in cleanly. Anything
-        // longer becomes either dead air or an awkward double-pause.
+        // ── 6b. Fade duration overrides per transition type ──
+        // calculateAdaptiveFadeDuration assumes a graceful blend and returns
+        // 5–15s based on outro structure. Some transition types (decided AFTER
+        // the duration is calculated) don't make musical sense at long durations
+        // and need to be clamped post-decision.
         let effectiveFadeDuration: Double
-        if transition.type == .cleanHandoff {
+        switch transition.type {
+        case .cleanHandoff:
+            // Tight 2.5–3.5s: A fades out exponentially, micro-respiro, B sin² ramps.
+            // Anything longer becomes dead air or an awkward double-pause.
             effectiveFadeDuration = max(2.5, min(3.5, fade.duration))
-        } else {
+        case .cut:
+            // CUT forced by polirritmia / vocal trainwreck inherits the long fade
+            // computed for a hypothetical blend. The .cut volume curve hard-codes
+            // a 3-second drop window at the END of the fade — for a 15s fade,
+            // that means A plays normally for 12 seconds with no audible change,
+            // followed by a 3-second drop. That's wasted "trigger lead-in" time
+            // and the trigger ends up firing 15s before A's outro endpoint
+            // instead of ~7s, so A keeps playing 8 unnecessary seconds.
+            //
+            // Clamp to [3, 7]: the .cut curve always uses the last 3s, and
+            // anticipation can run up to 4s before that, so 7s is the sensible
+            // ceiling. Below 3s the type is already CUT by another path.
+            effectiveFadeDuration = max(3.0, min(7.0, fade.duration))
+        default:
             effectiveFadeDuration = fade.duration
         }
 
