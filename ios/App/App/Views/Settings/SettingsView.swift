@@ -373,9 +373,10 @@ struct SettingsView: View {
             }
 
             // ── Diagnostics ──
-            // Always visible: the Backend URL override is the escape hatch when
-            // the backend is unreachable, so it must be reachable regardless of
-            // BackendState.shared.isAvailable.
+            // Gated by BackendState.shared.isAvailable: TestFlight / Navidrome-only
+            // users without an Audiorr backend never see Diagnostics nor the
+            // Backend URL override.
+            if BackendState.shared.isAvailable {
             settingsSection(header: "Diagnostics") {
                     settingsRow {
                         Toggle(isOn: Binding(
@@ -470,6 +471,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }  // end if BackendState.shared.isAvailable (Diagnostics section)
 
             // ── Servidor ──
             settingsSection(header: L.server) {
