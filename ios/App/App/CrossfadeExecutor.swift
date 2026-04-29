@@ -76,7 +76,13 @@ class CrossfadeExecutor {
         let skipBFilters: Bool          // Short outro/fade — B enters clean (no highpass/lowshelf)
         // DJ effects (Sprint 1)
         let useBassKill: Bool           // Instant bass cut at bassSwapTime (DJ bass kill fader)
-        let useDynamicQ: Bool           // Bell-shaped Q resonance sweep on highpass
+        let useDynamicQ: Bool           // Bell-shaped Q resonance sweep on highpass A (+ B mirror, see useNotchSweep paragraph)
+        // DJ effects (Sprint 2 — companion sweeps on B for "DJ knob ride" handoff)
+        /// Phaser-style narrow parametric notch on B's band 2: center freq sweeps
+        /// 250→6000Hz exponentially while depth follows a bell (-6 → -24 → -6 dB).
+        /// Always rides alongside Twin dynQ (the Q bell on B's band 0) so B sounds
+        /// like a DJ "riding the filter knob" as it comes in.
+        let useNotchSweep: Bool
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -88,7 +94,8 @@ class CrossfadeExecutor {
              useMidScoop: Bool = false, useHighShelfCut: Bool = false,
              isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
              danceability: Double = 0.5, skipBFilters: Bool = false,
-             useBassKill: Bool = false, useDynamicQ: Bool = false) {
+             useBassKill: Bool = false, useDynamicQ: Bool = false,
+             useNotchSweep: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -113,6 +120,7 @@ class CrossfadeExecutor {
             self.skipBFilters = skipBFilters
             self.useBassKill = useBassKill
             self.useDynamicQ = useDynamicQ
+            self.useNotchSweep = useNotchSweep
         }
     }
 
@@ -229,6 +237,37 @@ class CrossfadeExecutor {
         highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
     )
 
+    // MARK: - DJ Effects: Twin dynQ + Phaser Notch Sweep tuning constants
+
+    /// Center of A's existing Q resonance bell (0..1 of the filter window).
+    /// Kept here next to B's center for easy comparison — A's value still lives
+    /// hard-coded inside applyFiltersA so the pre-existing dynQ behavior is byte-identical.
+    private static let dynQBellCenterA: Float = 0.55
+    /// Center of B's mirror Q bell — slightly earlier than A's so B's resonance
+    /// peak fires BEFORE A's, producing the "knob handoff" perception.
+    private static let dynQBellCenterB: Float = 0.40
+    /// Bell width (Gaussian sigma equivalent) for both A and B Q sweeps.
+    private static let dynQBellWidth: Float = 0.30
+    /// Peak Q reached at the bell center for B (matches A's peak for perceptual symmetry).
+    private static let dynQPeakQ: Float = 3.5
+    /// Hard ceiling — biquad self-oscillates above ~5.0; 4.0 is a safe musical max.
+    private static let dynQMaxQ: Float = 4.0
+
+    /// Phaser Notch Sweep — start frequency of the exponential center-freq sweep on B band 2.
+    private static let notchStartFreq: Float = 250
+    /// Phaser Notch Sweep — end frequency of the exponential center-freq sweep on B band 2.
+    private static let notchEndFreq: Float = 6000
+    /// Phaser Notch Sweep — bandwidth in octaves (narrower = more "phasey").
+    private static let notchBandwidth: Float = 0.3
+    /// Phaser Notch Sweep — gain at bell tails (start and end of sweep).
+    private static let notchTailGain: Float = -6
+    /// Phaser Notch Sweep — gain at bell peak (deepest cut, mid-sweep).
+    private static let notchPeakGain: Float = -24
+    /// Phaser Notch Sweep — bell center within B's filter window (0.50 = exact middle).
+    private static let notchBellCenter: Float = 0.50
+    /// Phaser Notch Sweep — bell width.
+    private static let notchBellWidth: Float = 0.30
+
     // MARK: - Estado
 
     let config: Config
@@ -274,6 +313,12 @@ class CrossfadeExecutor {
     private var diagLsGainA: Float = 0
     private var diagLsGainB: Float = 0
     private var diagQA: Float = 0.707
+    /// Twin dynQ — current Q value on B's highpass (mirrors diagQA for handoff visualization).
+    private var diagQB: Float = 0.707
+    /// Phaser Notch Sweep — current parametric notch center frequency on B's band 2.
+    private var diagNotchFreqB: Float = 0
+    /// Phaser Notch Sweep — current notch depth (gain dB, negative = cut).
+    private var diagNotchGainB: Float = 0
 
     var onComplete: ((Double) -> Void)?
     /// Llamado si playerB termina de forma natural sin que completeCrossfade() haya sido invocado.
@@ -386,11 +431,18 @@ class CrossfadeExecutor {
             config.transitionType == .beatMatchBlend || config.transitionType == .eqMix || config.transitionType == .stemMix
         useBassKill = config.useBassKill && hasBassManagement && preset.lowshelfA != nil
         useDynamicQ = config.useDynamicQ && !useLowpass
+        // Phaser Notch Sweep guards (in addition to the decideDJEffects gate):
+        //   - skipBFilters off (notch lives on B's band 2 — needs B filtering active)
+        //   - needsAnticipation off (B's anticipation curve is multi-stage; don't stack)
+        //   - useDynamicQ on (philosophical pairing — same musical context)
+        useNotchSweep = config.useNotchSweep && !config.skipBFilters
+            && !config.needsAnticipation && useDynamicQ
 
         // Log
         let filtersDesc = config.useFilters ? (config.useAggressiveFilters ? "AGGRESSIVE" : "normal") : "OFF"
         let djDesc = [useMidScoop ? "midScoop" : nil, useHighShelfCut ? "hiShelf" : nil,
-                      useBassKill ? "bassKill" : nil, useDynamicQ ? "dynQ" : nil]
+                      useBassKill ? "bassKill" : nil, useDynamicQ ? "dynQ" : nil,
+                      useNotchSweep ? "notch" : nil]
             .compactMap { $0 }.joined(separator: "+")
         let analysisDesc = [config.isOutroInstrumental ? "outroInst" : nil,
                            config.isIntroInstrumental ? "introInst" : nil,
@@ -438,6 +490,7 @@ class CrossfadeExecutor {
             useHighShelfCut: useHighShelfCut,
             useBassKill: useBassKill,
             useDynamicQ: useDynamicQ,
+            useNotchSweep: useNotchSweep,
             skipBFilters: config.skipBFilters,
             energyA: config.energyA,
             energyB: config.energyB,
@@ -773,7 +826,14 @@ class CrossfadeExecutor {
     /// Whether Bass Kill DJ effect is active (instant low-frequency cut at bassSwapTime).
     private var useBassKill: Bool = false
     /// Whether Dynamic Q Resonance is active (bell-shaped Q sweep on highpass Band 0).
+    /// When true, the same flag also enables the **Twin dynQ** mirror on B's band 0 —
+    /// B's Q follows a bell with center 0.40 (vs A's 0.55) so B's resonance peak
+    /// fires slightly before A's, creating the "knob handoff" feeling.
     private var useDynamicQ: Bool = false
+    /// Whether Phaser Notch Sweep is active on B's band 2 (Sprint 2 DJ effect).
+    /// Narrow parametric (BW≈0.3 oct) with depth bell (-6 → -24 → -6 dB) and freq
+    /// sweep 250→6000Hz exponentially. Decided by DJMixingService — see decideDJEffects.
+    private var useNotchSweep: Bool = false
     /// Danceability scaling factor for bass filters (0.5–1.0).
     /// High danceability → less aggressive bass cut to preserve groove.
     private var danceabilityBassScale: Float = 1.0
@@ -804,9 +864,13 @@ class CrossfadeExecutor {
         useMidScoop = config.useMidScoop && !config.isIntroInstrumental && preset.midScoopA != nil
         // ── Band 3: High-shelf cut on A (hi-hat/cymbal cleanup) ──
         useHighShelfCut = config.useHighShelfCut && !config.isOutroInstrumental && preset.highShelfA != nil
-        // ── DJ effects: Bass Kill + Dynamic Q Resonance ──
+        // ── DJ effects: Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep ──
         useBassKill = config.useBassKill && useBassManagement && preset.lowshelfA != nil
         useDynamicQ = config.useDynamicQ && !useLowpassA  // Only with highpass sweep, not lowpass
+        // Notch sweep on B's band 2 — same gates as the init() block (kept in sync intentionally
+        // so that both the published log line and the actual automation see identical state).
+        useNotchSweep = config.useNotchSweep && !config.skipBFilters
+            && !config.needsAnticipation && useDynamicQ
 
         // ── Compute initial biquad coefficients for A ──
         let band0A: BiquadCoefficients
@@ -846,16 +910,36 @@ class CrossfadeExecutor {
         let band0B: BiquadCoefficients
         let band1B: BiquadCoefficients
         if !config.skipBFilters {
+            // Twin dynQ shares B's preset Q at start of fade — bell value ≈ 0 at progress 0,
+            // so initial Q = baseQ. Identical to old behavior; bell only swells later.
             band0B = BiquadCoefficientCalculator.highpass(frequency: preset.highpassB.startFreq, sampleRate: sampleRate, Q: preset.highpassB.q)
             band1B = BiquadCoefficientCalculator.lowShelf(frequency: preset.lowshelfB.frequency, sampleRate: sampleRate, gainDB: preset.lowshelfB.startGain)
             diagFreqB = preset.highpassB.startFreq
             diagLsGainB = preset.lowshelfB.startGain
+            diagQB = preset.highpassB.q
         } else {
             band0B = .passthrough
             band1B = .passthrough
         }
-        // B bands 2-3 always passthrough (never automated)
-        dspB.setCoefficients(band0: band0B, band1: band1B, band2: .passthrough, band3: .passthrough)
+        // ── Band 2: Phaser Notch Sweep on B (Sprint 2) ──
+        // Bell value at progress=0 is near 0 (Gaussian tail), so initial gain is the
+        // tail value (-6dB). This means the notch is *audible from frame 0* — no surprise
+        // pop when automation kicks in. If notch is off, band 2 stays passthrough.
+        let band2B: BiquadCoefficients
+        if useNotchSweep {
+            band2B = BiquadCoefficientCalculator.parametric(
+                frequency: Self.notchStartFreq,
+                sampleRate: sampleRate,
+                gainDB: Self.notchTailGain,
+                bandwidth: Self.notchBandwidth
+            )
+            diagNotchFreqB = Self.notchStartFreq
+            diagNotchGainB = Self.notchTailGain
+        } else {
+            band2B = .passthrough
+        }
+        // B band 3 still passthrough — Sprint 2 reserves it for future companion effects.
+        dspB.setCoefficients(band0: band0B, band1: band1B, band2: band2B, band3: .passthrough)
     }
 
     @discardableResult
@@ -1259,6 +1343,9 @@ class CrossfadeExecutor {
                 lowshelfGainA: diagLsGainA,
                 lowshelfGainB: diagLsGainB,
                 dynamicQA: diagQA,
+                dynamicQB: diagQB,
+                notchFreqB: diagNotchFreqB,
+                notchGainB: diagNotchGainB,
                 panA: mixerA.pan,
                 panB: mixerB.pan,
                 currentRateA: timePitchA?.rate ?? 1.0
@@ -1480,9 +1567,63 @@ class CrossfadeExecutor {
         diagFreqB = hpFreq
         diagLsGainB = lsGain
 
-        let band0B = BiquadCoefficientCalculator.highpass(frequency: hpFreq, sampleRate: sampleRate, Q: preset.highpassB.q)
+        // ── Band 0: highpass with optional Twin dynQ ──
+        // Twin dynQ mirrors A's Q resonance bell on B's incoming highpass with an
+        // earlier center (0.40 vs A's 0.55). The two bells overlap in time, but
+        // B's peak fires first → listener perceives the Q "handing off" from B to A,
+        // exactly like a DJ rolling the resonance knob between two channels.
+        // Anchored to B's own filter window (fadeInStart → fadeInEnd) so the curve is
+        // independent of A's filterLead. Disabled in anticipation mode to preserve
+        // that path's careful multi-stage shape.
+        let qBValue: Float
+        let bWindowDur = timings.fadeInEndTime - timings.fadeInStartTime
+        if useDynamicQ && !config.needsAnticipation && bWindowDur > 0 {
+            let qProgress = Float((t - timings.fadeInStartTime) / bWindowDur)
+            // Clamp progress to [0, 1] so values outside the window (early reads or
+            // post-fade lingering) just produce bell tails, not extrapolated noise.
+            let qProgressClamped = min(1, max(0, qProgress))
+            let exponent = -powf((qProgressClamped - Self.dynQBellCenterB) / Self.dynQBellWidth, 2) / 2.0
+            let bellValue = expf(max(-10, exponent))
+            let baseQ = preset.highpassB.q
+            qBValue = min(Self.dynQMaxQ, baseQ + (Self.dynQPeakQ - baseQ) * bellValue)
+        } else {
+            qBValue = preset.highpassB.q
+        }
+        diagQB = qBValue
+        let band0B = BiquadCoefficientCalculator.highpass(frequency: hpFreq, sampleRate: sampleRate, Q: qBValue)
+
         let band1B = BiquadCoefficientCalculator.lowShelf(frequency: preset.lowshelfB.frequency, sampleRate: sampleRate, gainDB: lsGain)
-        dspB.setCoefficients(band0: band0B, band1: band1B, band2: .passthrough, band3: .passthrough)
+
+        // ── Band 2: Phaser Notch Sweep on B (Sprint 2) ──
+        // Narrow parametric notch (BW ≈ 0.3 oct) whose center frequency sweeps
+        // exponentially 250 → 6000 Hz over B's filter window, while depth follows a
+        // bell (-6 → -24 → -6 dB). Sounds like a static phaser sweep "riding through" B.
+        // Pre-gated in setupInitialEQ + init: useNotchSweep already implies
+        // !skipBFilters && !needsAnticipation && useDynamicQ.
+        let band2B: BiquadCoefficients
+        if useNotchSweep && bWindowDur > 0 {
+            let notchProgress = Float((t - timings.fadeInStartTime) / bWindowDur)
+            let p = min(1, max(0, notchProgress))
+            // Exponential frequency sweep — perceptually linear (octaves per second).
+            let notchFreq = expInterp(Self.notchStartFreq, Self.notchEndFreq, p)
+            // Bell-shaped depth: peaks at notchPeakGain at notchBellCenter, returns
+            // to notchTailGain at the edges. Same Gaussian shape as dynQ for consistency.
+            let exponent = -powf((p - Self.notchBellCenter) / Self.notchBellWidth, 2) / 2.0
+            let bellValue = expf(max(-10, exponent))
+            let notchGain = Self.notchTailGain + (Self.notchPeakGain - Self.notchTailGain) * bellValue
+            diagNotchFreqB = notchFreq
+            diagNotchGainB = notchGain
+            band2B = BiquadCoefficientCalculator.parametric(
+                frequency: notchFreq,
+                sampleRate: sampleRate,
+                gainDB: notchGain,
+                bandwidth: Self.notchBandwidth
+            )
+        } else {
+            band2B = .passthrough
+        }
+
+        dspB.setCoefficients(band0: band0B, band1: band1B, band2: band2B, band3: .passthrough)
     }
 
     // MARK: - Completion

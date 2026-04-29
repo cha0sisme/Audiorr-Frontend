@@ -217,6 +217,12 @@ enum DJMixingService {
         // DJ effects (Sprint 1)
         let useBassKill: Bool
         let useDynamicQ: Bool
+        // DJ effects (Sprint 2 — companion sweeps on B)
+        /// Phaser-style narrow parametric notch on B's band 2.
+        /// Center freq sweeps 250→6000Hz exponentially while depth follows a bell
+        /// (-6 → -24 → -6 dB). Adds a moving spectral hole that "rides" through B
+        /// as it opens. Only activates alongside useDynamicQ when conditions allow.
+        let useNotchSweep: Bool
         let transitionReason: String
         /// Trigger bias: how many seconds earlier (negative) or later (positive) the trigger
         /// should fire relative to the default "latest possible" position.
@@ -493,13 +499,15 @@ enum DJMixingService {
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: fade.duration)
 
-        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance) ──
+        // ── 10. DJ effects (Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep) ──
         let isEnergyDown = profile.energyB < profile.energyA - 0.2
         let djEffects = decideDJEffects(
             profile: profile,
             transitionType: transition.type,
             fadeDuration: fade.duration,
-            isEnergyDown: isEnergyDown
+            isEnergyDown: isEnergyDown,
+            needsAnticipation: anticipation.needsAnticipation,
+            skipBFilters: skipBFilters
         )
 
         return CrossfadeResult(
@@ -529,6 +537,7 @@ enum DJMixingService {
             skipBFilters: skipBFilters,
             useBassKill: djEffects.useBassKill,
             useDynamicQ: djEffects.useDynamicQ,
+            useNotchSweep: djEffects.useNotchSweep,
             transitionReason: transition.reason,
             triggerBias: trigger.bias,
             triggerBiasReason: trigger.reason
@@ -1340,6 +1349,8 @@ enum DJMixingService {
     struct DJEffectsResult {
         let useBassKill: Bool
         let useDynamicQ: Bool
+        /// Phaser-style narrow notch on B's band 2 (Sprint 2 — pairs with dynQ for "DJ knob ride" feel).
+        let useNotchSweep: Bool
         let reason: String
     }
 
@@ -1350,10 +1361,13 @@ enum DJMixingService {
         profile: TransitionProfile,
         transitionType: TransitionType,
         fadeDuration: Double,
-        isEnergyDown: Bool
+        isEnergyDown: Bool,
+        needsAnticipation: Bool = false,
+        skipBFilters: Bool = false
     ) -> DJEffectsResult {
         var useBassKill = false
         var useDynamicQ = false
+        var useNotchSweep = false
         var reasons: [String] = []
 
         // ── Bass Kill: instant low-frequency cut at bassSwapTime ──
@@ -1394,11 +1408,32 @@ enum DJMixingService {
             reasons.append("dynQ: dance=\(String(format: "%.2f", profile.avgDanceability)) fade=\(String(format: "%.1f", fadeDuration))s")
         }
 
+        // ── Phaser Notch Sweep (Sprint 2): narrow parametric on B's band 2 ──
+        // Pairs with Dynamic Q for the "DJ knob ride" handoff feel — A's resonance
+        // peaks late while B's notch sweeps through it from below.
+        // Stricter conditions than dynQ — this effect is more colorful and we only
+        // want it when there's clear room and intent:
+        //   1. Dynamic Q is already on (philosophical pairing — same musical context)
+        //   2. B's filters are NOT skipped (the notch lives on band 2 of B)
+        //   3. NOT in anticipation mode (B already runs a complex multi-stage curve;
+        //      stacking a sweep on top would muddy the careful tease)
+        //   4. Fade > 5s (notch needs room to sweep musically)
+        //   5. Danceability > 0.5 (it's a club/DJ technique, suits groove music)
+        if useDynamicQ
+            && !skipBFilters
+            && !needsAnticipation
+            && fadeDuration > 5.0
+            && profile.avgDanceability > 0.5 {
+            useNotchSweep = true
+            reasons.append("notchSweep: pair with dynQ, fade=\(String(format: "%.1f", fadeDuration))s")
+        }
+
         let reason = reasons.isEmpty
             ? "DJ effects OFF"
             : "DJ effects ON: \(reasons.joined(separator: ", "))"
         print("[DJMixingService] \(reason)")
-        return DJEffectsResult(useBassKill: useBassKill, useDynamicQ: useDynamicQ, reason: reason)
+        return DJEffectsResult(useBassKill: useBassKill, useDynamicQ: useDynamicQ,
+                               useNotchSweep: useNotchSweep, reason: reason)
     }
 
     // MARK: - Anticipation

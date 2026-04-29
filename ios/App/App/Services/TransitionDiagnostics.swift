@@ -35,6 +35,9 @@ final class TransitionDiagnostics {
     var useHighShelfCut = false
     var useBassKill = false
     var useDynamicQ = false
+    /// Phaser Notch Sweep on B band 2 (Sprint 2). True when the narrow parametric
+    /// notch with depth bell is active alongside Twin dynQ.
+    var useNotchSweep = false
     var skipBFilters = false
 
     // Analysis
@@ -80,6 +83,12 @@ final class TransitionDiagnostics {
     var lowshelfGainA: Float = 0
     var lowshelfGainB: Float = 0
     var dynamicQA: Float = 0.707
+    /// Twin dynQ — current Q on B's highpass (mirrors dynamicQA, peaks earlier).
+    var dynamicQB: Float = 0.707
+    /// Phaser Notch Sweep — current notch center frequency on B band 2 (0 if inactive).
+    var notchFreqB: Float = 0
+    /// Phaser Notch Sweep — current notch depth in dB (0 if inactive, negative when cutting).
+    var notchGainB: Float = 0
     var panA: Float = 0
     var panB: Float = 0
     var currentRateA: Float = 1.0
@@ -105,6 +114,7 @@ final class TransitionDiagnostics {
         let useHighShelfCut: Bool
         let useBassKill: Bool
         let useDynamicQ: Bool
+        let useNotchSweep: Bool
         let skipBFilters: Bool
         // Beat / BPM
         let beatSynced: Bool
@@ -225,6 +235,7 @@ final class TransitionDiagnostics {
         useHighShelfCut: Bool,
         useBassKill: Bool,
         useDynamicQ: Bool,
+        useNotchSweep: Bool,
         skipBFilters: Bool,
         energyA: Double,
         energyB: Double,
@@ -257,6 +268,7 @@ final class TransitionDiagnostics {
             self.useHighShelfCut = useHighShelfCut
             self.useBassKill = useBassKill
             self.useDynamicQ = useDynamicQ
+            self.useNotchSweep = useNotchSweep
             self.skipBFilters = skipBFilters
             self.energyA = energyA
             self.energyB = energyB
@@ -297,6 +309,9 @@ final class TransitionDiagnostics {
         lowshelfGainA: Float,
         lowshelfGainB: Float,
         dynamicQA: Float = 0.707,
+        dynamicQB: Float = 0.707,
+        notchFreqB: Float = 0,
+        notchGainB: Float = 0,
         panA: Float,
         panB: Float,
         currentRateA: Float
@@ -313,6 +328,9 @@ final class TransitionDiagnostics {
             self.lowshelfGainA = lowshelfGainA
             self.lowshelfGainB = lowshelfGainB
             self.dynamicQA = dynamicQA
+            self.dynamicQB = dynamicQB
+            self.notchFreqB = notchFreqB
+            self.notchGainB = notchGainB
             self.panA = panA
             self.panB = panB
             self.currentRateA = currentRateA
@@ -320,7 +338,11 @@ final class TransitionDiagnostics {
             // Buffer tick for log
             let label = filterTypeA == "lp" ? "lpA" : "hpA"
             let qLabel = self.useDynamicQ ? String(format: " Q=%.2f", dynamicQA) : ""
-            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz\(qLabel) hpB=%.0fHz | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
+            let qBLabel = self.useDynamicQ ? String(format: " Qb=%.2f", dynamicQB) : ""
+            let notchLabel = self.useNotchSweep
+                ? String(format: " notch=%.0fHz/%.1fdB", notchFreqB, notchGainB)
+                : ""
+            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz\(qLabel) hpB=%.0fHz\(qBLabel)\(notchLabel) | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
                               elapsed, volumeA, volumeB, masterVolume,
                               highpassFreqA, highpassFreqB,
                               lowshelfGainA, lowshelfGainB,
@@ -350,6 +372,7 @@ final class TransitionDiagnostics {
                 useHighShelfCut: self.useHighShelfCut,
                 useBassKill: self.useBassKill,
                 useDynamicQ: self.useDynamicQ,
+                useNotchSweep: self.useNotchSweep,
                 skipBFilters: self.skipBFilters,
                 beatSynced: self.isBeatSynced,
                 beatSyncInfo: self.beatSyncInfo,
@@ -556,7 +579,7 @@ final class TransitionDiagnostics {
         FILTERS:
           enabled=\(filtersEnabled)  preset=\(filterPreset)
           midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
-          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)
+          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)
 
         ANALYSIS:
           energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))

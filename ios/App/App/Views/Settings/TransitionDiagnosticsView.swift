@@ -187,8 +187,10 @@ struct TransitionDiagnosticsView: View {
                     color: diag.useHighShelfCut ? .orange : .secondary)
             diagRow("Bass Kill", value: diag.useBassKill ? "ACTIVE" : "Off",
                     color: diag.useBassKill ? .red : .secondary)
-            diagRow("Dynamic Q", value: diag.useDynamicQ ? "ACTIVE" : "Off",
+            diagRow("Dynamic Q (A+B)", value: diag.useDynamicQ ? "ACTIVE" : "Off",
                     color: diag.useDynamicQ ? .cyan : .secondary)
+            diagRow("Notch Sweep (B)", value: diag.useNotchSweep ? "ACTIVE" : "Off",
+                    color: diag.useNotchSweep ? .purple : .secondary)
             diagRow("B Filters", value: diag.skipBFilters ? "SKIPPED" : "Active",
                     color: diag.skipBFilters ? .yellow : .green)
         }
@@ -248,8 +250,16 @@ struct TransitionDiagnosticsView: View {
             diagRow("HP Freq A", value: String(format: "%.0f Hz", diag.highpassFreqA))
             diagRow("HP Freq B", value: String(format: "%.0f Hz", diag.highpassFreqB))
             if diag.useDynamicQ {
-                diagRow("Q (Dynamic)", value: String(format: "%.2f", diag.dynamicQA),
+                diagRow("Q-A (Dynamic)", value: String(format: "%.2f", diag.dynamicQA),
                         color: diag.dynamicQA > 2.0 ? .cyan : .secondary)
+                diagRow("Q-B (Twin)", value: String(format: "%.2f", diag.dynamicQB),
+                        color: diag.dynamicQB > 2.0 ? .cyan : .secondary)
+            }
+            if diag.useNotchSweep {
+                diagRow("Notch Freq B", value: String(format: "%.0f Hz", diag.notchFreqB),
+                        color: .purple)
+                diagRow("Notch Depth B", value: String(format: "%.1f dB", diag.notchGainB),
+                        color: diag.notchGainB < -18 ? .purple : .secondary)
             }
             diagRow("Lowshelf A", value: String(format: "%.1f dB", diag.lowshelfGainA),
                     color: diag.useBassKill && diag.lowshelfGainA < -30 ? .red : .primary)
@@ -344,6 +354,7 @@ struct TransitionDiagnosticsView: View {
                             if record.timeStretched { historyToken("stretch", color: .purple) }
                             if record.useBassKill   { historyToken("kill", color: .red) }
                             if record.useDynamicQ   { historyToken("dynQ", color: .teal) }
+                            if record.useNotchSweep { historyToken("notch", color: .purple) }
                         }
                     }
                     .padding(.vertical, 2)
@@ -511,8 +522,10 @@ struct TransitionDetailView: View {
                     color: record.useHighShelfCut ? .orange : .secondary)
                 row("Bass Kill", value: record.useBassKill ? "ACTIVE" : "Off",
                     color: record.useBassKill ? .red : .secondary)
-                row("Dynamic Q", value: record.useDynamicQ ? "ACTIVE" : "Off",
+                row("Dynamic Q (A+B)", value: record.useDynamicQ ? "ACTIVE" : "Off",
                     color: record.useDynamicQ ? .cyan : .secondary)
+                row("Notch Sweep (B)", value: record.useNotchSweep ? "ACTIVE" : "Off",
+                    color: record.useNotchSweep ? .purple : .secondary)
                 row("B Filters", value: record.skipBFilters ? "SKIPPED" : "Active",
                     color: record.skipBFilters ? .yellow : .green)
             }
