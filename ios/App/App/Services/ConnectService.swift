@@ -68,6 +68,18 @@ final class ConnectService {
 
     func connect() {
         guard !isConnected, !isConnecting else { return }
+
+        // Hard gate: no Navidrome credentials means there's nothing to authenticate
+        // against the backend hub. Without this, calling connect() before login
+        // (cold launch into LoginView, post-logout, etc.) entered a 5s retry loop
+        // that flooded the console with noCredentials errors and made the device
+        // picker permanently show "Conectando al Hub…" with no possibility of
+        // success. Credentials must exist BEFORE we even consider connecting.
+        guard NavidromeService.shared.credentials != nil else {
+            print("[Connect] No Navidrome credentials yet — connect() suppressed")
+            return
+        }
+
         shouldReconnect = true
 
         // Don't attempt connection when offline — wait for network to return
@@ -748,6 +760,15 @@ final class ConnectService {
 
     private func scheduleReconnect() {
         guard shouldReconnect, reconnectTimer == nil else { return }
+
+        // Mirror of the connect() guard: if credentials disappeared mid-session
+        // (logout, account switch), don't keep retrying against an empty auth.
+        // The next connect() call from dismissLogin / didFinishLaunching with
+        // valid credentials will resume the cycle naturally.
+        guard NavidromeService.shared.credentials != nil else {
+            print("[Connect] No credentials — reconnect suppressed")
+            return
+        }
 
         // Don't schedule reconnect timer when offline — observe network instead
         guard NetworkMonitor.shared.isConnected else {
