@@ -15,6 +15,9 @@ struct TransitionDiagnosticsView: View {
             // ── Current Playback ──
             currentPlaybackSection
 
+            // ── Analysis Cache ──
+            analysisCacheSection
+
             // ── Environment ──
             environmentSection
 
@@ -128,6 +131,54 @@ struct TransitionDiagnosticsView: View {
             // Hub / Connect
             diagRow("Hub", value: ConnectService.shared.hubConnected ? "Connected" : "Disconnected",
                     color: ConnectService.shared.hubConnected ? .green : .orange)
+        }
+    }
+
+    // MARK: - Analysis Cache
+
+    @State private var cacheActionFeedback: String?
+
+    private var analysisCacheSection: some View {
+        Section("Analysis Cache") {
+            // Re-analyze the song currently playing — fixes cases where the backend
+            // returned a bad BPM (double-time), wrong vocalStart, or stale data.
+            // Next playback of this song will hit the backend fresh.
+            // AnalysisCacheService is an actor; methods are async-isolated, so we
+            // dispatch via Task and update UI state on completion.
+            Button {
+                let id = nowPlaying.songId
+                let title = nowPlaying.title
+                guard !id.isEmpty else {
+                    cacheActionFeedback = "No song playing"
+                    return
+                }
+                Task {
+                    await AnalysisCacheService.shared.invalidate(songId: id)
+                    await MainActor.run {
+                        cacheActionFeedback = "Re-analysis queued for ‘\(title)’"
+                    }
+                }
+            } label: {
+                Label("Re-analyze Current Track", systemImage: "arrow.clockwise.circle")
+            }
+            .disabled(nowPlaying.songId.isEmpty)
+
+            Button(role: .destructive) {
+                Task {
+                    await AnalysisCacheService.shared.invalidateAll()
+                    await MainActor.run {
+                        cacheActionFeedback = "All analysis cache cleared"
+                    }
+                }
+            } label: {
+                Label("Clear All Analysis Cache", systemImage: "trash")
+            }
+
+            if let feedback = cacheActionFeedback {
+                Text(feedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -453,6 +504,7 @@ struct TransitionDiagnosticsView: View {
         case "STEM_MIX":         return .mint
         case "DROP_MIX":         return .pink
         case "CLEAN_HANDOFF":    return .gray
+        case "VINYL_STOP":       return .indigo
         default:                 return .secondary
         }
     }
@@ -615,6 +667,7 @@ struct TransitionDetailView: View {
         case "STEM_MIX":         return .mint
         case "DROP_MIX":         return .pink
         case "CLEAN_HANDOFF":    return .gray
+        case "VINYL_STOP":       return .indigo
         default:                 return .secondary
         }
     }

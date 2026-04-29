@@ -44,9 +44,15 @@ class CrossfadeExecutor {
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
         case dropMix = "DROP_MIX"
-        /// Sequential handoff: A exp-decays (no overlap with B), tiny silent gap,
-        /// then B sin² ramps in. Used for fundamentally unmixable pairings.
+        /// Sequential handoff: A descends cos² (no overlap with B), tiny silent gap
+        /// (~10% of window = 300ms in a 3s fade), then B sin² ramps in. Used for
+        /// fundamentally unmixable pairings.
         case cleanHandoff = "CLEAN_HANDOFF"
+        /// Vinyl-stop / spin-down: A's playback rate ramps 1.0→0 over ~450ms with
+        /// curve `1 - p^0.6`, then ~200ms of silence, then B sin² ramps. Used for
+        /// dramatic energy crashes or incompatible BPMs with a big drop.
+        /// Mirrors DJMixingService.TransitionType.vinylStop — rawValues must match.
+        case vinylStop = "VINYL_STOP"
     }
 
     struct Config {
@@ -432,11 +438,15 @@ class CrossfadeExecutor {
             preset = Self.presetDropMix
         } else if config.transitionType == .stemMix {
             preset = Self.presetStemMix
-        } else if config.transitionType == .naturalBlend || config.transitionType == .cleanHandoff {
+        } else if config.transitionType == .naturalBlend
+                  || config.transitionType == .cleanHandoff
+                  || config.transitionType == .vinylStop {
             // Natural blend = invisible transition with subtle spectral separation.
-            // Clean handoff = sequential A→silence→B, filters bypassed at runtime
-            // (skipBFilters=true + applyFiltersA early return) so the preset choice
-            // here only seeds the initial coefficients, which never get exercised.
+            // Clean handoff / Vinyl stop = sequential A→silence→B (or rate-ramp→
+            // silence→B). Filters bypassed at runtime (skipBFilters=true +
+            // applyFiltersA early return) so the preset choice here only seeds
+            // initial coefficients, which never get exercised. The vinyl-stop
+            // gesture is the rate ramp; we don't add filter sweeps on top.
             preset = Self.presetGentle
         } else if config.needsAnticipation {
             preset = Self.presetAnticipation
@@ -575,6 +585,7 @@ class CrossfadeExecutor {
         else if config.transitionType == .stemMix { presetName = "stem-mix" }
         else if config.transitionType == .naturalBlend { presetName = "gentle" }
         else if config.transitionType == .cleanHandoff { presetName = "clean-handoff" }
+        else if config.transitionType == .vinylStop { presetName = "vinyl-stop" }
         else if config.needsAnticipation { presetName = "anticipation" }
         else if preset.lowpassA != nil { presetName = "energy-down" }
         else if config.useAggressiveFilters { presetName = "aggressive" }
@@ -624,12 +635,13 @@ class CrossfadeExecutor {
     static func calculateTimings(config: Config) -> Timings {
         let now = CACurrentMediaTime()
 
-        // CLEAN_HANDOFF: zero filterLead so A's exp decay starts immediately at trigger.
-        // Otherwise filterLead would let A play at full volume for ~0.7s before the
-        // fade-out begins, padding the transition with unintended music and pushing
-        // B's entry beyond the user's perceived "transition moment".
+        // CLEAN_HANDOFF / VINYL_STOP: zero filterLead so A's volume drop and rate
+        // ramp start immediately at trigger. Otherwise filterLead would let A play
+        // at full volume for ~0.7s before the fade-out begins, padding the
+        // transition with unintended music and pushing B's entry beyond the user's
+        // perceived "transition moment".
         let filterLead: Double
-        if config.transitionType == .cleanHandoff {
+        if config.transitionType == .cleanHandoff || config.transitionType == .vinylStop {
             filterLead = 0
         } else {
             filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
@@ -1161,17 +1173,19 @@ class CrossfadeExecutor {
             return maxVolumeA * cosf(angle) * cosf(angle)
 
         case .cleanHandoff:
-            // Sequential: A exp-decays to silence over the first 55% of the window,
+            // Sequential: A descends with cos² over the first 55% of the window,
             // then stays muted through the gap (55–65%) and B's ramp-in (65–100%).
             // No overlap with B at any point — the whole purpose of this type is to
             // avoid two unmixable tracks sounding simultaneously.
-            // Exp decay rather than linear so the perceptual fade-out feels natural
-            // (matches how the ear processes loudness logarithmically).
+            // cos² (not exp) so A stays audible across most of the window. Old exp
+            // 0.001^p went sub-audible by p≈0.4 of aFadeEnd, leaving ~1.3s of dead
+            // air in a 3s fade. cos² hits true silence exactly at aFadeEnd, giving
+            // a clean "respiro" of ~10% of the window (300ms in 3s, 350ms in 3.5s).
             let aFadeEnd = 0.55
             if progress < aFadeEnd {
                 let p = Float(progress / aFadeEnd)
-                // 1.0 → ~0.001 over the window. Final value is sub-audible.
-                return maxVolumeA * powf(0.001, p)
+                let angle = p * .pi / 2.0
+                return maxVolumeA * cosf(angle) * cosf(angle)
             }
             return 0
 
@@ -1227,6 +1241,19 @@ class CrossfadeExecutor {
             let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
             let angle = dropP * .pi / 2.0
             return maxVolumeA * holdLevel * cosf(angle) * cosf(angle)
+
+        case .vinylStop:
+            // Spin-down: A's volume drops cos² in parallel to its rate ramp
+            // (rate animation is driven separately in applyEnvelopes). The vol
+            // mirrors the rate so the spin-down doesn't feel "loud all the way
+            // down". Reaches 0 at the same point as the rate (aFadeEnd).
+            let aFadeEnd = 0.225  // ~450ms in a 2s fade
+            if progress < aFadeEnd {
+                let p = Float(progress / aFadeEnd)
+                let angle = p * .pi / 2.0
+                return maxVolumeA * cosf(angle) * cosf(angle)
+            }
+            return 0
         }
     }
 
@@ -1394,6 +1421,18 @@ class CrossfadeExecutor {
             let angle = rampP * .pi / 2.0
             let sinSq = sinf(angle) * sinf(angle)
             return maxVolumeB * (0.45 + 0.55 * sinSq)
+
+        case .vinylStop:
+            // Silent until A's rate has fully wound down (aFadeEnd=0.225) plus
+            // a 100-tick "aire" buffer (~10% of window = 200ms in a 2s fade).
+            // Then sin² ramp for the rest. This is the "DJ leaves a beat of
+            // silence between two unmixable tracks" gesture, formalized.
+            let bRampStart = 0.325
+            if progress < bRampStart { return 0 }
+            let rampP = Float((progress - bRampStart) / (1.0 - bRampStart))
+            let angle = rampP * .pi / 2.0
+            let sinSq = sinf(angle) * sinf(angle)
+            return maxVolumeB * sinSq
         }
     }
 
@@ -1502,6 +1541,31 @@ class CrossfadeExecutor {
             }
         }
 
+        // ── Vinyl-stop rate ramp (independent of useTimeStretch) ──
+        // A's rate decays from 1.0 → 0 over the first 22.5% of the fade window
+        // with a fast-attack curve `1 - p^0.6` (real turntables decelerate
+        // quadratically due to torque drop, but 0.6 reads as more "punchy").
+        // The volume curve in gainForPlayerA mirrors this so we don't get a
+        // half-pitched track audible at full volume.
+        if config.transitionType == .vinylStop, let tpA = timePitchA, t >= timings.volumeFadeStartTime {
+            let duration = timings.transitionEndTime - timings.volumeFadeStartTime
+            if duration > 0 {
+                let progress = min(1.0, (t - timings.volumeFadeStartTime) / duration)
+                let aFadeEnd = 0.225
+                if progress < aFadeEnd {
+                    let p = Float(progress / aFadeEnd)
+                    // y = 1 - p^0.6 — fast initial decay, gentle tail
+                    let rate = 1.0 - powf(p, 0.6)
+                    // AVAudioUnitTimePitch.rate has min 1/32 (~0.03). Below that,
+                    // hold at minimum to avoid runtime errors; volume will be 0
+                    // anyway by the time we hit the floor.
+                    tpA.rate = max(1.0 / 32.0, rate)
+                } else {
+                    tpA.rate = 1.0 / 32.0  // hold at floor; track is silent
+                }
+            }
+        }
+
         if t - lastLogTime >= 1.0 {
             lastLogTime = t
             let elapsed = t - timings.startTime
@@ -1541,11 +1605,13 @@ class CrossfadeExecutor {
             return
         }
 
-        // CLEAN_HANDOFF: A and B never overlap, so spectral shaping serves no purpose.
-        // The volume curve does all the work (exp decay → silence). Skipping filter
-        // automation also avoids the audible "swept" character that would otherwise
-        // bleed into A's outro and contradict the "clean radio handoff" intent.
-        if config.transitionType == .cleanHandoff {
+        // CLEAN_HANDOFF / VINYL_STOP: A and B never overlap, so spectral shaping
+        // serves no purpose. The volume curve (and rate ramp for vinyl-stop) does
+        // all the work. Skipping filter automation also avoids the audible "swept"
+        // character that would otherwise bleed into A's outro and contradict the
+        // "clean radio handoff" intent — and for vinyl-stop, layering a filter
+        // sweep on top of a spin-down sounds gimmicky.
+        if config.transitionType == .cleanHandoff || config.transitionType == .vinylStop {
             return
         }
 

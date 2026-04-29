@@ -39,6 +39,38 @@ import Foundation
 /// No side effects, no audio playback — just math.
 enum DJMixingService {
 
+    // MARK: - Set diversity (cooldowns)
+
+    /// Last N transition types chosen by `decideTransitionType`. Used to enforce
+    /// "DJ tics" cooldowns: a VINYL_STOP every transition would feel mechanical
+    /// rather than expressive. Reset on app launch — a fresh set starts clean.
+    /// Single-threaded access expected (selector runs on main / audio queue).
+    private static var recentTypes: [TransitionType] = []
+    private static let recentTypesLimit = 12
+
+    /// Returns true if `type` should be skipped this round because it was used
+    /// too recently. Called inside `decideTransitionType` before committing to
+    /// an expressive type (currently only VINYL_STOP — extend as new types
+    /// land in P5).
+    private static func isOnCooldown(_ type: TransitionType) -> Bool {
+        switch type {
+        case .vinylStop:
+            // Max 1 every 6 transitions (DJ recommendation: ≈2-3 spin-downs per
+            // 20-track set). Less, and the gesture is wasted; more, it tics.
+            return recentTypes.suffix(6).contains(.vinylStop)
+        default:
+            return false
+        }
+    }
+
+    /// Append the chosen type to the cooldown buffer. Trim to keep memory bounded.
+    private static func recordTransition(_ type: TransitionType) {
+        recentTypes.append(type)
+        if recentTypes.count > recentTypesLimit {
+            recentTypes.removeFirst(recentTypes.count - recentTypesLimit)
+        }
+    }
+
     // MARK: - Types
 
     enum MixMode: String {
@@ -57,12 +89,17 @@ enum DJMixingService {
         case fadeOutACutB = "FADE_OUT_A_CUT_B"
         case stemMix = "STEM_MIX"
         case dropMix = "DROP_MIX"
-        /// Sequential handoff with a tiny gap. A fades out fast (~55% of the window
-        /// with exponential decay), short respiro of dead air (~10% of the window),
-        /// then B sin² ramps in (~35%). NO overlap of the two tracks. Used when the
-        /// pairing is fundamentally unmixable (incompatible BPMs) — blending them
-        /// for several seconds sounds worse than a clean radio-style handoff.
+        /// Sequential handoff with a tiny gap. A fades out (cos² over ~55% of the
+        /// window), short respiro of dead air (~10% of the window), then B sin²
+        /// ramps in (~35%). NO overlap of the two tracks. Used when the pairing is
+        /// fundamentally unmixable (incompatible BPMs) — blending them for several
+        /// seconds sounds worse than a clean radio-style handoff.
         case cleanHandoff = "CLEAN_HANDOFF"
+        /// Vinyl-stop / spin-down: A's playback rate ramps 1.0→0 over ~450ms with
+        /// an exponential curve `y = 1-(t/T)^0.6`, then a short pause before B
+        /// enters in seco. Reads as a deliberate DJ gesture for big mood / tempo
+        /// drops. Cooldown: max 1 every 6 transitions (avoid making it a tic).
+        case vinylStop = "VINYL_STOP"
     }
 
     struct MixModeConfig {
@@ -472,6 +509,21 @@ enum DJMixingService {
             bufferADuration: bufferADuration
         )
 
+        // ── 5b. Pre-decision instrumental detection ──
+        // Computed BEFORE decideTransitionType so the selector can route incompatible
+        // pairs that share an instrumental outro/intro to a gentle blend instead of
+        // CLEAN_HANDOFF. We re-detect later with effectiveFadeDuration for the runtime
+        // config — the small clamp delta (≤ 0.5s on cleanHandoff, ≤ 0.5s on cut) doesn't
+        // change which side of the boundary a vocal lands on in practice.
+        let preOutroInstrumental = detectOutroInstrumental(
+            currentAnalysis: safeCurrent, profile: profile,
+            bufferADuration: bufferADuration, fadeDuration: fade.duration
+        )
+        let preIntroInstrumental = detectIntroInstrumental(
+            nextAnalysis: safeNext, profile: profile,
+            entryPoint: entry.entryPoint, fadeDuration: fade.duration
+        )
+
         // ── 6. Transition type — decided BEFORE anticipation so CUT can get its own tease ──
         let transition = decideTransitionType(
             currentAnalysis: safeCurrent,
@@ -482,7 +534,9 @@ enum DJMixingService {
             isBeatSynced: entry.isBeatSynced,
             useFilters: filter.useFilters,
             bufferADuration: bufferADuration,
-            hasVocalOverlap: djFilters.useMidScoop
+            hasVocalOverlap: djFilters.useMidScoop,
+            outroInstrumental: preOutroInstrumental,
+            introInstrumental: preIntroInstrumental
         )
 
         // ── 6b. Fade duration overrides per transition type ──
@@ -496,6 +550,12 @@ enum DJMixingService {
             // Tight 2.5–3.5s: A fades out exponentially, micro-respiro, B sin² ramps.
             // Anything longer becomes dead air or an awkward double-pause.
             effectiveFadeDuration = max(2.5, min(3.5, fade.duration))
+        case .vinylStop:
+            // Tight 1.5–2.0s window. A's spin-down occupies the first 22.5%
+            // (~340–450ms), then ~200ms aire, then B fades in. Anything longer
+            // turns the gesture into dead air — a vinyl stop is a punctuation
+            // mark, not a long transition.
+            effectiveFadeDuration = max(1.5, min(2.0, fade.duration))
         case .cut:
             // CUT forced by polirritmia / vocal trainwreck inherits the long fade
             // computed for a hypothetical blend. The .cut volume curve hard-codes
@@ -540,11 +600,13 @@ enum DJMixingService {
             entryPoint: entry.entryPoint, fadeDuration: effectiveFadeDuration
         )
 
-        // Skip B filters for very short fades, DROP_MIX (B enters clean and full)
-        // or CLEAN_HANDOFF (sequential — B enters from silence, no spectral shaping needed).
+        // Skip B filters for very short fades, DROP_MIX (B enters clean and full),
+        // CLEAN_HANDOFF or VINYL_STOP (sequential — B enters from silence, no
+        // spectral shaping needed; the gesture on A is the effect).
         let skipBFilters = effectiveFadeDuration <= 3.0
             || transition.type == .dropMix
             || transition.type == .cleanHandoff
+            || transition.type == .vinylStop
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
@@ -1443,7 +1505,7 @@ enum DJMixingService {
         switch transitionType {
         case .eqMix, .beatMatchBlend, .crossfade, .cutAFadeInB, .fadeOutACutB:
             bassKillCompatibleType = true
-        case .cut, .naturalBlend, .cleanHandoff, .stemMix, .dropMix:
+        case .cut, .naturalBlend, .cleanHandoff, .stemMix, .dropMix, .vinylStop:
             // CLEAN_HANDOFF: A and B never overlap, no bass conflict to manage.
             // STEM_MIX: the stem swap IS the moment — A drops to stems, B enters
             //   on vocals/mids. Adding a hard bass kill on top muddies the
@@ -1454,6 +1516,7 @@ enum DJMixingService {
             //   Trust the preset to do the work.
             // CUT: too short to register a kill musically.
             // NATURAL_BLEND: deliberately invisible, no DJ-y moments.
+            // VINYL_STOP / ECHO_OUT: own gesture is the effect — no extra DJ tricks.
             bassKillCompatibleType = false
         }
 
@@ -1565,6 +1628,13 @@ enum DJMixingService {
         if transitionType == .cleanHandoff {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: CLEAN_HANDOFF — entrada secuencial")
+        }
+
+        // VINYL_STOP: same as clean handoff — A's spin-down owns the moment,
+        // B should NOT be teased. Teasing during a spin-down kills the drama.
+        if transitionType == .vinylStop {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: VINYL_STOP — gesto de A primero")
         }
 
         // CUT-specific: tease B filtered before the hard swap — this is how DJs
@@ -1689,7 +1759,9 @@ enum DJMixingService {
         isBeatSynced: Bool,
         useFilters: Bool,
         bufferADuration: Double,
-        hasVocalOverlap: Bool = false
+        hasVocalOverlap: Bool = false,
+        outroInstrumental: Bool = false,
+        introInstrumental: Bool = false
     ) -> TransitionTypeResult {
         // ── Abruptness detection ──
         var isAAbrupt = false
@@ -1727,10 +1799,17 @@ enum DJMixingService {
         // Very short fades: force CUT
         if fadeDuration < 3 {
             type = .cut
-            reason = "Fade muy corto (\(String(format: "%.1f", fadeDuration))s) → CUT directo"
+            // CUT clamps fadeDuration to [3, 7] downstream, so log raw + ejecutado
+            // for the diagnostic log to match the TIMING line.
+            reason = "Fade muy corto (raw=\(String(format: "%.1f", fadeDuration))s, ejecutado=3.0s) → CUT directo"
         }
         // ── Character-biased selection ──
         else {
+            // When B was harmonic-normalized (half/double-time), surface the mapping
+            // so REASON's diff matches what's in the ANALYSIS block (which prints raw).
+            let bpmNote = profile.bpmBNormalized != profile.bpmB
+                ? " [B \(Int(profile.bpmB))→\(Int(profile.bpmBNormalized)) half-time]"
+                : ""
             switch profile.character {
             case .minimal:
                 // Both low energy — gentle blend, no beat matching needed
@@ -1740,12 +1819,30 @@ enum DJMixingService {
             case .smooth:
                 switch profile.bpmRelationship {
                 case .incompatible:
-                    // Two unmixable tracks. A 5–10s blend would force them to share the
-                    // mid-crossfade at near-equal volumes (equal-power curve), and with
-                    // incompatible tempos that sounds like rhythmic mud. Use sequential
-                    // handoff instead: A exits cleanly, micro-respiro, B enters fresh.
-                    type = .cleanHandoff
-                    reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff))) → CLEAN_HANDOFF (sin overlap)"
+                    let energyDrop = profile.energyA - profile.energyB
+                    if outroInstrumental && introInstrumental {
+                        // Both ends are instrumental — there's no rapping/voice clash to
+                        // worry about, only the rhythmic mismatch. A long gentle crossfade
+                        // with mid-scoop and bass cut is far better than a clean handoff
+                        // here: the instrumentation can blend without sounding muddy.
+                        type = .crossfade
+                        reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) pero ambos instrumentales → CROSSFADE gentle"
+                    } else if energyDrop > 0.30 && profile.energyA > 0.25
+                              && !isOnCooldown(.vinylStop) {
+                        // A is intense and B is markedly quieter — textbook VINYL_STOP.
+                        // The spin-down punctuates the energy crash; cooldown ensures
+                        // it doesn't fire on every other transition.
+                        type = .vinylStop
+                        reason = "BPMs incompatibles + energy drop \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB))\(bpmNote) → VINYL_STOP"
+                    } else {
+                        // Two unmixable tracks with vocals/punch. A 5–10s blend would
+                        // force them to share the mid-crossfade at near-equal volumes
+                        // (equal-power curve), and with incompatible tempos that sounds
+                        // like rhythmic mud. Use sequential handoff: A exits cleanly,
+                        // micro-respiro (~300ms post-P0 fix), B enters fresh.
+                        type = .cleanHandoff
+                        reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → CLEAN_HANDOFF (sin overlap)"
+                    }
                 case .borderline:
                     // 12–18 BPM diff — too far for invisible beat-match but close enough
                     // that a thoughtful blend still works. Route to NATURAL_BLEND so we
@@ -1756,7 +1853,7 @@ enum DJMixingService {
                     // sweeps, no resonance tricks. Avoids both the rhythmic clash of
                     // a punchy crossfade AND the dead-air of a clean handoff.
                     type = .naturalBlend
-                    reason = "BPMs borderline (diff=\(String(format: "%.1f", profile.bpmDiff))) → NATURAL_BLEND sutil"
+                    reason = "BPMs borderline (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → NATURAL_BLEND sutil"
                 case .identical, .compatible:
                     type = .crossfade
                     reason = "Smooth blend (afinidad=\(String(format: "%.2f", profile.styleAffinity))) → CROSSFADE"
@@ -1769,9 +1866,18 @@ enum DJMixingService {
                     type = .beatMatchBlend
                     reason = "Dramatic UP + BPMs compatibles → BEAT_MATCH_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
                 } else if profile.energyFlow == .energyDown {
-                    // Energy dropping — gentle fade, let A die gracefully
-                    type = .naturalBlend
-                    reason = "Dramatic DOWN → NATURAL_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
+                    let energyDrop = profile.energyA - profile.energyB
+                    if energyDrop > 0.35 && profile.energyA > 0.30 && !isOnCooldown(.vinylStop) {
+                        // Hard energy crash — A is loud, B is whisper-quiet. A natural
+                        // blend would just slowly drown A; a vinyl-stop punctuates the
+                        // mood change. Cooldown prevents this firing on every drop.
+                        type = .vinylStop
+                        reason = "Dramatic DOWN extremo (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB))) → VINYL_STOP"
+                    } else {
+                        // Energy dropping but not a crash — gentle fade, let A die gracefully.
+                        type = .naturalBlend
+                        reason = "Dramatic DOWN → NATURAL_BLEND (energia \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB)))"
+                    }
                 } else if profile.harmonic.compatibility == .clash {
                     // Harmonic clash with steady energy — crossfade (shorter, from fade duration)
                     type = .crossfade
@@ -1797,12 +1903,16 @@ enum DJMixingService {
                     reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
                 }
                 // ── Full DJ treatment ──
-                else if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6 && hasVocalOverlap {
+                // Guard: STEM_MIX requires bpmDiff < 6. The mid-scoop and dynamic-Q
+                // can hide subtle phase drift but not a 16 BPM gap — that becomes
+                // audible rhythmic mud no matter how aggressive the EQ shaping.
+                else if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6
+                    && hasVocalOverlap && profile.bpmDiff < 6 {
                     type = .stemMix
-                    reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))"
+                    reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote)"
                 } else if isBeatSynced && !isAAbrupt && !isBAbrupt {
                     type = .beatMatchBlend
-                    reason = "Punch + beats sync (diff=\(String(format: "%.1f", profile.bpmDiff))) → BEAT_MATCH_BLEND"
+                    reason = "Punch + beats sync (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → BEAT_MATCH_BLEND"
                 } else if isAAbrupt && isBAbrupt {
                     if fadeDuration < 4 {
                         type = .cut
@@ -1869,6 +1979,10 @@ enum DJMixingService {
             }
         }
 
+        // Record the final type for cooldown bookkeeping. Done at the end so the
+        // safety overrides above (polirritmia, vocal trainwreck) are also tracked.
+        recordTransition(type)
+
         return TransitionTypeResult(type: type, reason: reason)
     }
 
@@ -1889,6 +2003,11 @@ enum DJMixingService {
         case .cut, .cutAFadeInB, .fadeOutACutB, .cleanHandoff:
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: transicion tipo cut/handoff")
+        case .vinylStop:
+            // Vinyl stop OWNS the rate ramp on A (1.0 → 0). No global time-stretch
+            // decision applies — the curve is driven directly by the executor.
+            return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
+                                     reason: "No stretch: rate ramp owned por VINYL_STOP")
         default: break
         }
 
@@ -1946,6 +2065,23 @@ enum DJMixingService {
     ) -> Bool {
         guard let cur = currentAnalysis, cur.hasError != true else { return false }
         let crossfadeStartA = bufferADuration - fadeDuration
+
+        // ── Fake-outro guard ──
+        // Trap and conscious hip-hop frequently have a *false outro* — energy dips
+        // for 4-8 bars, then a final verse / ad-lib comes back. The backend's
+        // hasOutroVocals can lie when the model trained on song-level features.
+        // If we have hard evidence of vocals in the last 4 seconds, override to
+        // not-instrumental regardless of any other signal. The 4s window is
+        // independent of fadeDuration so a long fade (15s) doesn't mask a late
+        // vocal that lands inside the perceptual "outro" of the song.
+        let last4sStart = bufferADuration - 4.0
+        if cur.hasVocalEndData && cur.lastVocalTime > last4sStart {
+            return false
+        }
+        if !cur.speechSegments.isEmpty
+            && cur.speechSegments.contains(where: { $0.end > last4sStart }) {
+            return false
+        }
 
         if cur.hasVocalEndData {
             return cur.lastVocalTime < crossfadeStartA

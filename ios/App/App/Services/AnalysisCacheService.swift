@@ -433,6 +433,30 @@ actor AnalysisCacheService {
         }
     }
 
+    // MARK: - Invalidation
+
+    /// Drops memory + disk cache for a single song so the next fetch hits the backend
+    /// fresh. Cancels any in-flight task to avoid the cancelled fetch overwriting disk.
+    func invalidate(songId: String) {
+        inFlightTasks[songId]?.cancel()
+        inFlightTasks[songId] = nil
+        memoryCache[songId] = nil
+        try? FileManager.default.removeItem(at: diskPath(songId: songId))
+    }
+
+    /// Drops every cached analysis. Useful when a backend version bump means all
+    /// previous results are stale.
+    func invalidateAll() {
+        for (_, task) in inFlightTasks { task.cancel() }
+        inFlightTasks.removeAll()
+        memoryCache.removeAll()
+        if let entries = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
+            for url in entries where url.pathExtension == "json" {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
     // MARK: - Disk Cache
 
     private func diskPath(songId: String) -> URL {
