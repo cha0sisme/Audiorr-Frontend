@@ -74,7 +74,9 @@ struct ProgressBarView: View {
 
                 Spacer()
 
-                if state.isCrossfading {
+                // AutoMix branding is a backend feature — without backend, even
+                // when a basic crossfade is happening, the indicator stays hidden.
+                if state.isCrossfading && BackendState.shared.isAvailable {
                     WaveText("AutoMix", font: .caption2.weight(.bold), color: .white)
                         .transition(.opacity.combined(with: .scale))
                 }

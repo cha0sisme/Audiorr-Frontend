@@ -172,6 +172,9 @@ struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
     @State private var showDeleteConfirm = false
+    // See AlbumDetailView for rationale: defends against ghost taps after
+    // .navigationTransition(.zoom) pop firing the play action of a no-longer-visible view.
+    @State private var isViewVisible = false
     var onDismiss: (() -> Void)?
     var onDeleted: (() -> Void)?
 
@@ -224,7 +227,9 @@ struct PlaylistDetailView: View {
         .onChange(of: isLight) { _, light in
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
+        .onAppear { isViewVisible = true }
         .onDisappear {
+            isViewVisible = false
             AppTheme.shared.overlayColorScheme = nil
         }
         .toolbar {
@@ -397,6 +402,7 @@ struct PlaylistDetailView: View {
         return HStack(spacing: 12) {
             // Play — capsule with text normally, collapses to circle when SmartMix active
             Button {
+                guard isViewVisible else { return }
                 if isPlaylistContext {
                     PlayerService.shared.togglePlayPause()
                 } else {
@@ -423,7 +429,7 @@ struct PlaylistDetailView: View {
 
             // Shuffle
             Button {
-                guard !vm.songs.isEmpty else { return }
+                guard isViewVisible, !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 Image(systemName: "shuffle")
@@ -507,6 +513,7 @@ struct PlaylistDetailView: View {
         let isExpanded = status == .ready || isSmartMixContext
 
         Button {
+            guard isViewVisible else { return }
             if isSmartMixContext {
                 // SmartMix is the current context — toggle play/pause
                 PlayerService.shared.togglePlayPause()
@@ -789,18 +796,46 @@ final class PlaylistCoverCache: @unchecked Sendable {
 
     /// Downloads a cover, downsizing to `maxPixels` during decode to save RAM.
     /// Concurrent requests for the same playlist coalesce into a single download.
+    ///
+    /// URL ordering convention: `urls[0]` is the *preferred* source (backend custom
+    /// cover when available); subsequent URLs are progressively cheaper fallbacks
+    /// (Navidrome 4-tile mosaic). Transient failures on the preferred URL retry
+    /// with backoff before falling through, so a single timeout/5xx doesn't
+    /// downgrade the user to the mosaic when a custom cover actually exists.
+    /// 404 falls through immediately (no custom cover for this playlist).
     func loadCover(playlistId: String, urls: [URL], maxPixels: Int = 600) async -> UIImage? {
         if let cached = image(for: playlistId) { return cached }
         let cache = self
         let maxPx = maxPixels
         return await coordinator.download(id: playlistId) {
-            for url in urls {
-                guard let (data, resp) = try? await URLSession.shared.data(from: url),
-                      let http = resp as? HTTPURLResponse, http.statusCode == 200 else { continue }
-                let img = Self.downsample(data: data, maxPixels: maxPx) ?? UIImage(data: data)
-                if let img {
-                    cache.setImage(img, for: playlistId)
-                    return img
+            for (index, url) in urls.enumerated() {
+                let isPreferred = index == 0 && urls.count > 1
+                let maxAttempts = isPreferred ? 3 : 1
+
+                for attempt in 0..<maxAttempts {
+                    if attempt > 0 {
+                        // Backoff: 600ms, 1.4s
+                        try? await Task.sleep(nanoseconds: UInt64(attempt) * 800_000_000 - 200_000_000)
+                    }
+
+                    guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                          let http = resp as? HTTPURLResponse else {
+                        continue  // network error → retry (or fall through if last attempt)
+                    }
+
+                    // 404 = cover doesn't exist on this server. No point retrying — fall through.
+                    if http.statusCode == 404 { break }
+
+                    // Non-200 (5xx, etc.) = transient → retry within this URL's attempts.
+                    guard http.statusCode == 200 else { continue }
+
+                    let img = Self.downsample(data: data, maxPixels: maxPx) ?? UIImage(data: data)
+                    if let img {
+                        cache.setImage(img, for: playlistId)
+                        return img
+                    }
+                    // Decoded nil → don't retry (data won't change), fall through.
+                    break
                 }
             }
             return nil

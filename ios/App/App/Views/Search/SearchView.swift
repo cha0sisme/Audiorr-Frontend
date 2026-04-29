@@ -111,6 +111,7 @@ final class SearchViewModel: ObservableObject {
 struct SearchView: View {
     @ObservedObject private var vm = SearchViewModel.shared
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     @Namespace private var heroNS
 
     var onPlaySong: ((NavidromeSong) -> Void)?
@@ -152,6 +153,8 @@ struct SearchView: View {
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
         }
         .searchable(text: $searchText, prompt: Text(L.searchPlaceholder))
+        .searchFocused($searchFocused)
+        .onAppear { searchFocused = true }
         .searchSuggestions {
             if !hasQuery && !vm.history.isEmpty {
                 ForEach(vm.history, id: \.self) { item in
@@ -358,6 +361,8 @@ private struct ArtistSearchRow: View {
 
             Spacer(minLength: 0)
         }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
         .task(id: artist.id) {
             if let cached = ArtistImageCache.shared.image(for: artist.id) {
                 avatarImage = cached
@@ -411,6 +416,8 @@ private struct AlbumSearchRow: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }
 
@@ -434,6 +441,8 @@ private struct SongSearchRow: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }
 

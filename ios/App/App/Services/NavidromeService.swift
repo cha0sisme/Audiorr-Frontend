@@ -163,7 +163,7 @@ final class NavidromeService: ObservableObject {
             switch await checkEndpoint(url: url) {
             case .confirmed: return true
             case .rejected: return false  // service field present but not "audiorr" → abort
-            case .inconclusive: break     // 404, network error, or no service field → try fallback
+            case .legacyResponse, .networkError: break  // try fallback
             }
         }
 
@@ -173,7 +173,8 @@ final class NavidromeService: ObservableObject {
             switch await checkEndpoint(url: url) {
             case .confirmed: return true
             case .rejected: return false
-            case .inconclusive: return true  // Legacy {"status":"ok"} without service field → accept
+            case .legacyResponse: return true   // 200 OK without service field → accept as legacy
+            case .networkError: return false    // unreachable → backend doesn't exist
             }
         }
 
@@ -181,9 +182,10 @@ final class NavidromeService: ObservableObject {
     }
 
     private enum HealthCheckResult {
-        case confirmed      // service == "audiorr"
-        case rejected       // service field present but != "audiorr"
-        case inconclusive   // no response, 404, or no service field in body
+        case confirmed       // service == "audiorr"
+        case rejected        // service field present but != "audiorr"
+        case legacyResponse  // 200 OK, no service field in body — possibly legacy backend
+        case networkError    // no response, timeout, or non-200 status — backend unreachable
     }
 
     private func checkEndpoint(url: URL) async -> HealthCheckResult {
@@ -194,20 +196,20 @@ final class NavidromeService: ObservableObject {
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse,
               http.statusCode == 200 else {
-            return .inconclusive
+            return .networkError
         }
 
         // Try to parse service identifier from body
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .inconclusive
+            return .legacyResponse
         }
 
         if let service = json["service"] as? String {
             return service == "audiorr" ? .confirmed : .rejected
         }
 
-        // 200 OK with valid JSON but no "service" field → inconclusive (legacy format)
-        return .inconclusive
+        // 200 OK with valid JSON but no "service" field → legacy format
+        return .legacyResponse
     }
 
     func streamURL(songId: String) -> URL? {

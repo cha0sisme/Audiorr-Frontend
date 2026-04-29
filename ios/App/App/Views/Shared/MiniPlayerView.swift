@@ -56,10 +56,14 @@ struct MiniPlayerView: View {
                         .lineLimit(1)
 
                     if let subtitle = state.subtitle, !subtitle.isEmpty {
+                        // AutoMix branding requires backend — without it, hide the
+                        // AutoMix subtitle entirely (other subtitles still render).
                         if subtitle.hasPrefix("AutoMix") {
-                            WaveText(subtitle, font: .system(size: 10, weight: .semibold), color: .cyan)
-                                .lineLimit(1)
-                                .transition(.opacity)
+                            if BackendState.shared.isAvailable {
+                                WaveText(subtitle, font: .system(size: 10, weight: .semibold), color: .cyan)
+                                    .lineLimit(1)
+                                    .transition(.opacity)
+                            }
                         } else {
                             Text(subtitle)
                                 .font(.system(size: 10, weight: .semibold))

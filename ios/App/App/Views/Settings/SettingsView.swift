@@ -364,9 +364,11 @@ struct SettingsView: View {
                 }
             }
 
-            // ── Transition Diagnostics (backend-only) ──
-            if BackendState.shared.isAvailable {
-                settingsSection(header: "Diagnostics") {
+            // ── Diagnostics ──
+            // Always visible: the Backend URL override is the escape hatch when
+            // the backend is unreachable, so it must be reachable regardless of
+            // BackendState.shared.isAvailable.
+            settingsSection(header: "Diagnostics") {
                     settingsRow {
                         Toggle(isOn: Binding(
                             get: { TransitionDiagnostics.debugModeEnabled },
@@ -460,7 +462,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-            }
 
             // ── Servidor ──
             settingsSection(header: L.server) {

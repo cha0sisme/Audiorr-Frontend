@@ -12,13 +12,23 @@ final class ArtistsViewModel: ObservableObject {
     @Published var genreArtists: [NavidromeArtist] = []
     @Published var currentGenre: String = ""
     @Published var isLoading = true
-    @Published var showAllArtists = false
 
     private let api = NavidromeService.shared
     private var lastLoadedAt: Date?
     private let cacheTTL: TimeInterval = 120
+    private var isChangingGenre = false
+    /// Recent picks to avoid cycling between the same 2-3 genres.
+    private var recentGenreHistory: [String] = []
+    private let genreHistoryDepth = 3
 
     var isConfigured: Bool { api.isConfigured }
+
+    /// Tolerates duplicate artist names by keeping the first one seen.
+    /// Subsonic libraries can have multiple artists sharing a name; using
+    /// `Dictionary(uniqueKeysWithValues:)` here would TRAP on the duplicate.
+    private func artistLookupByName() -> [String: NavidromeArtist] {
+        Dictionary(allArtists.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     /// Grouped alphabetically for the "Explorar todos" section.
     @Published private(set) var groupedByLetter: [(letter: String, artists: [NavidromeArtist])] = []
@@ -105,7 +115,7 @@ final class ArtistsViewModel: ObservableObject {
             .prefix(12)
             .map(\.key)
 
-        let artistLookup = Dictionary(uniqueKeysWithValues: allArtists.map { ($0.name, $0) })
+        let artistLookup = artistLookupByName()
         featuredArtists = topNames.compactMap { artistLookup[$0] }
     }
 
@@ -115,7 +125,7 @@ final class ArtistsViewModel: ObservableObject {
         let latestAlbums = await api.getAlbumList(type: "newest", size: 30)
         var seen = Set<String>()
         var result: [NavidromeArtist] = []
-        let lookup = Dictionary(uniqueKeysWithValues: allArtists.map { ($0.name, $0) })
+        let lookup = artistLookupByName()
 
         for album in latestAlbums {
             if !seen.contains(album.artist), let artist = lookup[album.artist] {
@@ -129,27 +139,51 @@ final class ArtistsViewModel: ObservableObject {
 
     // MARK: Random genre
 
+    /// Pools genres from multiple album-list types so users with libraries that
+    /// have a small "newest" cohort still see varied genres. Also keeps a short
+    /// history to avoid cycling between the same two genres on rapid refresh.
     private func loadRandomGenre() async {
-        let albums = await api.getAlbumList(type: "newest", size: 100)
+        // Pool from three sources concurrently for max variety.
+        async let newest = api.getAlbumList(type: "newest", size: 100)
+        async let frequent = api.getAlbumList(type: "frequent", size: 100)
+        async let random = api.getAlbumList(type: "random", size: 100)
+        let (n, f, r) = await (newest, frequent, random)
+        let pool = n + f + r
+
         var genres = Set<String>()
-        for album in albums {
-            if let genre = album.genre {
-                for g in genre.split(separator: ",") {
-                    let trimmed = g.trimmingCharacters(in: .whitespaces)
-                    if !trimmed.isEmpty { genres.insert(trimmed) }
-                }
+        for album in pool {
+            guard let genre = album.genre else { continue }
+            for g in genre.split(separator: ",") {
+                let trimmed = g.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { genres.insert(trimmed) }
             }
         }
 
-        let genreList = Array(genres).filter { $0 != currentGenre }
-        guard !genreList.isEmpty else { return }
-        let picked = genreList.randomElement()!
+        let blocked = Set([currentGenre] + recentGenreHistory)
+        var candidates = Array(genres).filter { !blocked.contains($0) }
+
+        // Fallback: if every known genre is in the recent history (very small
+        // libraries), allow any except currentGenre.
+        if candidates.isEmpty {
+            candidates = Array(genres).filter { $0 != currentGenre }
+        }
+        guard let picked = candidates.randomElement() else { return }
 
         currentGenre = picked
+        recentGenreHistory.append(picked)
+        if recentGenreHistory.count > genreHistoryDepth {
+            recentGenreHistory.removeFirst()
+        }
         await loadGenreArtists(genre: picked)
     }
 
+    /// Triggered by the shuffle button. Coalesces rapid double-taps so the
+    /// previous fetch finishes before a new one starts — prevents racy state
+    /// where currentGenre and genreArtists end up mismatched.
     func changeGenre() async {
+        guard !isChangingGenre else { return }
+        isChangingGenre = true
+        defer { isChangingGenre = false }
         await loadRandomGenre()
     }
 
@@ -157,7 +191,7 @@ final class ArtistsViewModel: ObservableObject {
         let albums = await api.getAlbumList(type: "byGenre", size: 50, genre: genre)
         var seen = Set<String>()
         var result: [NavidromeArtist] = []
-        let lookup = Dictionary(uniqueKeysWithValues: allArtists.map { ($0.name, $0) })
+        let lookup = artistLookupByName()
 
         for album in albums {
             if !seen.contains(album.artist), let artist = lookup[album.artist] {
@@ -166,7 +200,11 @@ final class ArtistsViewModel: ObservableObject {
                 if result.count >= 12 { break }
             }
         }
-        genreArtists = result
+        // Don't blank the section on a transient empty fetch — keep the last
+        // good list so the section doesn't disappear after a refresh hiccup.
+        if !result.isEmpty {
+            genreArtists = result
+        }
     }
 }
 
@@ -179,10 +217,8 @@ struct ArtistsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    content(proxy: proxy)
-                }
+            ScrollView {
+                content
             }
             .background(Color(.systemBackground))
             .navigationTitle(L.artists)
@@ -211,7 +247,7 @@ struct ArtistsView: View {
     // MARK: - Content
 
     @ViewBuilder
-    private func content(proxy: ScrollViewProxy) -> some View {
+    private var content: some View {
         if vm.isLoading {
             loadingSkeleton
         } else if !vm.isConfigured {
@@ -237,7 +273,7 @@ struct ArtistsView: View {
                 featuredSection
                 recentSection
                 genreSection
-                exploreAllSection(proxy: proxy)
+                allArtistsLink
             }
             .padding(.bottom, 100)
         }
@@ -353,22 +389,18 @@ struct ArtistsView: View {
         }
     }
 
-    // MARK: - Explorar todos (list-style, Apple Music A-Z)
+    // MARK: - All artists entry (navigates to AllArtistsView)
 
-    @ViewBuilder
-    private func exploreAllSection(proxy: ScrollViewProxy) -> some View {
+    private var allArtistsLink: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Section divider
             Rectangle()
                 .fill(Color(.separator).opacity(0.3))
                 .frame(height: 1)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 20)
 
-            Button {
-                withAnimation(Anim.small) {
-                    vm.showAllArtists.toggle()
-                }
+            NavigationLink {
+                AllArtistsView(vm: vm, heroNamespace: heroNS)
             } label: {
                 HStack(spacing: 0) {
                     Text(L.allArtists)
@@ -381,56 +413,11 @@ struct ArtistsView: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(vm.showAllArtists ? 90 : 0))
                 }
             }
+            .buttonStyle(.plain)
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
-
-            if vm.showAllArtists {
-                // Alphabet scrubber
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        ForEach(vm.letters, id: \.self) { letter in
-                            Button {
-                                withAnimation(Anim.small) {
-                                    proxy.scrollTo(letter, anchor: .top)
-                                }
-                            } label: {
-                                Text(letter)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.tint)
-                                    .frame(width: 28, height: 28)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-                .padding(.bottom, 8)
-
-                // A-Z list
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(vm.groupedByLetter, id: \.letter) { group in
-                        Section {
-                            ForEach(group.artists) { artist in
-                                NavigationLink(value: artist) {
-                                    ArtistRowCell(artist: artist)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        } header: {
-                            Text(group.letter)
-                                .id(group.letter)
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(.bar)
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -576,5 +563,132 @@ private struct ArtistRowCell: View {
                 withAnimation(Anim.small) { didFinishLoading = true }
             }
         }
+    }
+}
+
+// MARK: - All Artists Page (A-Z with lateral alphabet)
+
+/// Pushed from ArtistsView's "Ver todos los artistas" link.
+/// Apple Music–style: pinned section headers + a draggable lateral alphabet
+/// on the right that scrubs through letters with haptics + a floating preview.
+struct AllArtistsView: View {
+    @ObservedObject var vm: ArtistsViewModel
+    var heroNamespace: Namespace.ID
+
+    @State private var activeLetter: String?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .trailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        ForEach(vm.groupedByLetter, id: \.letter) { group in
+                            Section {
+                                // Scroll anchor — see ArtistsView's earlier note:
+                                // .id() on a pinned header is unreliable, so we
+                                // place the anchor inside the section content.
+                                Color.clear
+                                    .frame(height: 0)
+                                    .id(group.letter)
+
+                                ForEach(group.artists) { artist in
+                                    NavigationLink(value: artist) {
+                                        ArtistRowCell(artist: artist)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            } header: {
+                                Text(group.letter)
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(.bar)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 100)
+                }
+
+                // Lateral alphabet — only when there are enough letters to be useful
+                if vm.letters.count >= 4 {
+                    AlphabetSidebar(letters: vm.letters, activeLetter: $activeLetter) { letter in
+                        proxy.scrollTo(letter, anchor: .top)
+                    }
+                    .padding(.trailing, 4)
+                }
+            }
+            .overlay {
+                // Floating letter preview while scrubbing
+                if let active = activeLetter {
+                    Text(active)
+                        .font(.system(size: 64, weight: .bold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .frame(width: 120, height: 120)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .animation(Anim.small, value: activeLetter)
+        }
+        .background(Color(.systemBackground))
+        .navigationTitle(L.allArtists)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Lateral alphabet sidebar (Apple Music / Contacts style)
+
+/// Thin vertical strip of letters on the right edge. Tap or drag to scrub
+/// through sections. Calls `onLetterChange` whenever the active letter shifts,
+/// so the host can `proxy.scrollTo(letter, anchor: .top)` and show a preview
+/// bubble. Plays a light haptic on each letter change.
+private struct AlphabetSidebar: View {
+    let letters: [String]
+    @Binding var activeLetter: String?
+    var onLetterChange: (String) -> Void
+
+    private let letterHeight: CGFloat = 14
+    private let stripWidth: CGFloat = 18
+
+    private var totalHeight: CGFloat {
+        CGFloat(letters.count) * letterHeight
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(letters, id: \.self) { letter in
+                Text(letter)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: stripWidth, height: letterHeight)
+            }
+        }
+        .frame(width: stripWidth, height: totalHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    handleScrub(at: value.location.y)
+                }
+                .onEnded { _ in
+                    // Fade the preview bubble out shortly after release
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        activeLetter = nil
+                    }
+                }
+        )
+    }
+
+    private func handleScrub(at y: CGFloat) {
+        let raw = Int(y / letterHeight)
+        let clamped = max(0, min(letters.count - 1, raw))
+        let letter = letters[clamped]
+        guard letter != activeLetter else { return }
+        activeLetter = letter
+        onLetterChange(letter)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }

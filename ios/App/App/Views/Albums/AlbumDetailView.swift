@@ -82,6 +82,11 @@ final class AlbumDetailViewModel: ObservableObject {
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
+    // Defends against ghost taps after .navigationTransition(.zoom) pop:
+    // SwiftUI may retain a hit-test layer for this view's play buttons even
+    // after the user navigates back, causing the next tap on a different
+    // card to fire this view's playPlaylist action.
+    @State private var isViewVisible = false
     var onDismiss: (() -> Void)?
 
     private let heroHeight: CGFloat = 440
@@ -139,7 +144,9 @@ struct AlbumDetailView: View {
         .onChange(of: isLight) { _, light in
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
+        .onAppear { isViewVisible = true }
         .onDisappear {
+            isViewVisible = false
             AppTheme.shared.overlayColorScheme = nil
         }
         .toolbar {
@@ -348,7 +355,7 @@ struct AlbumDetailView: View {
 
         return HStack(spacing: 14) {
             Button {
-                guard !vm.songs.isEmpty else { return }
+                guard isViewVisible, !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 HStack(spacing: 7) {
@@ -364,7 +371,7 @@ struct AlbumDetailView: View {
             }
 
             Button {
-                guard !vm.songs.isEmpty else { return }
+                guard isViewVisible, !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 Image(systemName: "shuffle")
