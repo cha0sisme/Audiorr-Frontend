@@ -26,9 +26,14 @@ private func avatarInitial(for username: String) -> String {
 
 @MainActor
 final class SettingsViewModel: ObservableObject {
+    // Defaults match QueueManager (the engine reads the same JSON dict and must
+    // agree on what's "on" before the user touches anything). isDjMode and
+    // crossfadeEnabled both default to true so a fresh user gets the full
+    // experience out of the box. If they disable DJ mode in the toggle, the
+    // crossfade toggle becomes their explicit, independent choice.
     @Published var isDjMode = true
     @Published var useReplayGain = true
-    @Published var crossfadeEnabled = false
+    @Published var crossfadeEnabled = true
     @Published var crossfadeDuration: Double = 8  // seconds (2–15)
     @Published var scrobbleEnabled = false
 
@@ -56,7 +61,10 @@ final class SettingsViewModel: ObservableObject {
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
-        isDjMode = dict["isDjMode"] as? Bool ?? false
+        // Defaults must match QueueManager.isDjMode / .crossfadeEnabled getters.
+        // Previously isDjMode defaulted to false here but true in QueueManager,
+        // showing "DJ mode OFF" in the UI while the engine treated it as ON.
+        isDjMode = dict["isDjMode"] as? Bool ?? true
         useReplayGain = dict["useReplayGain"] as? Bool ?? true
         crossfadeEnabled = dict["crossfadeEnabled"] as? Bool ?? true
         crossfadeDuration = dict["crossfadeDuration"] as? Double ?? 8

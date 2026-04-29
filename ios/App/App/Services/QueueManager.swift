@@ -73,9 +73,11 @@ final class QueueManager: AudioEngineDelegate {
         // DJ mode always implies crossfade, regardless of the toggle
         if isDjMode { return true }
         // With backend, crossfade is always on (analysis-driven).
-        // Without backend, user can toggle it (default off).
         if BackendState.shared.isAvailable { return true }
-        return settingsDict?["crossfadeEnabled"] as? Bool ?? false
+        // Without backend, the user toggle decides. Default true to match the
+        // SettingsView default — without alignment, fresh users would see the
+        // toggle ON in the UI but the engine would treat it as OFF.
+        return settingsDict?["crossfadeEnabled"] as? Bool ?? true
     }
 
     /// User-configured crossfade duration (seconds). Used as base/override depending on mode.
