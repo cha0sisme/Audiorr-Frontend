@@ -493,6 +493,11 @@ class AudioEngineManager {
         }
 
         if isStreamMode {
+            // Reactivate session in case applicationDidEnterBackground deactivated it
+            // while we were paused. Without this, lockscreen Play after pause+background
+            // would call streamPlayer.play() with the session inactive — silent or wonky.
+            // Mirrors the safety net already in nextTrackCommand / handleInterruption(.ended).
+            ensureAudioSessionActive()
             streamPlayer?.play()
             isPlaying = true
             if automixTriggerTime != nil && !isCrossfading {
@@ -635,6 +640,12 @@ class AudioEngineManager {
         }
 
         if wasPlaying {
+            // Defensive reactivation: under normal flow the session stays active while
+            // wasPlaying is true (background-deactivation only fires on !isPlaying), but
+            // any future code path that flips isPlaying to true with the session inactive
+            // would silently produce no audio here. This keeps seek() symmetric with
+            // resume()/nextTrack/handleInterruption(.ended). Idempotent and cheap.
+            ensureAudioSessionActive()
             playerA.play()
             isPlaying = true
         }
