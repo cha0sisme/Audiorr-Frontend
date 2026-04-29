@@ -2094,13 +2094,18 @@ enum DJMixingService {
         // not-instrumental regardless of any other signal. The 4s window is
         // independent of fadeDuration so a long fade (15s) doesn't mask a late
         // vocal that lands inside the perceptual "outro" of the song.
-        let last4sStart = bufferADuration - 4.0
-        if cur.hasVocalEndData && cur.lastVocalTime > last4sStart {
-            return false
-        }
-        if !cur.speechSegments.isEmpty
-            && cur.speechSegments.contains(where: { $0.end > last4sStart }) {
-            return false
+        // Skip for songs shorter than 4s (impossible for real music tracks but
+        // defensive against malformed bufferADuration); negative last4sStart
+        // would make any positive lastVocalTime trigger the override.
+        if bufferADuration >= 4.0 {
+            let last4sStart = bufferADuration - 4.0
+            if cur.hasVocalEndData && cur.lastVocalTime > last4sStart {
+                return false
+            }
+            if !cur.speechSegments.isEmpty
+                && cur.speechSegments.contains(where: { $0.end > last4sStart }) {
+                return false
+            }
         }
 
         if cur.hasVocalEndData {
@@ -2163,14 +2168,17 @@ enum DJMixingService {
     /// Stir Fry → Vamp Anthem).
     ///
     /// Strategy: candidates are `chorusStart`, `chorusStart - 1 bar`, and
-    /// `chorusStart - 2 bars`. Pick the first candidate that is meaningfully
-    /// after the original entry (≥ +0.5s) and within reach of B's playable
-    /// window. If `downbeatTimes` are available and one sits within 0.3s of
-    /// the candidate, snap to the actual downbeat (real grid > theoretical bar).
+    /// `chorusStart - 2 bars`. Pick the candidate CLOSEST to the original entry
+    /// — minimises the shift while still leaving the dead zone. Each candidate
+    /// must be ≥ entry + 0.5s (avoid trivial sub-perceptual snaps), ≥ 0 and
+    /// within reach of B's playable window. If `downbeatTimes` are available
+    /// and one sits within 0.3s of the chosen candidate, snap to the actual
+    /// downbeat (real grid > theoretical bar).
     ///
-    /// No-op for non-cut transitions, missing analysis, or when chorusStart
-    /// already lies before/at the original entry. Reggaeton (STEM_MIX /
-    /// BEAT_MATCH_BLEND) never reaches this path.
+    /// No-op for non-cut transitions, missing analysis, original entry already
+    /// at/past chorus, or original entry more than 2 bars before chorus (the
+    /// user's deliberate "early CUT" intent must be respected). Reggaeton
+    /// (STEM_MIX / BEAT_MATCH_BLEND) never reaches this path.
     private static func snapCutEntryToDownbeat(
         entry: Double,
         transitionType: TransitionType,
@@ -2189,16 +2197,17 @@ enum DJMixingService {
         // calc already targeted past the chorus, e.g. for repeat-chorus tracks).
         if entry >= chorusStart - 0.3 { return (entry, false, "") }
 
-        // Reachability guard. If the chorus is far from the original entry, the
-        // user wasn't trying to enter at chorus — they wanted an early CUT. Cap
-        // the lead-in to fade + 8s. Example: I'M GOD with chorusStart=61s vs
-        // entry=3s would otherwise snap to a 50+s shift, destroying the
-        // transition. 8s of lead-in is the upper bound a DJ would tolerate.
-        let chorusReach = entry + fadeDuration + 8.0
-        guard chorusStart <= chorusReach else { return (entry, false, "") }
-
         let beatInterval = next.beatInterval > 0 ? next.beatInterval : 0.5
         let bar = beatInterval * 4
+
+        // Reachability guard. The DJ's rule: cutPoint ∈ {chorus, chorus−1 bar,
+        // chorus−2 bars}. So the snap only makes sense when the original entry
+        // is WITHIN 2 bars of chorusStart. Beyond that, the user's entry was a
+        // deliberate "early CUT" (e.g. DNA → Mask Off at 12.9s vs chorus 23.6s
+        // — 10.7s = ~4 bars away — the user wanted the cold cut, not chorus
+        // alignment) and we must respect it.
+        guard entry >= chorusStart - 2 * bar else { return (entry, false, "") }
+
         let maxEntry = max(0, bufferBDuration - fadeDuration - 0.5)
 
         // Candidates: AT chorusStart (drop), 1 bar before, 2 bars before. Pick
