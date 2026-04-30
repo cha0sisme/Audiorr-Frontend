@@ -658,18 +658,33 @@ final class QueueManager: AudioEngineDelegate {
     // MARK: - Automix / Crossfade Preparation
 
     /// Prepare next song for crossfade. Called after advancing queue or after seek.
+    ///
+    /// Idempotent w.r.t. the engine's automix trigger: every early-return path
+    /// clears it. Without that, removing the upcoming song (or reaching the
+    /// last track via any route that doesn't go through engine.play/seek)
+    /// would leave a stale trigger armed that fires a crossfade into a song
+    /// that is no longer in the queue.
     private func prepareNextForCrossfade() {
         crossfadePreparationTask?.cancel()
+        let engine = AudioEngineManager.shared
+
         guard let current = currentSong,
-              currentIndex + 1 < queue.count else { return }
+              currentIndex + 1 < queue.count else {
+            engine?.clearAutomixTrigger()
+            return
+        }
         let nextSong = queue[currentIndex + 1]
 
-        guard let streamURL = api.streamURL(songId: nextSong.id) else { return }
+        guard let streamURL = api.streamURL(songId: nextSong.id) else {
+            engine?.clearAutomixTrigger()
+            return
+        }
         let currentStreamURL = api.streamURL(songId: current.id)
 
         // If crossfade is disabled, don't set any automix trigger.
         // Songs will transition via audioEngineDidFinishSong (natural end).
         guard crossfadeEnabled else {
+            engine?.clearAutomixTrigger()
             print("[QueueManager] Crossfade disabled — skipping automix preparation")
             return
         }
