@@ -793,7 +793,11 @@ final class PlaylistCoverCache: @unchecked Sendable {
         cachedHashes.removeValue(forKey: playlistId)
         persistHashes()
         let path = diskPath(for: playlistId)
-        ioQueue.async { try? FileManager.default.removeItem(at: path) }
+        // SYNC delete is load-bearing: image(for:) reads disk synchronously, so any
+        // caller that runs between this line and the async drain (prefetch on the
+        // same run loop, onReceive→loadCover subscribers) would otherwise find the
+        // stale JPG, repopulate the memory cache, and silently undo the invalidation.
+        ioQueue.sync { try? FileManager.default.removeItem(at: path) }
         // Palette is derived from the cover — keep them in sync.
         PaletteCache.shared.invalidate(key: playlistId)
         coverInvalidated.send(playlistId)
