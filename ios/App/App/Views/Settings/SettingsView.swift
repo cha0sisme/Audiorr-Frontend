@@ -197,11 +197,25 @@ struct SettingsView: View {
         }
         .preferredColorScheme(theme.colorScheme)
         .onAppear {
-            vm.load()
-            if BackendState.shared.isAvailable,
-               UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
-                TransitionDiagnostics.debugModeEnabled = UserDefaults.standard.bool(forKey: "audiorr_diagnostics_enabled")
+            // Load the saved diagnostics flag BEFORE vm.load() so its
+            // "clear backend override when debug is off" check sees the
+            // user's actual setting instead of the in-memory default —
+            // otherwise the override would be wiped on every Settings open.
+            //
+            // When backend is unavailable, force debug off: TestFlight /
+            // Navidrome-only users have no UI to manage this, and any
+            // stale UserDefault from a previous backend session must not
+            // keep diagnostics collecting in the background.
+            if BackendState.shared.isAvailable {
+                if UserDefaults.standard.object(forKey: "audiorr_diagnostics_enabled") != nil {
+                    TransitionDiagnostics.debugModeEnabled = UserDefaults.standard.bool(forKey: "audiorr_diagnostics_enabled")
+                }
+            } else {
+                TransitionDiagnostics.debugModeEnabled = false
             }
+
+            vm.load()
+
             if TransitionDiagnostics.debugModeEnabled && BackendState.shared.isAvailable {
                 backendURLOverride = UserDefaults.standard.string(forKey: "audiorr_backend_url") ?? ""
             }

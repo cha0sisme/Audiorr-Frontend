@@ -9,8 +9,19 @@ import AVFoundation
 final class TransitionDiagnostics {
 
     /// When false, diagnostics data is not collected and detail views are hidden.
-    /// The settings section itself is gated by BackendState.isAvailable.
+    /// The settings section itself is gated by BackendState.isAvailable, but
+    /// that's only a UI gate — the static guards in record(...) below run
+    /// regardless. Default is true in DEBUG builds (developer convenience —
+    /// data starts collecting from app launch) and false in Release builds
+    /// (TestFlight / Navidrome-only users have no UI to toggle this and
+    /// shouldn't accumulate logs in Documents/transition_diagnostics.log).
+    /// SettingsView.onAppear loads the user's saved value from UserDefaults
+    /// when backend is available.
+    #if DEBUG
     nonisolated(unsafe) static var debugModeEnabled = true
+    #else
+    nonisolated(unsafe) static var debugModeEnabled = false
+    #endif
 
     static let shared = TransitionDiagnostics()
 
