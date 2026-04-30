@@ -208,6 +208,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             let time = engine.currentTime()
             NowPlayingState.shared.progress = time
         }
+
+        // Re-pull playlist cover hashes when returning from background so any
+        // backend-side regeneration (cron at 03:15 UTC, manual regenerate-all,
+        // RENDERER_VERSION bump) surfaces without forcing a cold launch. The
+        // existing PlaylistsView/HomeView .task only fires on attach + 120s
+        // TTL, so a backgrounded app would otherwise stay stale indefinitely.
+        Task.detached(priority: .utility) {
+            guard await BackendState.shared.isAvailable else { return }
+            await NavidromeService.shared.refreshPlaylistCoverHashes()
+        }
     }
 
     func applicationWillTerminate(_ application: UIApplication) {
