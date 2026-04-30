@@ -477,13 +477,50 @@ enum DJMixingService {
         )
 
         // ── 2. Entry point (where B starts playing) — driven by profile ──
-        let entry = calculateSmartEntryPoint(
+        var entry = calculateSmartEntryPoint(
             nextAnalysis: safeNext,
             currentAnalysis: safeCurrent,
             bufferDuration: bufferBDuration,
             profile: profile,
             currentPlaybackTimeA: currentPlaybackTimeA
         )
+
+        // ── 2b. noRealOutro guard ──
+        // Some tracks have outroStartTime pegged within ~3s of file end (Punk
+        // Monk → FEAR. case: outroStartA=192.9s on a 196s track, with bajos +
+        // baterías hasta el último segundo per the listener). The high
+        // outro-aware entry that follows treats those last seconds as if there
+        // were a real outro, triggering A's fade-out 25s+ before the end —
+        // exactly when A is in full groove. Result: the listener perceives
+        // "A salida demasiado pronto."
+        //
+        // Detect the no-real-outro condition and (a) cap entry to keep the
+        // trigger close to A's actual end, and (b) tell decideAnticipation to
+        // suppress the anticipation tease (further pre-mutes A).
+        let noRealOutro: Bool = {
+            guard let cur = safeCurrent, cur.hasError != true,
+                  cur.hasOutroData, bufferADuration > 30 else { return false }
+            let outroDur = bufferADuration - cur.outroStartTime
+            guard outroDur < 4 else { return false }
+            // Confirm with energy: short outro window + still-energetic =
+            // groove vivo, not a 3-second decay. energyOutro is preferred when
+            // available; energy global is the fallback.
+            let outroEnergy = cur.hasEnergyProfile ? cur.energyOutro : cur.energy
+            return outroEnergy > 0.15
+        }()
+
+        if noRealOutro && entry.entryPoint > 8.0 {
+            let capped = 8.0
+            print("[DJMixingService] ⚠️ A sin outro real (energyOutro alto + outroDur<4s): entry \(String(format: "%.1f", entry.entryPoint))s → \(String(format: "%.1f", capped))s")
+            entry = EntryPointResult(
+                entryPoint: capped,
+                beatSyncInfo: entry.beatSyncInfo + " [noRealOutro cap]",
+                usedFallback: entry.usedFallback,
+                // Drop beat-sync claim — the original sync was tied to the
+                // pre-cap downbeat; a 6s cap puts us nowhere near it.
+                isBeatSynced: false
+            )
+        }
 
         // ── 3. Fade duration — driven by profile ──
         let fade = calculateAdaptiveFadeDuration(
@@ -594,7 +631,15 @@ enum DJMixingService {
         // ── 7. Anticipation — now CUT-aware, can "tease" B before the swap ──
         // Uses finalEntry so an entry that got snapped forward by P5.a still
         // computes the right tease window relative to where B actually starts.
-        let anticipation = decideAnticipation(fadeDuration: effectiveFadeDuration, entryPoint: finalEntry, transitionType: transition.type)
+        // noRealOutro suppresses the tease entirely — A is in full groove
+        // until the very end, so pre-muting A would cut material the listener
+        // is still expecting.
+        let anticipation = decideAnticipation(
+            fadeDuration: effectiveFadeDuration,
+            entryPoint: finalEntry,
+            transitionType: transition.type,
+            noRealOutro: noRealOutro
+        )
 
         // ── 8. Time-stretch ──
         let timeStretch = decideTimeStretch(profile: profile, transitionType: transition.type)
@@ -1651,7 +1696,17 @@ enum DJMixingService {
         let reason: String
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false) -> AnticipationResult {
+        // No-real-outro guard: A is in full groove until the very end, so
+        // anticipation (which pre-mutes A for 2-4s before the fade starts)
+        // would cut material the listener is still expecting. This is one of
+        // two coordinated guards — calculateCrossfadeConfig also caps the
+        // entry point so the trigger fires close to A's actual end.
+        if noRealOutro {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: A sin outro real (groove hasta el final)")
+        }
+
         let hasEnoughIntro = entryPoint >= 5
 
         // DROP_MIX: no anticipation — B enters clean and punchy, no teasing.
