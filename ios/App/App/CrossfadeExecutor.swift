@@ -1215,15 +1215,15 @@ class CrossfadeExecutor {
             return maxVolumeA * cosf(angle) * cosf(angle)
 
         case .cleanHandoff:
-            // Sequential: A descends with cos² over the first 55% of the window,
-            // then stays muted through the gap (55–65%) and B's ramp-in (65–100%).
-            // No overlap with B at any point — the whole purpose of this type is to
-            // avoid two unmixable tracks sounding simultaneously.
-            // cos² (not exp) so A stays audible across most of the window. Old exp
-            // 0.001^p went sub-audible by p≈0.4 of aFadeEnd, leaving ~1.3s of dead
-            // air in a 3s fade. cos² hits true silence exactly at aFadeEnd, giving
-            // a clean "respiro" of ~10% of the window (300ms in 3s, 350ms in 3.5s).
-            let aFadeEnd = 0.55
+            // Quasi-sequential: A descends with cos² over the first 65% of the
+            // window. B's ramp-in starts at 50% (see gainForPlayerB), which
+            // creates a 15% overlap zone (50–65%) where both are present but
+            // each at < 10% of full volume — softer than a real crossfade but
+            // without the audible "valle muerto" the previous 10% gap (55–65%
+            // with both at zero) produced. The DJ-rated session showed that
+            // gap reading as "alguien apagó la radio" rather than as a
+            // respiro, especially on fades ≥ 3.5s.
+            let aFadeEnd = 0.65
             if progress < aFadeEnd {
                 let p = Float(progress / aFadeEnd)
                 let angle = p * .pi / 2.0
@@ -1397,13 +1397,14 @@ class CrossfadeExecutor {
             return maxVolumeB * (baseLevel + (1.0 - baseLevel) * sinSq)
 
         case .cleanHandoff:
-            // Sequential complement to A: silent until the gap ends (65% of window),
-            // then sin² ramp to full over the last 35%. The 10% gap (55–65%) is the
-            // "respiro" — short enough to not feel like dead air, long enough that the
-            // ear perceives B as a fresh start rather than a continuation of A.
-            // anticipation is forced off in the decision layer for cleanHandoff, so
-            // baseLevel is always 0 here — no need to apply it.
-            let bRampStart = 0.65
+            // Quasi-sequential complement to A: B starts ramping at 50% so it
+            // overlaps the tail of A's cos² descent (which now ends at 65%, see
+            // gainForPlayerA). Both are at < 10% of full volume during the
+            // overlap, so the result is still perceived as "A then B" rather
+            // than "A and B together". sin² gives equal-power feel.
+            // anticipation is forced off in the decision layer for cleanHandoff,
+            // so baseLevel is always 0 here — no need to apply it.
+            let bRampStart = 0.50
             if progress < bRampStart {
                 return 0
             }
