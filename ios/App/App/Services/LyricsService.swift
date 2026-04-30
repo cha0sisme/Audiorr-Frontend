@@ -48,7 +48,16 @@ final class LyricsService {
         pending[songId] = task
         let result = await task.value
         pending[songId] = nil
-        cache[songId] = result
+        // Don't cache empty results — they typically come from a race where
+        // state.title arrived after state.songId (so LRCLib + Navidrome had
+        // nothing to query). The retry path in NowPlayingViewerView resets
+        // its dedup guard on title change and calls fetch() again; without
+        // this guard the second call would just re-serve the cached empty.
+        // Songs that genuinely have no lyrics anywhere will re-fetch on
+        // subsequent viewer opens (cheap: LRCLib + Navidrome both 404 fast).
+        if !result.lines.isEmpty {
+            cache[songId] = result
+        }
         return result
     }
 
