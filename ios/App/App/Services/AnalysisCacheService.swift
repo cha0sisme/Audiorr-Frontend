@@ -282,7 +282,12 @@ actor AnalysisCacheService {
         analysis.key = result.key
         analysis.outroStartTime = result.outroStartTime ?? max(duration - 30, 0)
         analysis.introEndTime = result.introEndTime ?? min(30, duration)
-        analysis.vocalStartTime = result.vocalStartTime ?? 0
+        // Top-level vocalStartTime is not yet persisted by all backend versions;
+        // fall back to diagnostics.analysis_log.intro_decision.candidates.vocal,
+        // which is always populated. Without this chain, vocalStartTime collapses
+        // to 0 in 100% of analyses, killing every routing branch that gates on
+        // `vocalStartTime > 0` (entry-point picker, vocalOverlapRisk, intro detection).
+        analysis.vocalStartTime = result.vocalStartTime ?? result.vocalStartFromDiagnostics ?? 0
 
         if let beats = result.beats, !beats.isEmpty {
             analysis.downbeatTimes = beats
