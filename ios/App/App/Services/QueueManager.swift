@@ -1263,6 +1263,13 @@ final class QueueManager: AudioEngineDelegate {
         // Ensure we're the delegate
         engine.delegate = self
 
+        // Bullet-proof DSP/time-pitch reset before any scheduling. play() and
+        // playStreaming() also call resetAudioChainsToNeutral internally, but
+        // having it here too means SmartMix entry, restoreLastPlayback, and
+        // any other path that lands in playCurrentSong starts from a known
+        // clean state. Idempotent — resetting twice costs <1ms.
+        engine.prepareForFreshSong(label: "playCurrentSong:\(song.title)")
+
         let duration = song.duration
 
         // Consume pending resume position (cold-start restore).

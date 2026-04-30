@@ -225,4 +225,12 @@ final class BiquadDSPNode {
     func currentCoefficients() -> [BiquadCoefficients] {
         kernel.currentCoefficients()
     }
+
+    /// Most recent delay-line magnitude observed by the render thread.
+    /// 0 means filter state is clean. > 0 means residual energy in delay lines.
+    /// Used by the post-reset audit to detect stuck filter state that the
+    /// coefficient-only check misses.
+    func currentStateMagnitude() -> Float {
+        kernel.currentStateMagnitude()
+    }
 }

@@ -428,7 +428,7 @@ final class TransitionDiagnostics {
     }
 
     struct PostResetAudit {
-        let source: String          // "completeCrossfade", "cancel", "cancel+150ms"
+        let source: String          // "completeCrossfade", "cancel", "cancel+150ms", "completeCrossfade+200ms"
         let bandsA: [EQBandSnapshot]
         let bandsB: [EQBandSnapshot]
         var dspBandsA: [DSPBandSnapshot] = []
@@ -437,8 +437,15 @@ final class TransitionDiagnostics {
         let panB: Float
         let rateA: Float            // Swift property
         let rateB: Float            // Swift property
-        var dspRateA: Float = 1.0   // AudioUnitGetParameter
-        var dspRateB: Float = 1.0   // AudioUnitGetParameter
+        var dspRateA: Float = 1.0   // AudioUnitGetParameter (rate)
+        var dspRateB: Float = 1.0   // AudioUnitGetParameter (rate)
+        // Honest-audit additions: catch the residue the coefficient check misses.
+        var dspPitchA: Float = 0    // AudioUnitGetParameter (pitch, cents)
+        var dspPitchB: Float = 0    // AudioUnitGetParameter (pitch, cents)
+        var stateMagA: Float = 0    // BiquadDSPKernel delay-line magnitude
+        var stateMagB: Float = 0
+        var bypassA: Bool = false   // AVAudioUnit shouldBypassEffect
+        var bypassB: Bool = false
     }
 
     /// Whether the last audit detected stuck filters (non-neutral values).
@@ -488,6 +495,41 @@ final class TransitionDiagnostics {
         if abs(audit.rateB - audit.dspRateB) > rateThreshold {
             dspDivergences.append("TimePitch-B rate: swift=\(String(format: "%.3f", audit.rateB)) DSP=\(String(format: "%.3f", audit.dspRateB))")
         }
+        // Hard checks against neutral. The audit lies if it only compares Swift↔DSP
+        // and both happen to read the same wrong value. After reset, neutral is rate=1.0.
+        if abs(audit.dspRateA - 1.0) > rateThreshold {
+            dspDivergences.append("TimePitch-A rate NOT NEUTRAL: AU=\(String(format: "%.3f", audit.dspRateA))")
+        }
+        if abs(audit.dspRateB - 1.0) > rateThreshold {
+            dspDivergences.append("TimePitch-B rate NOT NEUTRAL: AU=\(String(format: "%.3f", audit.dspRateB))")
+        }
+        // Pitch should be 0 cents at neutral. resetTimePitch* sets pitch=0; if AU
+        // disagrees, something else wrote pitch (or AudioUnitReset is needed).
+        let pitchThreshold: Float = 1.0  // 1 cent ~ inaudible
+        if abs(audit.dspPitchA) > pitchThreshold {
+            dspDivergences.append("TimePitch-A pitch NOT NEUTRAL: AU=\(String(format: "%.1f", audit.dspPitchA))cents")
+        }
+        if abs(audit.dspPitchB) > pitchThreshold {
+            dspDivergences.append("TimePitch-B pitch NOT NEUTRAL: AU=\(String(format: "%.1f", audit.dspPitchB))cents")
+        }
+        // Biquad delay-line residue. After reset, render thread should have zeroed
+        // state. If still > epsilon when we audit (especially in delayed audits),
+        // the render thread didn't process — player stopped, or race window.
+        let stateThreshold: Float = 1e-3
+        if audit.stateMagA > stateThreshold {
+            dspDivergences.append("Biquad-A delay-line residue: |state|=\(String(format: "%.4f", audit.stateMagA))")
+        }
+        if audit.stateMagB > stateThreshold {
+            dspDivergences.append("Biquad-B delay-line residue: |state|=\(String(format: "%.4f", audit.stateMagB))")
+        }
+        // Bypass should be false for normal playback. If it gets stuck true, audio
+        // skips the time-pitch entirely — symptom looks like "no fade applied".
+        if audit.bypassA {
+            dspDivergences.append("TimePitch-A bypass STUCK ON")
+        }
+        if audit.bypassB {
+            dspDivergences.append("TimePitch-B bypass STUCK ON")
+        }
 
         let hasDivergence = !dspDivergences.isEmpty
         let isClean = stuckBands.isEmpty && !hasDivergence && abs(audit.panA) < 0.01 && abs(audit.panB) < 0.01
@@ -527,6 +569,10 @@ final class TransitionDiagnostics {
 
         line += String(format: "\n    pan: A=%.3f B=%.3f  rate(Swift): A=%.3f B=%.3f  rate(DSP): A=%.3f B=%.3f",
                        audit.panA, audit.panB, audit.rateA, audit.rateB, audit.dspRateA, audit.dspRateB)
+        line += String(format: "\n    pitch(DSP): A=%.1fcents B=%.1fcents  bypass: A=%@ B=%@  |state|: A=%.4f B=%.4f",
+                       audit.dspPitchA, audit.dspPitchB,
+                       audit.bypassA ? "TRUE" : "false", audit.bypassB ? "TRUE" : "false",
+                       audit.stateMagA, audit.stateMagB)
 
         if hasDivergence {
             line += "\n    🔴 DSP DIVERGENCE DETECTED (Swift says neutral but AudioUnit disagrees):"

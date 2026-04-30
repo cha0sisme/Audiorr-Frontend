@@ -46,6 +46,13 @@ final class BiquadDSPKernel {
     /// Lock for coefficient access. The render thread uses trylock (non-blocking).
     private var lock = os_unfair_lock()
 
+    /// Maximum |z1|,|z2| observed across all stages × channels at end of last
+    /// process() call. Used by the post-reset audit to verify the render thread
+    /// actually zeroed the delay lines (not just that the flag was set).
+    /// Written by render thread, read by audit thread. Float reads/writes on
+    /// 32-bit aligned memory are atomic on ARM64 — no lock needed for diagnostics.
+    private var lastStateMagnitude: Float = 0
+
     // MARK: - Filter state (render thread only)
 
     /// Delay lines for each filter stage × each channel.
@@ -134,6 +141,18 @@ final class BiquadDSPKernel {
                 applyBiquad(data, frames: frames, coeffs: c, state: &state[stage][ch])
             }
         }
+
+        // Diagnostic: capture max delay-line magnitude across active stages.
+        // 0 if all stages are passthrough (state untouched). Cheap (<= 8 ops).
+        var maxMag: Float = 0
+        for stage in 0..<Self.filterCount {
+            if coefficients[stage].isPassthrough { continue }
+            for ch in 0..<channels {
+                let m = max(abs(state[stage][ch].z1), abs(state[stage][ch].z2))
+                if m > maxMag { maxMag = m }
+            }
+        }
+        lastStateMagnitude = maxMag
     }
 
     // MARK: - Reset
@@ -166,6 +185,16 @@ final class BiquadDSPKernel {
         let copy = coefficients
         os_unfair_lock_unlock(&lock)
         return copy
+    }
+
+    /// Most recent delay-line magnitude observed by the render thread.
+    /// 0 == clean. Approximate (no lock); on ARM64 a 32-bit float read is atomic
+    /// in practice so we either see the most recent value or one render frame old.
+    /// CAVEAT: if the player feeding this kernel is stopped, the render thread
+    /// is not running, and this returns whatever value was last written before
+    /// the stop. Combine with a small wait after reset() before checking.
+    func currentStateMagnitude() -> Float {
+        return lastStateMagnitude
     }
 
     // MARK: - Biquad processing (Direct Form II Transposed)

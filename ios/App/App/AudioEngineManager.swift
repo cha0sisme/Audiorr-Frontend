@@ -258,6 +258,65 @@ class AudioEngineManager {
         }
     }
 
+    // MARK: - Chain reset (defense in depth)
+
+    /// Bring both player chains to a verifiably-neutral rendering state:
+    /// • DSP biquad → passthrough + delay-line zero queued
+    /// • TimePitch → rate=1.0, pitch=0, overlap=8.0 + AudioUnitReset (flushes internal buffers)
+    /// • Mixer → pan=0, both volumes set to A=replayGain B=0
+    ///
+    /// PRECONDITION: both `playerA` and `playerB` must be stopped. Calling
+    /// `AudioUnitReset` on a TimePitch whose player is rendering permanently
+    /// corrupts `playerTime(forNodeTime:)`, so callers must `stop()` first.
+    ///
+    /// This is the bullet-proof reset path used at the start of every fresh
+    /// playback (play, playStreaming, handoffStreamToEngine) AND on demand from
+    /// QueueManager.playCurrentSong via `prepareForFreshSong()`. The two-layer
+    /// defense (engine-internal + queue-level) is intentional: even if one path
+    /// is taken without the other, chains end up clean.
+    private func resetAudioChainsToNeutral(label: String) {
+        let stateA = dspNodeA.currentStateMagnitude()
+        let stateB = dspNodeB.currentStateMagnitude()
+        let rateA = timePitchA.rate
+        let rateB = timePitchB.rate
+        if stateA > 1e-3 || stateB > 1e-3 || abs(rateA - 1.0) > 0.001 || abs(rateB - 1.0) > 0.001 {
+            print("[AudioEngineManager] resetAudioChainsToNeutral [\(label)] PRE: |stateA|=\(String(format: "%.4f", stateA)) |stateB|=\(String(format: "%.4f", stateB)) rateA=\(String(format: "%.3f", rateA)) rateB=\(String(format: "%.3f", rateB))")
+        }
+
+        // Static reset both time-pitch units. Players are stopped here, so
+        // AudioUnitReset cannot break playerTime(forNodeTime:) — it gets remade
+        // when the next scheduleSegment runs.
+        CrossfadeExecutor.resetTimePitchStatic(timePitchA)
+        CrossfadeExecutor.resetTimePitchStatic(timePitchB)
+
+        // Defensive: ensure bypass is OFF. Stuck bypass would silently disable
+        // the time-pitch and any future crossfade rate ramp.
+        timePitchA.auAudioUnit.shouldBypassEffect = false
+        timePitchB.auAudioUnit.shouldBypassEffect = false
+
+        // Biquad DSP: coefficients to passthrough, delay-line zeroing queued.
+        // The render thread will pick up needsStateReset on the next process()
+        // call (after the new schedule starts rendering). Until then, coefficients
+        // are passthrough so any residual delay-line state is harmless.
+        dspNodeA.reset()
+        dspNodeB.reset()
+
+        // Mixer state to expected initial values for a new playback.
+        mixerA.pan = 0
+        mixerB.pan = 0
+        mixerA.outputVolume = replayGainMultiplierA
+        mixerB.outputVolume = 0
+        engine.mainMixerNode.outputVolume = volume
+    }
+
+    /// Public entry point for QueueManager (or any caller) to bring the engine
+    /// to a clean state before scheduling new audio. Safe to call repeatedly.
+    /// Internally idempotent — does not stop players, so caller must ensure
+    /// both are stopped (or call play()/playStreaming() which handle that).
+    func prepareForFreshSong(label: String) {
+        resetAudioChainsToNeutral(label: "prepareForFreshSong:\(label)")
+    }
+
     // MARK: - Reproducción
 
     func play(fileURL: URL, startAt: Double, replayGainMultiplier: Float, duration: Double,
@@ -294,8 +353,16 @@ class AudioEngineManager {
         playSequence += 1
         let thisPlaySeq = playSequence
 
-        // Detener reproducción anterior
+        // Detener reproducción anterior. playerB ya fue parado por
+        // cancelCrossfade() arriba si estábamos crossfadeando; si no, está stopped
+        // de antes. Ambos players stopped == AudioUnitReset es seguro abajo.
         playerA.stop()
+        playerB.stop()
+
+        // Bullet-proof reset: clean DSPs + AudioUnitReset on both time-pitch +
+        // mixer/pan/volume to neutral. Catches residue from any prior path
+        // (cancelled crossfade, soft-only reset, restoreLastPlayback, etc).
+        resetAudioChainsToNeutral(label: "play")
 
         do {
             let file = try AVAudioFile(forReading: fileURL)
@@ -320,17 +387,10 @@ class AudioEngineManager {
             postCrossfadeWallTime = 0
             postCrossfadeOffset = 0
 
-            // Aplicar ReplayGain via mixerA
+            // Apply the new ReplayGain. resetAudioChainsToNeutral above set
+            // mixerA.outputVolume from the OLD replayGainMultiplierA; refresh
+            // with the value for this song.
             mixerA.outputVolume = replayGainMultiplier
-
-            // Asegurar EQ + pan en neutral para bandas de transición (no estamos en crossfade)
-            dspNodeA.reset()
-            dspNodeB.reset()
-            mixerA.pan = 0
-            mixerB.pan = 0
-
-            // Forzar volumen maestro al valor actual del usuario
-            engine.mainMixerNode.outputVolume = volume
 
             // Calcular frame de inicio
             let sampleRate = file.processingFormat.sampleRate
@@ -736,6 +796,12 @@ class AudioEngineManager {
         clearAutomixTrigger()
         cancelNativeNextFallback()
 
+        // Bullet-proof reset: clean DSPs + AudioUnitReset on both time-pitch.
+        // Even though stream mode bypasses the engine graph, we'll re-enter
+        // engine mode via handoffStreamToEngine when the file finishes
+        // downloading — chains must be clean at that point.
+        resetAudioChainsToNeutral(label: "playStreaming")
+
         if let t = title, !t.isEmpty { currentSongTitle = t }
         if let a = artist { currentSongArtist = a }
         if let al = album { currentSongAlbum = al }
@@ -839,12 +905,12 @@ class AudioEngineManager {
             return
         }
 
+        // Bullet-proof reset before scheduling: AVPlayer was rendering, neither
+        // AVAudioPlayerNode is active, so AudioUnitReset on both time-pitch is
+        // safe and flushes any internal buffer state from the previous engine
+        // session (typically before the stream took over).
+        resetAudioChainsToNeutral(label: "handoffStreamToEngine")
         mixerA.outputVolume = replayGainMultiplierA
-        dspNodeA.reset()
-        dspNodeB.reset()
-        mixerA.pan = 0
-        mixerB.pan = 0
-        engine.mainMixerNode.outputVolume = volume
 
         playStartOffset = currentPos
         pauseSampleTime = 0
@@ -1040,11 +1106,20 @@ class AudioEngineManager {
         )
 
         executor.onComplete = { [weak self] startOffset in
-            guard let self = self, self.isCrossfading else {
+            guard let self = self else {
+                print("[AudioEngineManager] ⚠️ onComplete: self deallocated, swap+reset skipped")
+                return
+            }
+            guard self.isCrossfading else {
                 // Stale callback — crossfade was cancelled (user skipped) between
                 // when completeCrossfade() dispatched this to main and now. The new
                 // song is already playing; doing the swap would corrupt state.
-                print("[AudioEngineManager] onComplete: discarded (crossfade already cancelled)")
+                // FIX D: explicit log so we can correlate with stuck-filter reports.
+                // If this fires often, the cancel path needs extra cleanup OR the
+                // guard is masking real swap+reset work that should still happen.
+                let cfStart = self.crossfadeStartedAt
+                let elapsed = cfStart > 0 ? CFAbsoluteTimeGetCurrent() - cfStart : -1
+                print("[AudioEngineManager] ⚠️ onComplete DISCARDED (isCrossfading=false) — cancelled before completion fired (cfElapsed=\(String(format: "%.2f", elapsed))s, executorRef=\(self.crossfadeExecutor != nil ? "present" : "nil"))")
                 return
             }
 
@@ -1090,6 +1165,31 @@ class AudioEngineManager {
             self.dspNodeA.reset()
             self.dspNodeB.reset()
 
+            // ═══ STEP 3b: TIME-PITCH BUFFER FLUSH (the missing piece) ═══
+            // After the swap:
+            //   • timePitchB == ex-A (outgoing, just stopped on line ~1118).
+            //     AudioUnitReset is SAFE on a stopped chain — it flushes the
+            //     internal buffers completely. The previous code only did a
+            //     soft reset (rate=1) which left buffer residue.
+            //   • timePitchA == ex-B (the song that's still rendering). The
+            //     soft reset done in completeCrossfade set rate=1.0 but the
+            //     AU's internal time-stretch buffers still hold samples from
+            //     the rateB ramp. AudioUnitReset would break playerTime —
+            //     instead, briefly bypass the effect (~60ms ≈ 6 render
+            //     buffers @ 10ms) so the AU drains its internal buffers
+            //     while passing audio through unaltered.
+            CrossfadeExecutor.resetTimePitchStatic(self.timePitchB)
+
+            let activeTP = self.timePitchA
+            let preBypass = activeTP.auAudioUnit.shouldBypassEffect
+            activeTP.auAudioUnit.shouldBypassEffect = true
+            print("[AudioEngineManager] post-swap: timePitchA bypass=ON (was \(preBypass)), draining internal buffers")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.060) { [weak activeTP] in
+                guard let tp = activeTP else { return }
+                tp.auAudioUnit.shouldBypassEffect = false
+                print("[AudioEngineManager] post-swap: timePitchA bypass=OFF (drain complete, rate=\(String(format: "%.3f", tp.rate)))")
+            }
+
             // Update playback state (playerA is already playing, just reset DSP)
             self.playStartOffset = bPosition
             self.pauseSampleTime = 0
@@ -1104,10 +1204,12 @@ class AudioEngineManager {
             self.mixerB.outputVolume = 0
             self.engine.mainMixerNode.outputVolume = self.volume
 
-            // Backstop: single delayed reset to catch any ghost filterTick
+            // Backstop: single delayed reset to catch any ghost filterTick.
+            // Includes a delayed audit so we can verify chains stay clean
+            // beyond the immediate post-swap window.
             let bsDspA = self.dspNodeA, bsDspB = self.dspNodeB
             let bsMixA = self.mixerA, bsMixB = self.mixerB
-            let bsTPa = self.timePitchA
+            let bsTPa = self.timePitchA, bsTPb = self.timePitchB
             CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.1) {
                 bsDspA.reset()
                 bsDspB.reset()
@@ -1115,6 +1217,13 @@ class AudioEngineManager {
                 bsMixB.pan = 0
                 CrossfadeExecutor.resetTimePitchSoft(bsTPa)
             }
+            // Honest audit at +250ms — chains should be fully clean by then.
+            // If state magnitude or rate diverges from neutral, something is
+            // still leaking after the swap and we want to know.
+            CrossfadeExecutor.scheduleDelayedAudit(source: "post-swap",
+                                                   dspA: bsDspA, dspB: bsDspB,
+                                                   mixerA: bsMixA, mixerB: bsMixB,
+                                                   timePitchA: bsTPa, timePitchB: bsTPb)
 
             // Reset stalled-progress counters
             self.stalledTickCount = 0

@@ -887,6 +887,10 @@ class CrossfadeExecutor {
     // MARK: - Post-reset audit
 
     /// Reads current biquad coefficients from DSP nodes and publishes to diagnostics.
+    /// Verifies BOTH the Swift-side intent (passthrough flag) AND the actual AudioUnit
+    /// state (rate, pitch, bypass) AND the biquad delay-line magnitude. The old audit
+    /// only checked passthrough — a "✅ CLEAN" verdict didn't catch time-pitch buffer
+    /// residue or stuck bypass flags. This version does.
     static func auditDSPState(source: String, dspA: BiquadDSPNode, dspB: BiquadDSPNode,
                               mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
                               timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?) {
@@ -915,14 +919,28 @@ class CrossfadeExecutor {
             }
         }
 
+        // AVAudioUnitTimePitch parameter IDs (kNewTimePitchParam_*):
+        //   0 = Rate (0.03125 .. 32.0)
+        //   1 = Pitch (cents, -2400 .. 2400)
+        //   4 = Overlap (3.0 .. 32.0)
         func dspRate(_ tp: AVAudioUnitTimePitch?) -> Float {
             guard let tp else { return 1.0 }
             var rate: Float = 1.0
             AudioUnitGetParameter(tp.audioUnit, 0, kAudioUnitScope_Global, 0, &rate)
             return rate
         }
+        func dspPitch(_ tp: AVAudioUnitTimePitch?) -> Float {
+            guard let tp else { return 0 }
+            var pitch: Float = 0
+            AudioUnitGetParameter(tp.audioUnit, 1, kAudioUnitScope_Global, 0, &pitch)
+            return pitch
+        }
+        func bypassState(_ tp: AVAudioUnitTimePitch?) -> Bool {
+            guard let tp else { return false }
+            return tp.auAudioUnit.shouldBypassEffect
+        }
 
-        let audit = TransitionDiagnostics.PostResetAudit(
+        var audit = TransitionDiagnostics.PostResetAudit(
             source: source,
             bandsA: coeffSnapshot(dspA),
             bandsB: coeffSnapshot(dspB),
@@ -935,7 +953,31 @@ class CrossfadeExecutor {
             dspRateA: dspRate(timePitchA),
             dspRateB: dspRate(timePitchB)
         )
+        audit.dspPitchA = dspPitch(timePitchA)
+        audit.dspPitchB = dspPitch(timePitchB)
+        audit.stateMagA = dspA.currentStateMagnitude()
+        audit.stateMagB = dspB.currentStateMagnitude()
+        audit.bypassA = bypassState(timePitchA)
+        audit.bypassB = bypassState(timePitchB)
         TransitionDiagnostics.shared.publishPostResetAudit(audit)
+    }
+
+    /// Schedule a delayed audit ~200ms after a reset. Gives the render thread
+    /// time to consume needsStateReset and zero delay lines, so we can detect
+    /// the case where the immediate audit said CLEAN but the chains are
+    /// actually idle and never processed the reset.
+    static func scheduleDelayedAudit(source: String,
+                                     dspA: BiquadDSPNode, dspB: BiquadDSPNode,
+                                     mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
+                                     timePitchA: AVAudioUnitTimePitch?,
+                                     timePitchB: AVAudioUnitTimePitch?) {
+        Self.automationQueue.asyncAfter(deadline: .now() + 0.200) { [weak dspA, weak dspB] in
+            guard let dspA = dspA, let dspB = dspB else { return }
+            auditDSPState(source: source + "+200ms",
+                          dspA: dspA, dspB: dspB,
+                          mixerA: mixerA, mixerB: mixerB,
+                          timePitchA: timePitchA, timePitchB: timePitchB)
+        }
     }
 
     // MARK: - Setup
@@ -1921,10 +1963,18 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
-        // Audit after reset
+        // Audit after reset — immediate (catches coefficient/rate/pitch state)
         Self.auditDSPState(source: "completeCrossfade", dspA: dspA, dspB: dspB,
                            mixerA: mixerA, mixerB: mixerB,
                            timePitchA: timePitchA, timePitchB: timePitchB)
+        // Delayed audit (+200ms) — gives the render thread time to consume the
+        // needsStateReset flag and zero delay lines. If the chains are idle (e.g.
+        // a hard cut took over, or B never rendered), the delayed audit will show
+        // residual |state| even though the immediate one said CLEAN.
+        Self.scheduleDelayedAudit(source: "completeCrossfade",
+                                  dspA: dspA, dspB: dspB,
+                                  mixerA: mixerA, mixerB: mixerB,
+                                  timePitchA: timePitchA, timePitchB: timePitchB)
 
         TransitionDiagnostics.shared.publishCompletion()
 
