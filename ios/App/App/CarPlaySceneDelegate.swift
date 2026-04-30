@@ -10,9 +10,6 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
     var interfaceController: CPInterfaceController?
     private var homeTemplate: CPListTemplate?
     private var playlistsTemplate: CPListTemplate?
-    /// Playlist name lookup (playlistId → name) — populated by loadPlaylists,
-    /// used by loadHomeContent to resolve "SmartMix" titles in Jump Back In.
-    private var playlistNames: [String: String] = [:]
 
     // MARK: - CPTemplateApplicationSceneDelegate
 
@@ -71,10 +68,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
 
         Task {
             if NetworkMonitor.shared.isConnected {
-                // Check backend availability first (cached, fast)
+                // Backend probe first — it's cached (30s positive / 10s negative)
+                // so subsequent CarPlay reconnects skip the round-trip entirely.
                 let backendAvailable = await NavidromeService.shared.checkBackendAvailable()
-                await loadPlaylists(backendAvailable: backendAvailable)
-                await loadHomeContent(backendAvailable: backendAvailable)
+
+                // Both tabs load in parallel. Previously they ran sequentially
+                // (Inicio waited until Playlists fully finished), which made
+                // the Inicio tab show "Cargando..." for several extra seconds
+                // even though its endpoints were independent.
+                async let playlistsTask: () = loadPlaylists(backendAvailable: backendAvailable)
+                async let homeTask: () = loadHomeContent(backendAvailable: backendAvailable)
+                _ = await (playlistsTask, homeTask)
             } else {
                 await loadOfflineContent()
             }
@@ -126,13 +130,6 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             }
 
             let username = creds.username
-
-            // Build playlist name lookup for Jump Back In smartmix resolution
-            for p in playlistArr {
-                if let id = p["id"] as? String, let name = p["name"] as? String {
-                    playlistNames[id] = name
-                }
-            }
 
             var allItems: [CPListItem] = []
             var myItems: [CPListItem] = []
@@ -237,72 +234,87 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
     private func loadHomeContent(backendAvailable: Bool) async {
         guard let creds = NavidromeService.shared.credentials else { return }
 
+        // Fire both endpoints in parallel — they hit different servers (backend
+        // vs Navidrome) and have no data dependency. Previously the latest-albums
+        // fetch waited for the JBI fetch to fully complete before even starting.
+        async let jbiData: Data? = fetchHomeJumpBackInData(backendAvailable: backendAvailable, creds: creds)
+        async let albumsData: Data? = fetchHomeLatestAlbumsData(creds: creds)
+
+        let jbiResponse = await jbiData
+        let albumsResponse = await albumsData
+
         var jumpBackItems: [CPListItem] = []
         var latestItems: [CPListItem] = []
 
-        // 1. Jump Back In (backend) — only if backend is reachable
-        if backendAvailable, let backendUrl = NavidromeService.shared.backendURL() {
-            let jbiUrlStr = "\(backendUrl)/api/stats/recent-contexts?username=\(creds.username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
-            if let jbiUrl = URL(string: jbiUrlStr),
-               let (data, _) = try? await URLSession.shared.data(from: jbiUrl),
-               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+        // 1. Jump Back In (backend) — mirrors the iOS app's filter:
+        //    only album / playlist / artist entries. Smartmix and other types
+        //    are dropped so this section matches HomeView.jumpBackInSection.
+        if backendAvailable,
+           let backendUrl = NavidromeService.shared.backendURL(),
+           let data = jbiResponse,
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
 
-                for entry in arr.prefix(10) {
-                    let type   = entry["type"]   as? String ?? ""
-                    let id     = entry["id"]     as? String ?? ""
-                    var title  = entry["title"]  as? String ?? id
-                    let artist = entry["artist"] as? String ?? ""
-                    let coverArtId = entry["coverArtId"] as? String
+            for entry in arr.prefix(10) {
+                let type   = entry["type"]   as? String ?? ""
+                let id     = entry["id"]     as? String ?? ""
+                let title  = entry["title"]  as? String ?? id
+                let artist = entry["artist"] as? String ?? ""
+                let coverArtId = entry["coverArtId"] as? String
 
-                    guard type == "album" || type == "playlist" || type == "smartmix" else { continue }
+                guard type == "album" || type == "playlist" || type == "artist" else { continue }
 
-                    // Resolve generic "SmartMix" title to actual playlist name
-                    if type == "smartmix", let realName = self.playlistNames[id] {
-                        title = realName
+                let detail: String? = type == "album" ? artist : nil
+                let icon = type == "artist" ? "person.fill" : "music.note"
+                let item = CPListItem(
+                    text: title,
+                    detailText: detail,
+                    image: UIImage(systemName: icon),
+                    accessoryImage: nil,
+                    accessoryType: .disclosureIndicator
+                )
+
+                switch type {
+                case "album":
+                    item.handler = { [weak self] _, completion in
+                        self?.showAlbumSongs(albumId: id, albumName: title)
+                        completion()
                     }
-
-                    let detail = type == "album" ? artist : nil
-                    let item = CPListItem(
-                        text: title,
-                        detailText: detail,
-                        image: UIImage(systemName: "music.note"),
-                        accessoryImage: nil,
-                        accessoryType: .disclosureIndicator
-                    )
-
-                    if type == "album" {
-                        item.handler = { [weak self] _, completion in
-                            self?.showAlbumSongs(albumId: id, albumName: title)
-                            completion()
-                        }
-                        loadCover(artId: coverArtId) { image in
-                            if let image { DispatchQueue.main.async { item.setImage(image) } }
-                        }
-                    } else {
-                        item.handler = { [weak self] _, completion in
-                            self?.showPlaylistSongs(playlistId: id, playlistName: title)
-                            completion()
-                        }
-                        // Cover from backend
-                        let coverUrlStr = "\(backendUrl)/api/playlists/\(id)/cover.png"
-                        if let coverUrl = URL(string: coverUrlStr) {
-                            URLSession.shared.dataTask(with: coverUrl) { data, response, _ in
-                                if (response as? HTTPURLResponse)?.statusCode == 200,
-                                   let data, let image = UIImage(data: data) {
-                                    DispatchQueue.main.async { item.setImage(image) }
-                                }
-                            }.resume()
-                        }
+                    loadCover(artId: coverArtId) { image in
+                        if let image { DispatchQueue.main.async { item.setImage(image) } }
                     }
-                    jumpBackItems.append(item)
+                case "playlist":
+                    item.handler = { [weak self] _, completion in
+                        self?.showPlaylistSongs(playlistId: id, playlistName: title)
+                        completion()
+                    }
+                    let coverUrlStr = "\(backendUrl)/api/playlists/\(id)/cover.png"
+                    if let coverUrl = URL(string: coverUrlStr) {
+                        URLSession.shared.dataTask(with: coverUrl) { data, response, _ in
+                            if (response as? HTTPURLResponse)?.statusCode == 200,
+                               let data, let image = UIImage(data: data) {
+                                DispatchQueue.main.async { item.setImage(image) }
+                            }
+                        }.resume()
+                    }
+                case "artist":
+                    item.handler = { [weak self] _, completion in
+                        self?.showArtistAlbums(artistId: id, artistName: title)
+                        completion()
+                    }
+                    // No avatar fetch — keep JBI snappy. The person.fill SF
+                    // symbol is the placeholder; the iOS app fetches via
+                    // artistAvatarURL but that's an extra Navidrome roundtrip
+                    // we don't need on the CarPlay surface.
+                default:
+                    break
                 }
+
+                jumpBackItems.append(item)
             }
         }
 
         // 2. Últimos álbumes (Navidrome)
-        let albumsUrlStr = "\(creds.serverUrl)/rest/getAlbumList2.view?\(authQuery())&type=newest&size=15"
-        if let albumsUrl = URL(string: albumsUrlStr),
-           let (data, _) = try? await URLSession.shared.data(from: albumsUrl),
+        if let data = albumsResponse,
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let response = json["subsonic-response"] as? [String: Any],
            let albumList = response["albumList2"] as? [String: Any] {
@@ -378,6 +390,22 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             }
             homeTemplate?.updateSections(sections)
         }
+    }
+
+    // Helpers for parallel Home fetches — extracted so loadHomeContent can
+    // fire both via `async let`.
+
+    private func fetchHomeJumpBackInData(backendAvailable: Bool, creds: NavidromeCredentials) async -> Data? {
+        guard backendAvailable, let backendUrl = NavidromeService.shared.backendURL() else { return nil }
+        let urlStr = "\(backendUrl)/api/stats/recent-contexts?username=\(creds.username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
+        guard let url = URL(string: urlStr) else { return nil }
+        return (try? await URLSession.shared.data(from: url))?.0
+    }
+
+    private func fetchHomeLatestAlbumsData(creds: NavidromeCredentials) async -> Data? {
+        let urlStr = "\(creds.serverUrl)/rest/getAlbumList2.view?\(authQuery())&type=newest&size=15"
+        guard let url = URL(string: urlStr) else { return nil }
+        return (try? await URLSession.shared.data(from: url))?.0
     }
 
     // MARK: - Offline Content
