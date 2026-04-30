@@ -952,6 +952,38 @@ enum DJMixingService {
             }
         }
 
+        // ── Chorus promotion: enter at the chorus when it's clearly the payoff ──
+        // Default punch routing prefers vocalStart, which lands in verse 1. For
+        // hip-hop / drill / trap tracks where the chorus is the real impact
+        // (EVIL J0RDAN: chorusStart≈59s vs vocalStart≈2s), entering at verse 1
+        // wastes the structural payoff and the listener's attention is on the
+        // wrong moment.
+        //
+        // Conditions are intentionally tight to avoid mis-firing on pop / rock
+        // where verse 1 IS content the listener wants to hear:
+        //
+        //   - profile.avgDanceability > 0.55  → bailable / hip-hop / dance only
+        //   - bufferDuration > 90s            → short singles don't have a deep chorus
+        //   - chorusStart > 35s               → "deep chorus" floor; pop typically <30s
+        //   - chorus is at least 20s past the first vocal/intro reference
+        //   - chorus stays in the first half of B → don't enter past midpoint
+        //
+        // referenceForGap tolerates either a known vocalStart OR the fallback
+        // entryReference chain (introEndHeuristic / speechSegments / introEnd) —
+        // so the promotion still fires when vocalStart is missing, as long as
+        // some other "early reference" exists to compare against chorusStart.
+        let referenceForGap: Double = vocalStart > 0 ? vocalStart : entryReference
+        let isDanceable = profile.avgDanceability > 0.55
+        let bufferLongEnough = bufferDuration > 90
+        let chorusDeepEnough = chorusStart > 35
+        let chorusFarFromReference = referenceForGap > 0 && chorusStart > referenceForGap + 20
+        let chorusInUsableHalf = chorusStart < bufferDuration * 0.5
+        if isDanceable && bufferLongEnough && chorusDeepEnough
+            && chorusFarFromReference && chorusInUsableHalf {
+            print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusStart))s (chorus far past reference at \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            return chorusStart
+        }
+
         // ── Style affinity modulates how aggressively we target ──
         // High affinity (>0.7): same genre feel — aggressive targeting
         // Medium affinity (0.4-0.7): compatible — moderate targeting
