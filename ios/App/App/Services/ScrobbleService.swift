@@ -96,7 +96,7 @@ final class ScrobbleService {
                 ConnectService.shared.emitScrobble(
                     song: song,
                     playedAt: startTime,
-                    contextUri: PlayerService.shared.currentContextUri,
+                    contextUri: PlayerService.shared.scrobbleContextUri,
                     contextName: PlayerService.shared.currentContextName
                 )
             } else {
@@ -198,7 +198,7 @@ final class ScrobbleService {
             genre: nil,
             bpm: nil,
             energy: nil,
-            contextUri: PlayerService.shared.currentContextUri,
+            contextUri: PlayerService.shared.scrobbleContextUri,
             contextName: PlayerService.shared.currentContextName
         )
 

@@ -30,7 +30,9 @@ struct PlaylistCardView: View {
     }
 
     private var isCurrentContext: Bool {
-        nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(playlist.id)"
+        guard nowPlaying.isVisible else { return false }
+        return nowPlaying.contextUri == "playlist:\(playlist.id)"
+            || nowPlaying.contextUri == "smartmix:\(playlist.id)"
     }
 
     var body: some View {

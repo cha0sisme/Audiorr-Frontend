@@ -69,6 +69,10 @@ final class SmartMixManager {
         if let cached = cache[cacheKey] {
             generatedMix = cached
             status = .ready
+            // Mirror the network path: PlayerService also publishes status, so
+            // the detail VM exits .analyzing. Without this, a cache hit leaves
+            // the SmartMix button stuck on the spinner.
+            PlayerService.shared.updateSmartMixStatus(playlistId: playlistId, status: "ready")
             return
         }
 

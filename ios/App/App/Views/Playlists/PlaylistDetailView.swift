@@ -421,7 +421,9 @@ struct PlaylistDetailView: View {
         let isPlaylistContext = nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(vm.displayPlaylist.id)"
         let isPlaylistPlaying = isPlaylistContext && nowPlaying.isPlaying
         let smartMixReady = vm.smartMixStatus == .ready && BackendState.shared.isAvailable
-        let isSmartMixContext = nowPlaying.isVisible && PlayerService.shared.smartMixPlaylistId == vm.initialPlaylist.id && vm.smartMixStatus != .idle
+        // SmartMix is the live context only when its dedicated URI scheme is
+        // active — not just because it was generated for this playlist.
+        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
         let collapsePlay = smartMixReady || isSmartMixContext
 
         return HStack(spacing: 12) {
@@ -533,7 +535,9 @@ struct PlaylistDetailView: View {
     private func smartMixButton(fillColor: Color, labelColor: Color) -> some View {
         let status = vm.smartMixStatus
         let nowPlaying = NowPlayingState.shared
-        let isSmartMixContext = nowPlaying.isVisible && PlayerService.shared.smartMixPlaylistId == vm.initialPlaylist.id && status != .idle
+        // True only while the SmartMix queue is the live playback context;
+        // status alone (.ready / .analyzing) does NOT imply SmartMix is sounding.
+        let isSmartMixContext = nowPlaying.isVisible && nowPlaying.contextUri == "smartmix:\(vm.initialPlaylist.id)"
         let isSmartMixPlaying = isSmartMixContext && nowPlaying.isPlaying
         let isExpanded = status == .ready || isSmartMixContext
 

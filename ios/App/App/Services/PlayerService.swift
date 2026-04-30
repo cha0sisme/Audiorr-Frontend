@@ -23,10 +23,25 @@ final class PlayerService {
 
     // MARK: - Playback Context (feeds Jump Back In / wrapped stats)
 
-    /// Current playback context — e.g. "playlist:abc123", "album:xyz"
+    /// Current playback context — e.g. "playlist:abc123", "album:xyz",
+    /// "smartmix:abc123". The `smartmix:` scheme is internal-only (used by the
+    /// SmartMix button to detect live-context state); see `scrobbleContextUri`
+    /// for the normalized form sent to the backend.
     private(set) var currentContextUri: String?
     /// Human-readable name of the current context.
     private(set) var currentContextName: String?
+
+    /// Context URI as recorded for scrobbles / Jump Back In. SmartMix sessions
+    /// are folded into the underlying playlist so Volver a escuchar only ever
+    /// surfaces playlists, albums or artists — never an internal `smartmix:`
+    /// entry that the UI couldn't navigate to.
+    var scrobbleContextUri: String? {
+        guard let uri = currentContextUri else { return nil }
+        if uri.hasPrefix("smartmix:") {
+            return "playlist:" + uri.dropFirst("smartmix:".count)
+        }
+        return uri
+    }
 
     // MARK: - Play
 
@@ -138,7 +153,11 @@ final class PlayerService {
             ConnectService.shared.sendRemotePlaylist(mix, startIndex: 0)
             return
         }
-        currentContextUri = "playlist:\(playlistId)"
+        // Distinct URI scheme so the SmartMix button can detect it's *actually*
+        // the live context (vs. just generated). Playlist-card indicators still
+        // light up because they accept both `playlist:` and `smartmix:` for the
+        // same id.
+        currentContextUri = "smartmix:\(playlistId)"
         currentContextName = playlistName
         QueueManager.shared.play(songs: mix, startIndex: 0)
     }
