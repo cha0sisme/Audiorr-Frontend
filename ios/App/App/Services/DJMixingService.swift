@@ -1617,16 +1617,21 @@ enum DJMixingService {
             reasons.append("stutter: cut@\(Int(profile.bpmA))BPM dance=\(String(format: "%.2f", profile.avgDanceability))")
         }
 
-        // ── Energy-A floor: soften slow-modulating effects when A is already silent ──
-        // energyA < 0.10 means A is already in tail/decay (Rich Flex → Earfquake,
-        // Not Afraid → ELEMENT. cases). notchSweep / dynQ / stutterCut applied to
-        // dead audio sounds artificial — like a filter modulating silence. bassKill
-        // is fine (it's an instant cut, not a sweep) so we leave it intact.
-        if profile.energyA < 0.10 && (useDynamicQ || useNotchSweep || useStutterCut) {
+        // ── Energy-A floor: soften slow-modulating effects when A is low-energy ──
+        // Backend energy values are compressed (most music falls 0.05–0.30), so
+        // anything under 0.15 is a low-energy passage — either tail/decay (Rich Flex
+        // → Earfquake at 0.04) or a quiet bridge/breakdown. notchSweep / dynQ /
+        // stutterCut applied to that audio sounds artificial — a filter modulating
+        // near-silence reads as "filter weirdness" rather than as DJ technique.
+        // bassKill is fine (it's an instant cut, not a sweep) so we leave it intact.
+        // The previous 0.10 threshold was too strict — it only covered the bottom
+        // ~10% of cases, missing transitions like Rich Flex→Earfquake where energyA
+        // is low-but-not-floor and the filters still felt off.
+        if profile.energyA < 0.15 && (useDynamicQ || useNotchSweep || useStutterCut) {
             useDynamicQ = false
             useNotchSweep = false
             useStutterCut = false
-            reasons.append("⚠️ energyA<0.10: soft (no dynQ/notch/stutter)")
+            reasons.append("⚠️ energyA<0.15: soft (no dynQ/notch/stutter)")
         }
 
         let reason = reasons.isEmpty
