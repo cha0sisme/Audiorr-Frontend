@@ -173,6 +173,7 @@ struct SearchView: View {
         }
         .onSubmit(of: .search) {
             vm.saveToHistory(searchText)
+            searchFocused = false
         }
         .onDisappear {
             vm.debounceTask?.cancel()
@@ -201,6 +202,8 @@ struct SearchView: View {
                         ForEach(vm.history, id: \.self) { item in
                             Button {
                                 searchText = item
+                                vm.saveToHistory(item)
+                                searchFocused = false
                             } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: "clock")

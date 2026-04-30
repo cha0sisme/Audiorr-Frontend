@@ -133,7 +133,10 @@ struct PlaylistsView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ScrollView {
-                content
+                VStack(alignment: .leading, spacing: 0) {
+                    content
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(.systemBackground))
             .navigationTitle(L.playlists)
