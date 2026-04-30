@@ -48,6 +48,7 @@ final class BackendState {
     func check() {
         guard checkTask == nil else { return }
         isChecking = true
+        let wasAvailable = isAvailable
         checkTask = Task {
             let result = await NavidromeService.shared.checkBackendAvailable()
             // Bail early if cancelled (invalidateAndRecheck started a new task)
@@ -64,6 +65,17 @@ final class BackendState {
                 let retry = await NavidromeService.shared.checkBackendAvailable()
                 guard !Task.isCancelled else { return }
                 self.isAvailable = retry
+            }
+            // On transition unavailable→available, re-pull cover hashes. Without
+            // this, any PlaylistCoverView that rendered during the offline window
+            // pinned a Navidrome-fallback JPG to disk under the playlistId key
+            // *without* registering a content hash (setImage skips cachedHashes
+            // when contentHashes[id] is nil). Those entries survive cold launch
+            // and dominate the cache forever unless something forces a fresh
+            // hash refresh — which `oldHash == nil` in registerContentHashes will
+            // then invalidate, evicting the orphan and re-fetching from backend.
+            if !wasAvailable && self.isAvailable {
+                await NavidromeService.shared.refreshPlaylistCoverHashes()
             }
             self.isChecking = false
             self.checkTask = nil
