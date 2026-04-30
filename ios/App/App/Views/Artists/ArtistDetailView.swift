@@ -384,24 +384,13 @@ struct ArtistDetailView: View {
     @ViewBuilder
     private var popularesSection: some View {
         if vm.isLoadingSongs {
-            // Skeleton while loading
             VStack(alignment: .leading, spacing: 12) {
                 Text(L.popular)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(isLight ? Color.black : .white)
                     .padding(.horizontal, 16)
 
-                ForEach(0..<4, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 6).fill(skeletonColor).frame(width: 48, height: 48)
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 140, height: 14)
-                            RoundedRectangle(cornerRadius: 4).fill(skeletonColor).frame(width: 90, height: 12)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16)
-                }
+                SongListSkeleton(count: 5, palette: vm.palette, showCover: true)
             }
         } else if !vm.topSongs.isEmpty {
             VStack(alignment: .leading, spacing: 12) {

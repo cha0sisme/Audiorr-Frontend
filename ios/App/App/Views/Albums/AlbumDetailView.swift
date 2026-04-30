@@ -6,7 +6,8 @@ import SwiftUI
 final class AlbumDetailViewModel: ObservableObject {
     @Published var songs: [NavidromeSong] = []
     @Published var album: NavidromeAlbum?
-    @Published var isLoading = true
+    @Published var isLoadingSongs = true
+    @Published var isLoadingNotes = true
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
     @Published var recordLabels: [RecordLabel] = []
@@ -32,35 +33,46 @@ final class AlbumDetailViewModel: ObservableObject {
 
     var displayAlbum: NavidromeAlbum { album ?? initialAlbum }
 
+    /// Each section publishes independently — songs, notes and cover land
+    /// when their own request resolves, so the UI fills in progressively
+    /// instead of waiting on the slowest of the three.
     func load() async {
-        isLoading = true
-        defer { isLoading = false }
+        isLoadingSongs = true
+        isLoadingNotes = true
 
-        // Fetch songs + cover image + album notes concurrently
-        async let songsTask = api.getAlbumDetail(albumId: initialAlbum.id)
-        async let imageTask = fetchCover()
-        async let notesTask = api.getAlbumInfo(albumId: initialAlbum.id)
+        async let songsDone: Void = loadSongs()
+        async let notesDone: Void = loadNotes()
+        async let coverDone: Void = loadCoverAndPalette()
 
-        let (songsResult, image, notes) = await (try? songsTask, imageTask, notesTask)
+        _ = await (songsDone, notesDone, coverDone)
+    }
 
-        if let (al, songs, labels) = songsResult {
+    private func loadSongs() async {
+        if let (al, songs, labels) = try? await api.getAlbumDetail(albumId: initialAlbum.id) {
             self.songs = songs
             self.recordLabels = labels
             if let al { self.album = al }
         }
-        self.albumNotes = notes
+        isLoadingSongs = false
+    }
 
-        if let image {
-            self.coverImage = image
-            // Skip extraction if palette was already loaded from cache in init
-            if !paletteReady {
-                let extracted = await Task.detached(priority: .userInitiated) {
-                    ColorExtractor.extract(from: image)
-                }.value
-                self.palette = extracted
-                if let key = initialAlbum.coverArt {
-                    PaletteCache.shared.set(extracted, for: key)
-                }
+    private func loadNotes() async {
+        let notes = await api.getAlbumInfo(albumId: initialAlbum.id)
+        self.albumNotes = notes
+        isLoadingNotes = false
+    }
+
+    private func loadCoverAndPalette() async {
+        guard let image = await fetchCover() else { return }
+        self.coverImage = image
+        // Skip extraction if palette was already loaded from cache in init
+        if !paletteReady {
+            let extracted = await Task.detached(priority: .userInitiated) {
+                ColorExtractor.extract(from: image)
+            }.value
+            self.palette = extracted
+            if let key = initialAlbum.coverArt {
+                PaletteCache.shared.set(extracted, for: key)
             }
         }
     }
@@ -381,7 +393,7 @@ struct AlbumDetailView: View {
                     .background(fillColor, in: Circle())
             }
         }
-        .disabled(vm.isLoading)
+        .disabled(vm.isLoadingSongs)
     }
 
     // MARK: - Toolbar Menu
@@ -426,8 +438,33 @@ struct AlbumDetailView: View {
     private var albumNotesSection: some View {
         let cardBG: Color = isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.08)
         let cardBorder: Color = isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.10)
+        let skeletonBlock: Color = isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10)
 
-        if let notes = vm.albumNotes, !notes.isEmpty {
+        if vm.isLoadingNotes {
+            VStack(alignment: .leading, spacing: 14) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(skeletonBlock)
+                    .frame(width: 220, height: 22)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(0..<4, id: \.self) { i in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(skeletonBlock)
+                            .frame(height: 14)
+                            .frame(maxWidth: i == 3 ? 220 : .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(22)
+            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(cardBorder, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+        } else if let notes = vm.albumNotes, !notes.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 Text(L.aboutAlbum(vm.displayAlbum.name))
                     .font(.system(size: 22, weight: .bold))
@@ -473,11 +510,13 @@ struct AlbumDetailView: View {
 
     private var songListSection: some View {
         VStack(spacing: 0) {
-            if vm.isLoading {
-                ProgressView()
-                    .tint(isLight ? .secondary : .white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 32)
+            if vm.isLoadingSongs {
+                SongListSkeleton(
+                    count: max(vm.displayAlbum.songCount ?? 0, 8),
+                    palette: vm.palette,
+                    showCover: false,
+                    showArtist: false
+                )
             } else {
                 SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
 

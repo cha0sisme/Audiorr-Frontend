@@ -626,10 +626,11 @@ struct PlaylistDetailView: View {
     private var songListSection: some View {
         Group {
             if vm.isLoading {
-                ProgressView()
-                    .tint(isLight ? .secondary : .white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 32)
+                SongListSkeleton(
+                    count: max(vm.displayPlaylist.songCount, 6),
+                    palette: vm.palette,
+                    showCover: true
+                )
             } else {
                 SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, showCover: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             }
@@ -718,6 +719,13 @@ final class PlaylistCoverCache: @unchecked Sendable {
     private let ioQueue = DispatchQueue(label: "playlist.cover.cache", qos: .utility)
     private let coordinator = PlaylistCoverDownloadCoordinator()
 
+    /// Serializes mutation/read of `contentHashes` and `cachedHashes`. The cache
+    /// is hit concurrently from MainActor (prefetch, body re-renders) and from
+    /// background async tasks (refreshPlaylistCoverHashes, loadCover→setImage).
+    /// Without this, reading a Swift Dictionary while another thread reallocates
+    /// its buffer dereferences a freed pointer (EXC_BAD_ACCESS at low address).
+    private let hashLock = NSLock()
+
     /// Known content hashes from backend (playlistId → coverContentHash).
     /// Used to append ?v= for immutable caching and to detect stale covers.
     private var contentHashes: [String: String] = [:]
@@ -750,7 +758,9 @@ final class PlaylistCoverCache: @unchecked Sendable {
 
     private func persistHashes() {
         let path = diskDir.appendingPathComponent("_hashes.json")
+        hashLock.lock()
         let hashes = cachedHashes
+        hashLock.unlock()
         ioQueue.async {
             if let data = try? JSONEncoder().encode(hashes) {
                 try? data.write(to: path, options: .atomic)
@@ -774,10 +784,13 @@ final class PlaylistCoverCache: @unchecked Sendable {
     func setImage(_ image: UIImage, for playlistId: String) {
         memory.setObject(image, forKey: playlistId as NSString)
         // Track which hash this cover was saved under
-        if let hash = contentHashes[playlistId] {
+        hashLock.lock()
+        let hash = contentHashes[playlistId]
+        if let hash {
             cachedHashes[playlistId] = hash
-            persistHashes()
         }
+        hashLock.unlock()
+        if hash != nil { persistHashes() }
         let path = diskPath(for: playlistId)
         ioQueue.async {
             if let data = image.jpegData(compressionQuality: 0.82) {
@@ -790,7 +803,9 @@ final class PlaylistCoverCache: @unchecked Sendable {
 
     func invalidate(playlistId: String) {
         memory.removeObject(forKey: playlistId as NSString)
+        hashLock.lock()
         cachedHashes.removeValue(forKey: playlistId)
+        hashLock.unlock()
         persistHashes()
         let path = diskPath(for: playlistId)
         // SYNC delete is load-bearing: image(for:) reads disk synchronously, so any
@@ -807,30 +822,37 @@ final class PlaylistCoverCache: @unchecked Sendable {
 
     /// Returns the known content hash for a playlist (nil for user playlists or unknown).
     func contentHash(for playlistId: String) -> String? {
-        contentHashes[playlistId]
+        hashLock.lock(); defer { hashLock.unlock() }
+        return contentHashes[playlistId]
     }
 
     /// Register content hashes from backend API responses.
     /// Automatically invalidates covers whose hash changed or that were cached
     /// without hash tracking (legacy entries from before content-addressed caching).
     func registerContentHashes(_ hashes: [String: String]) {
+        // Decide invalidations under the lock, but call invalidate() outside it —
+        // invalidate() takes the same lock, so doing it inline would deadlock.
+        var toInvalidate: [String] = []
+        hashLock.lock()
         for (id, newHash) in hashes {
             let oldHash = contentHashes[id]
             contentHashes[id] = newHash
 
             if let cachedHash = cachedHashes[id] {
                 // Cover was cached with a known hash — only invalidate if hash changed
-                if cachedHash != newHash {
-                    invalidate(playlistId: id)
-                }
+                if cachedHash != newHash { toInvalidate.append(id) }
             } else if oldHash != nil && oldHash != newHash {
                 // Hash changed within this session
-                invalidate(playlistId: id)
+                toInvalidate.append(id)
             } else if oldHash == nil {
                 // No hash record on disk — cover may be stale (pre-hash-tracking legacy).
                 // Invalidate to force re-fetch with proper ?v= content-addressed URL.
-                invalidate(playlistId: id)
+                toInvalidate.append(id)
             }
+        }
+        hashLock.unlock()
+        for id in toInvalidate {
+            invalidate(playlistId: id)
         }
     }
 
@@ -891,7 +913,9 @@ final class PlaylistCoverCache: @unchecked Sendable {
         let backendAvailable = BackendState.shared.isAvailable
         for pl in playlists {
             guard image(for: pl.id) == nil else { continue }
+            hashLock.lock()
             let hash = contentHashes[pl.id]
+            hashLock.unlock()
             Task.detached(priority: .utility) { [weak self] in
                 guard let self else { return }
                 var urls: [URL] = []

@@ -11,7 +11,12 @@ final class ArtistsViewModel: ObservableObject {
     @Published var recentArtists: [NavidromeArtist] = []
     @Published var genreArtists: [NavidromeArtist] = []
     @Published var currentGenre: String = ""
+    /// Page-wide flag — true only until `allArtists` lands. After that,
+    /// each section gates its own skeleton via the per-section flags below.
     @Published var isLoading = true
+    @Published var isLoadingFeatured = true
+    @Published var isLoadingRecent = true
+    @Published var isLoadingGenre = true
 
     private let api = NavidromeService.shared
     private var lastLoadedAt: Date?
@@ -59,18 +64,29 @@ final class ArtistsViewModel: ObservableObject {
     private var hasData: Bool { !allArtists.isEmpty }
 
     func load() async {
-        // Only show skeleton on first load — subsequent refreshes keep existing data visible
-        if !hasData { isLoading = true }
-        defer {
-            isLoading = false
-            lastLoadedAt = Date()
+        // Only flag loading on first load — subsequent refreshes keep
+        // existing content visible (no skeleton flash).
+        let firstLoad = !hasData
+        if firstLoad {
+            isLoading = true
+            isLoadingFeatured = true
+            isLoadingRecent = true
+            isLoadingGenre = true
         }
+        defer { lastLoadedAt = Date() }
 
         api.reloadCredentials()
-        guard api.isConfigured else { return }
+        guard api.isConfigured else {
+            isLoading = false
+            return
+        }
 
         allArtists = await api.getArtists()
         rebuildGroupedByLetter()
+        // Page-wide skeleton goes away as soon as we have artists — sections
+        // render with their own per-section skeletons while the three
+        // dependent fetches resolve in parallel below.
+        isLoading = false
 
         async let featuredTask: Void = loadFeatured()
         async let recentTask: Void = loadRecent()
@@ -105,6 +121,7 @@ final class ArtistsViewModel: ObservableObject {
     // MARK: Featured (most frequent albums → top artists)
 
     private func loadFeatured() async {
+        defer { isLoadingFeatured = false }
         let frequentAlbums = await api.getAlbumList(type: "frequent", size: 50)
         var countByName: [String: Int] = [:]
         for album in frequentAlbums {
@@ -122,6 +139,7 @@ final class ArtistsViewModel: ObservableObject {
     // MARK: Recent releases → artists
 
     private func loadRecent() async {
+        defer { isLoadingRecent = false }
         let latestAlbums = await api.getAlbumList(type: "newest", size: 30)
         var seen = Set<String>()
         var result: [NavidromeArtist] = []
@@ -143,6 +161,7 @@ final class ArtistsViewModel: ObservableObject {
     /// have a small "newest" cohort still see varied genres. Also keeps a short
     /// history to avoid cycling between the same two genres on rapid refresh.
     private func loadRandomGenre() async {
+        defer { isLoadingGenre = false }
         // Pool from three sources concurrently for max variety.
         async let newest = api.getAlbumList(type: "newest", size: 100)
         async let frequent = api.getAlbumList(type: "frequent", size: 100)
@@ -307,7 +326,9 @@ struct ArtistsView: View {
 
     @ViewBuilder
     private var featuredSection: some View {
-        if !vm.featuredArtists.isEmpty {
+        if vm.isLoadingFeatured && vm.featuredArtists.isEmpty {
+            ArtistSectionSkeleton(title: L.mostListened)
+        } else if !vm.featuredArtists.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(L.mostListened)
                     .padding(.bottom, 14)
@@ -332,7 +353,9 @@ struct ArtistsView: View {
 
     @ViewBuilder
     private var recentSection: some View {
-        if !vm.recentArtists.isEmpty {
+        if vm.isLoadingRecent && vm.recentArtists.isEmpty {
+            ArtistSectionSkeleton(title: L.recent)
+        } else if !vm.recentArtists.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 sectionHeader(L.recent)
                     .padding(.bottom, 14)
@@ -357,7 +380,11 @@ struct ArtistsView: View {
 
     @ViewBuilder
     private var genreSection: some View {
-        if !vm.genreArtists.isEmpty && !vm.currentGenre.isEmpty {
+        if vm.isLoadingGenre && vm.genreArtists.isEmpty {
+            // currentGenre lands before the byGenre fetch, so we may already
+            // know the title. If not, the skeleton uses a title placeholder.
+            ArtistSectionSkeleton(title: vm.currentGenre.isEmpty ? nil : vm.currentGenre)
+        } else if !vm.genreArtists.isEmpty && !vm.currentGenre.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .firstTextBaseline) {
                     sectionHeader(vm.currentGenre)
@@ -485,6 +512,70 @@ struct ArtistsView: View {
     }
 }
 
+// MARK: - Artist section skeleton (per-section loading placeholder)
+
+/// Mirrors a horizontal artist section's final layout — header + circular
+/// avatars + name and stats lines — so when each subload resolves the only
+/// thing that visibly changes is the avatar cross-fade. Pass `title: nil`
+/// for sections whose title isn't known yet (genre section before the
+/// random pick lands).
+private struct ArtistSectionSkeleton: View {
+    let title: String?
+    var size: CGFloat = 140
+    var count: Int = 5
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if let title {
+                    Text(title)
+                        .font(.system(size: 22, weight: .bold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(width: 140, height: 22)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(0..<count, id: \.self) { _ in
+                        VStack(spacing: 10) {
+                            // Same shimmer pattern as ArtistCardView's avatar
+                            // skeleton — keeps the visual language consistent.
+                            Circle()
+                                .fill(Color(.systemGray5))
+                                .overlay(
+                                    Circle()
+                                        .fill(Color(.systemGray4))
+                                        .phaseAnimator([false, true]) { content, phase in
+                                            content.opacity(phase ? 0.6 : 0.3)
+                                        } animation: { _ in .easeInOut(duration: 0.9) }
+                                )
+                                .frame(width: size, height: size)
+                                .overlay(Circle().stroke(Color(.separator).opacity(0.15), lineWidth: 0.5))
+
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color(.tertiarySystemFill))
+                                .frame(width: size * 0.7, height: 14)
+
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color(.tertiarySystemFill))
+                                .frame(width: size * 0.4, height: 11)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+        .padding(.bottom, 32)
+    }
+}
+
 // MARK: - Artist Row Cell (A-Z list — Apple Music style)
 
 private struct ArtistRowCell: View {
@@ -579,6 +670,10 @@ struct AllArtistsView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
+            let showSidebar = vm.letters.count >= 4
+            // Sidebar (18pt) + outer padding (4pt) + breathing room → keep rows clear.
+            let sidebarReserve: CGFloat = showSidebar ? 26 : 0
+
             ZStack(alignment: .trailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -608,11 +703,12 @@ struct AllArtistsView: View {
                             }
                         }
                     }
+                    .padding(.trailing, sidebarReserve)
                     .padding(.bottom, 100)
                 }
 
                 // Lateral alphabet — only when there are enough letters to be useful
-                if vm.letters.count >= 4 {
+                if showSidebar {
                     AlphabetSidebar(letters: vm.letters, activeLetter: $activeLetter) { letter in
                         proxy.scrollTo(letter, anchor: .top)
                     }

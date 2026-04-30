@@ -347,6 +347,86 @@ struct InstantMenuButton: UIViewRepresentable {
     }
 }
 
+// MARK: - Song list skeleton (loading placeholder)
+
+/// Mirrors SongListView's row layout while data is loading. Use the known
+/// song count (e.g. `playlist.songCount`) so the scroll height matches the
+/// final list and rows don't shift sideways when real songs arrive.
+struct SongListSkeleton: View {
+    let count: Int
+    let palette: AlbumPalette
+    var showCover: Bool = false
+    var showArtist: Bool = true
+
+    private var isLight: Bool { palette.isPrimaryLight }
+    private var skeletonColor: Color {
+        isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10)
+    }
+
+    private static let titleWidths: [CGFloat]    = [180, 220, 150, 200, 165, 195, 175]
+    private static let subtitleWidths: [CGFloat] = [110, 140, 95, 125, 100, 130]
+
+    var body: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { idx in
+                row(at: idx)
+                    .frame(maxWidth: .infinity)
+
+                if idx < count - 1 {
+                    Divider()
+                        .background(
+                            isLight ? Color.black.opacity(0.07) : Color.white.opacity(0.07)
+                        )
+                        .padding(.leading, showCover ? 76 : 58)
+                        .padding(.trailing, 16)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func row(at idx: Int) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: showCover ? 12 : 14) {
+                if showCover {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(skeletonColor)
+                        .frame(width: 44, height: 44)
+                } else {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(skeletonColor)
+                        .frame(width: 14, height: 12)
+                        .frame(width: 24, alignment: .trailing)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(skeletonColor)
+                        .frame(width: Self.titleWidths[idx % Self.titleWidths.count], height: 13)
+                    if showArtist {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(skeletonColor)
+                            .frame(width: Self.subtitleWidths[idx % Self.subtitleWidths.count], height: 11)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(skeletonColor)
+                    .frame(width: 28, height: 11)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 4)
+            .padding(.vertical, showCover ? 6 : 10)
+
+            // Reserves the ··· menu width so the skeleton row's content area
+            // matches SongListView's exactly — no horizontal jump on transition.
+            Color.clear.frame(width: 48, height: 44)
+        }
+    }
+}
+
 // MARK: - Explicit badge (Apple Music style)
 
 struct ExplicitBadge: View {
