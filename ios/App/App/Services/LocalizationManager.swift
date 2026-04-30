@@ -269,9 +269,11 @@ enum L {
     static var plays: String { isEn ? "Plays" : "Reproducciones" }
     static var topGenre: String { isEn ? "Top genre" : "Género favorito" }
     static var lastScrobble: String { isEn ? "Last scrobble" : "Último scrobble" }
-    static var topSongs: String { isEn ? "Top songs" : "Top canciones" }
-    static var topArtists: String { isEn ? "Top artists" : "Top artistas" }
-    static func playsCount(_ n: Int) -> String { isEn ? "\(n) plays" : "\(n) plays" }
+    static var topSongs: String { isEn ? "Top songs" : "Canciones favoritas" }
+    static var topArtists: String { isEn ? "Top artists" : "Artistas favoritos" }
+    static func playsCount(_ n: Int) -> String {
+        isEn ? "\(n) play\(n == 1 ? "" : "s")" : "\(n) \(n == 1 ? "reproducción" : "reproducciones")"
+    }
 
     // MARK: - Storage Management
 
