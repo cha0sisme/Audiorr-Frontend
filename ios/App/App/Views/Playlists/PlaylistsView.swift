@@ -54,6 +54,15 @@ final class PlaylistsViewModel: ObservableObject {
 
         // Load backend-dependent sections + cover hashes in parallel
         if BackendState.shared.isAvailable {
+            // Render defaults immediately — they're client-side filters of
+            // `playlists` (dailyMixes / smartPlaylists / userPlaylists), so
+            // they have data the moment getPlaylists() resolves. Skipping
+            // this would leave the user looking at downloadsCard alone while
+            // getHomepageLayout() runs. Final assign below preserves original
+            // semantics: backend layout overrides if non-empty, defaults
+            // otherwise — same end-state as before.
+            if sections.isEmpty { sections = defaultSections }
+
             async let layoutTask = api.getHomepageLayout()
             async let hashesTask: Void = api.refreshPlaylistCoverHashes()
             let fetched = await layoutTask

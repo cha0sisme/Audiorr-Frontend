@@ -98,32 +98,44 @@ final class HomeViewModel: ObservableObject {
         guard BackendState.shared.isAvailable else { return }
         topWeekly = await api.getTopWeekly()
 
-        // Resolve full NavidromeSong metadata (duration, replayGain, etc.) in parallel
+        // The section is renderable from `topWeekly` alone — the row view only
+        // reads from TopWeeklySong, and the play handler already falls back to
+        // a lightweight conversion when topWeeklySongs is empty (line ~527).
+        // The N+1 getSong below only sharpens explicit badges and provides
+        // replayGain for next playback, so it runs in a background Task
+        // instead of blocking loadBackendSections's await graph and hogging
+        // the network behind the other parallel section loads.
         let entries = topWeekly
-        let resolved = await withTaskGroup(of: (Int, NavidromeSong?).self) { group in
-            for (idx, entry) in entries.enumerated() {
-                group.addTask {
-                    let song = await self.api.getSong(id: entry.songId)
-                    return (idx, song)
+        Task { @MainActor [entries] in
+            let resolved = await withTaskGroup(of: (Int, NavidromeSong?).self) { group in
+                for (idx, entry) in entries.enumerated() {
+                    group.addTask {
+                        let song = await self.api.getSong(id: entry.songId)
+                        return (idx, song)
+                    }
                 }
+                var results = Array<NavidromeSong?>(repeating: nil, count: entries.count)
+                for await (idx, song) in group {
+                    results[idx] = song
+                }
+                return results
             }
-            var results = Array<NavidromeSong?>(repeating: nil, count: entries.count)
-            for await (idx, song) in group {
-                results[idx] = song
-            }
-            return results
-        }
 
-        // Build final array — use resolved song if available, fallback to basic conversion
-        topWeeklySongs = zip(entries, resolved).map { entry, song in
-            song ?? NavidromeSong(
-                id: entry.songId, title: entry.title, artist: entry.artist,
-                artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
-                coverArt: entry.coverArt, duration: 0, track: nil,
-                year: nil, genre: nil, explicitStatus: nil,
-                replayGainTrackGain: nil, replayGainTrackPeak: nil,
-                replayGainAlbumGain: nil, replayGainAlbumPeak: nil
-            )
+            // Drop stale enrichment if topWeekly was refetched (e.g. backend
+            // reconnect via .onChange(BackendState.isAvailable)) while we
+            // were resolving — prevents an in-flight Task from clobbering a
+            // newer topWeekly with old entries.
+            guard self.topWeekly.map(\.songId) == entries.map(\.songId) else { return }
+            self.topWeeklySongs = zip(entries, resolved).map { entry, song in
+                song ?? NavidromeSong(
+                    id: entry.songId, title: entry.title, artist: entry.artist,
+                    artistId: entry.artistId, album: entry.album, albumId: entry.albumId,
+                    coverArt: entry.coverArt, duration: 0, track: nil,
+                    year: nil, genre: nil, explicitStatus: nil,
+                    replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                    replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+                )
+            }
         }
     }
 
