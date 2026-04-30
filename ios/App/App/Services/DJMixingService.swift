@@ -668,10 +668,26 @@ enum DJMixingService {
         // Skip B filters for very short fades, DROP_MIX (B enters clean and full),
         // CLEAN_HANDOFF or VINYL_STOP (sequential — B enters from silence, no
         // spectral shaping needed; the gesture on A is the effect).
-        let skipBFilters = effectiveFadeDuration <= 3.0
+        var skipBFilters = effectiveFadeDuration <= 3.0
             || transition.type == .dropMix
             || transition.type == .cleanHandoff
             || transition.type == .vinylStop
+
+        // ── 8b. Aggressive both sides override ──
+        // When A goes through the aggressive preset (notchSweep + dynQ + steep
+        // HPF ramp) AND B would receive parallel filtering on a high-energy
+        // bailable pair, the combined density reads as "el algoritmo está
+        // manipulando demasiado" — Icon → Off The Grid case from the audit.
+        // Stripping B's filters lets A's gesture stay the focal point and
+        // B enters clean. Conditions are tight: aggressive preset + danceable
+        // + both lados energetic — pop / R&B ambient pairs don't trip this.
+        if filter.useAggressiveFilters
+            && profile.avgDanceability > 0.6
+            && profile.energyA > 0.20 && profile.energyB > 0.20
+            && !skipBFilters {
+            print("[DJMixingService] 🎚️ Aggressive both sides: forcing skipBFilters (dance=\(String(format: "%.2f", profile.avgDanceability)), energyA=\(String(format: "%.2f", profile.energyA)), energyB=\(String(format: "%.2f", profile.energyB)))")
+            skipBFilters = true
+        }
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
