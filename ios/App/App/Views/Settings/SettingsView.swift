@@ -644,10 +644,21 @@ final class UserProfileViewModel: ObservableObject {
 
     private func fetchAll() async {
         isLoading = true
-        async let statsTask: () = fetchStats()
-        async let userTask: () = fetchUserInfo()
-        _ = await (statsTask, userTask)
+
+        // Run user info in parallel — populates lastScrobble + lastConnection
+        // independently. The view only conditionally renders those, so we
+        // don't gate isLoading on it.
+        async let userInfoTask: () = fetchUserInfo()
+
+        // Stats controls the render gate: as soon as totalPlays / topSongs /
+        // topArtists land, the sheet can render its main content. Avatar
+        // resolution inside fetchStats is now fire-and-forget too.
+        await fetchStats()
         isLoading = false
+
+        // Keep userInfoTask in the structured tree so cancellation propagates
+        // when the sheet is dismissed.
+        _ = await userInfoTask
     }
 
     private func fetchStats() async {
@@ -674,8 +685,10 @@ final class UserProfileViewModel: ObservableObject {
                 topArtists = artists.prefix(5).map { a in
                     (artist: a["artist"] as? String ?? "", plays: a["plays"] as? Int ?? 0, image: nil)
                 }
-                // Resolve artist avatars in background
-                await resolveArtistAvatars()
+                // Resolve artist avatars in background — the row view falls
+                // back to a colored initial circle while the image loads, so
+                // there's no need to block fetchStats on the N+1 image fetch.
+                Task { await resolveArtistAvatars() }
             }
         } catch {
             print("[UserProfile] Stats fetch failed: \(error)")
@@ -848,16 +861,9 @@ struct UserProfileSheet: View {
                     .font(.title2.bold())
 
                 if let date = vm.lastConnection {
-                    Text("Activo \(date, format: .relative(presentation: .named))")
+                    Text("\(L.active) \(date, format: .relative(presentation: .named))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                }
-
-                let serverUrl = NavidromeService.shared.credentials?.serverUrl ?? ""
-                if !serverUrl.isEmpty {
-                    Text(serverUrl.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
                 }
             }
         }
