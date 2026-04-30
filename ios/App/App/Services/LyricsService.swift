@@ -61,22 +61,71 @@ final class LyricsService {
     private func doFetch(songId: String, title: String, artist: String) async -> LyricsResult {
         print("[LyricsService] doFetch: songId=\(songId) title='\(title)' artist='\(artist)'")
 
-        // Fast path: LRCLib is typically the fastest source (simple HTTP GET).
-        // Fetch it first; if it returns synced lyrics, skip embedded entirely.
+        // Fire all three sources in parallel. LRCLib is awaited first for the
+        // fast-path return; embedded + Navidrome run concurrently and are
+        // typically already finished by the time we reach their awaits below.
+        // If LRCLib synced wins, the async let tasks are cancelled implicitly
+        // at scope exit (URLSession + AVAsset both honour Task cancellation).
+        async let embeddedTask: LyricsResult? = fetchEmbeddedWithTimeout(songId: songId)
+        async let navidromeTask: LyricsResult? = fetchNavidrome(title: title, artist: artist)
         let lrclib = await fetchLRCLib(title: title, artist: artist)
+
+        // Fast path: LRCLib synced wins immediately
         if let lrclib, lrclib.isSynced {
             print("[LyricsService] ✓ Found LRCLib synced lyrics: \(lrclib.lines.count) lines")
             return lrclib
         }
 
-        // Embedded: try with a 3s timeout (disk cache is instant, remote can be slow)
-        let embedded = await withTaskGroup(of: LyricsResult?.self) { group in
+        // Otherwise wait for the parallel fetches (typically already done)
+        let embedded = await embeddedTask
+        let navidrome = await navidromeTask
+
+        if let embedded {
+            print("[LyricsService] Found embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
+        }
+
+        // Same priority order as before:
+
+        // 1. Embedded synced + multi-line (good quality)
+        if let embedded, embedded.isSynced, embedded.lines.count > 1 {
+            print("[LyricsService] ✓ Using embedded lyrics (good quality)")
+            return embedded
+        }
+
+        // 2. LRCLib plain lyrics
+        if let lrclib {
+            print("[LyricsService] ✓ Found LRCLib lyrics: \(lrclib.lines.count) lines, synced=\(lrclib.isSynced)")
+            return lrclib
+        }
+        print("[LyricsService] ✗ No LRCLib lyrics")
+
+        // 3. Navidrome getLyrics
+        if let navidrome {
+            print("[LyricsService] ✓ Found Navidrome lyrics: \(navidrome.lines.count) lines")
+            return navidrome
+        }
+        print("[LyricsService] ✗ No Navidrome lyrics")
+
+        // 4. Embedded low quality fallback
+        if let embedded {
+            print("[LyricsService] ✓ Falling back to embedded lyrics (low quality)")
+            return embedded
+        }
+
+        print("[LyricsService] ✗ No lyrics found — returning empty")
+        return .empty
+    }
+
+    /// Embedded metadata read with a 3 s upper bound — same withTaskGroup race
+    /// pattern as before, just hoisted to a helper so doFetch can fire it as
+    /// `async let` alongside LRCLib + Navidrome.
+    private func fetchEmbeddedWithTimeout(songId: String) async -> LyricsResult? {
+        await withTaskGroup(of: LyricsResult?.self) { group in
             group.addTask { await self.fetchEmbedded(songId: songId) }
             group.addTask {
                 try? await Task.sleep(for: .seconds(3))
                 return nil // timeout sentinel
             }
-            // Return whichever finishes first
             for await result in group {
                 if result != nil {
                     group.cancelAll()
@@ -85,39 +134,6 @@ final class LyricsService {
             }
             return nil
         }
-
-        if let embedded {
-            print("[LyricsService] Found embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
-        }
-
-        // 1. If embedded lyrics are good quality (synced + more than 1 line), use them
-        if let embedded, embedded.isSynced, embedded.lines.count > 1 {
-            print("[LyricsService] ✓ Using embedded lyrics (good quality)")
-            return embedded
-        }
-
-        // 2. LRCLib plain lyrics (already fetched above)
-        if let lrclib {
-            print("[LyricsService] ✓ Found LRCLib lyrics: \(lrclib.lines.count) lines, synced=\(lrclib.isSynced)")
-            return lrclib
-        }
-        print("[LyricsService] ✗ No LRCLib lyrics")
-
-        // 3. Try Navidrome getLyrics
-        if let nd = await fetchNavidrome(title: title, artist: artist) {
-            print("[LyricsService] ✓ Found Navidrome lyrics: \(nd.lines.count) lines")
-            return nd
-        }
-        print("[LyricsService] ✗ No Navidrome lyrics")
-
-        // 4. Fallback: use embedded even if low quality (unsynced or single line)
-        if let embedded {
-            print("[LyricsService] ✓ Falling back to embedded lyrics (low quality)")
-            return embedded
-        }
-
-        print("[LyricsService] ✗ No lyrics found — returning empty")
-        return .empty
     }
 
     // MARK: - 1. Embedded lyrics (AVAsset metadata)
