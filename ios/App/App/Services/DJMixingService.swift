@@ -1617,6 +1617,18 @@ enum DJMixingService {
             reasons.append("stutter: cut@\(Int(profile.bpmA))BPM dance=\(String(format: "%.2f", profile.avgDanceability))")
         }
 
+        // ── Energy-A floor: soften slow-modulating effects when A is already silent ──
+        // energyA < 0.10 means A is already in tail/decay (Rich Flex → Earfquake,
+        // Not Afraid → ELEMENT. cases). notchSweep / dynQ / stutterCut applied to
+        // dead audio sounds artificial — like a filter modulating silence. bassKill
+        // is fine (it's an instant cut, not a sweep) so we leave it intact.
+        if profile.energyA < 0.10 && (useDynamicQ || useNotchSweep || useStutterCut) {
+            useDynamicQ = false
+            useNotchSweep = false
+            useStutterCut = false
+            reasons.append("⚠️ energyA<0.10: soft (no dynQ/notch/stutter)")
+        }
+
         let reason = reasons.isEmpty
             ? "DJ effects OFF"
             : "DJ effects ON: \(reasons.joined(separator: ", "))"
@@ -1847,6 +1859,15 @@ enum DJMixingService {
                         // here: the instrumentation can blend without sounding muddy.
                         type = .crossfade
                         reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) pero ambos instrumentales → CROSSFADE gentle"
+                    } else if outroInstrumental && !introInstrumental {
+                        // Mirror → GOOD CREDIT case: A's outro decays into synths/pad while
+                        // B opens hard with a kick + vocal. A long blend muddies the synth
+                        // tail under the abrupt kick. A clean handoff drops to silence and
+                        // the kick re-enters cold. Best human-DJ analogue: punch through
+                        // with a short CUT — A's instrumental nature means there's no vocal
+                        // to sever, so the cut is musically defensible.
+                        type = .cut
+                        reason = "Outro instrumental A + intro abrupta B (incompatible)\(bpmNote) → CUT"
                     } else if energyDrop > 0.30 && profile.energyA > 0.25
                               && !isOnCooldown(.vinylStop) {
                         // A is intense and B is markedly quieter — textbook VINYL_STOP.
@@ -1908,17 +1929,42 @@ enum DJMixingService {
                 }
 
             case .punch:
-                // ── DROP_MIX: short intro on B or very short fade ──
-                // Hip hop / R&B / K-Pop technique: quick HPF ramp out on A, B enters clean.
-                // Triggers when B's intro is too short for a long blend, or the fade
-                // was already capped short by the intro window.
+                // ── VINYL_STOP: bass-heavy A handing off to a hard, abrupt B ──
+                // Rule (DJ): the spin-down is a "look here, switch incoming" gesture
+                // that only works when B re-opens with a kick. If B is slow or
+                // atmospheric, the frenada queda colgando. Identical BPMs prefer a
+                // clean beat-match (no need for a gesture). The cooldown prevents
+                // it firing on every other transition. fadeDuration ≥ 3 because
+                // CUT clamps below that and we'd be fighting the safety override.
                 let bIntroLen: Double = {
                     guard let next = nextAnalysis, next.hasError != true else { return 30 }
                     return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 30)
                 }()
+                let bChorusStart: Double = {
+                    guard let next = nextAnalysis, next.hasError != true else { return 30 }
+                    return next.chorusStartTime > 0 ? next.chorusStartTime : 30
+                }()
+                let bIsAbruptIntro = !introInstrumental
+                    && (bChorusStart < 3 || bIntroLen < 2)
+                    && profile.energyB > 0.20
+                let aIsBassHeavy = profile.energyA > 0.30 && profile.avgDanceability > 0.50
+                let vinylStopFits = !isOnCooldown(.vinylStop)
+                    && aIsBassHeavy
+                    && bIsAbruptIntro
+                    && profile.bpmRelationship != .identical
+                    && fadeDuration >= 3
+
+                // ── DROP_MIX: short intro on B or very short fade ──
+                // Hip hop / R&B / K-Pop technique: quick HPF ramp out on A, B enters clean.
+                // Triggers when B's intro is too short for a long blend, or the fade
+                // was already capped short by the intro window.
                 let useDropMix = fadeDuration < 5 || (bIntroLen < 12 && fadeDuration < 7)
 
-                if useDropMix && fadeDuration >= 2 {
+                if vinylStopFits {
+                    type = .vinylStop
+                    reason = "Punch + bass-heavy A + B abrupta (chorus B=\(String(format: "%.0f", bChorusStart))s)\(bpmNote) → VINYL_STOP"
+                }
+                else if useDropMix && fadeDuration >= 2 {
                     type = .dropMix
                     reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
                 }
