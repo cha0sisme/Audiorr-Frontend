@@ -1084,6 +1084,18 @@ enum DJMixingService {
             a.outroStartTime = a.lastVocalTime
         }
 
+        // ── 0.5. Heuristic fallback for missing vocalStartTime ──
+        // Caches written before the v2 vocal detector arrive with vocalStartTime=0.
+        // Many routing branches (entry-point picker, vocalOverlapRisk, chorus-promotion,
+        // midScoop gating) gate on `vocalStartTime > 0` and silently degrade.
+        // When chorus is known and well past 0, infer vocal ≈ chorus - 8s — a typical
+        // verse length. Floors to 2s so we never claim vocals at t=0.
+        if a.vocalStartTime <= 0.001 && a.chorusStartTime > 8 {
+            let inferred = max(2.0, a.chorusStartTime - 8.0)
+            print("[DJMixingService] Sanitize: inferred vocalStartTime=\(String(format: "%.1f", inferred))s from chorusStart=\(String(format: "%.1f", a.chorusStartTime))s")
+            a.vocalStartTime = inferred
+        }
+
         // ── 1. ML override cross-validation (FIRST — before any caps) ──
         // When the ML model overrode intro/outro values, cross-check with heuristics.
         // If ML and heuristic diverge wildly (>15s), the ML may have hallucinated — fall back to heuristic.
