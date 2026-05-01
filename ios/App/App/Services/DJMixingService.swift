@@ -2245,8 +2245,17 @@ enum DJMixingService {
                 // Guard: STEM_MIX requires bpmDiff < 6. The mid-scoop and dynamic-Q
                 // can hide subtle phase drift but not a 16 BPM gap — that becomes
                 // audible rhythmic mud no matter how aggressive the EQ shaping.
+                // Plus: energyB > 0.10 — STEM_MIX layers B over A's stem-removed
+                // outro for 6-12s. When B is nearly inaudible (energyB ≤ 0.10),
+                // those long overlaps read as "B fading in slowly" instead of
+                // as a stem swap. New Magic Wand → Way 2 Sexy: energyB=0.03,
+                // user "B entra con fade, deberia entrar perfecto sin fades".
+                // Falls through to beatMatchBlend (shorter, lighter B shaping;
+                // the quiet-B gate in step 8c also forces skipBFilters there).
+                // Verified preserves T30 Sky→Silent Hill (energyB=0.12, 10/10)
+                // and T46 No More Parties→One Beer (energyB=0.17, 10/10).
                 else if isBeatSynced && !isAAbrupt && !isBAbrupt && fadeDuration >= 6
-                    && hasVocalOverlap && profile.bpmDiff < 6 {
+                    && hasVocalOverlap && profile.bpmDiff < 6 && profile.energyB > 0.10 {
                     type = .stemMix
                     reason = "Punch + vocales solapadas + fade≥6s → STEM_MIX (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote)"
                 } else if isBeatSynced && !isAAbrupt && !isBAbrupt {
