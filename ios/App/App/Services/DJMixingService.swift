@@ -864,7 +864,12 @@ enum DJMixingService {
 
         // ── Phrase snapping (punch + dramatic only, not smooth/minimal) ──
         if !next.phraseBoundaries.isEmpty {
-            let maxAhead: Double = profile.character == .dramatic ? 8 : 16
+            // Snap forward to nearest phrase boundary, but capped: a generous
+            // maxAhead (16s) snaps pre-chorus entries onto the chorus literal,
+            // which fights chorus-mislabeled cases (BRINCANDO regression).
+            // 8s ≈ 1 musical phrase at typical hip-hop tempos, plenty for
+            // alignment without dragging the entry across structural sections.
+            let maxAhead: Double = profile.character == .dramatic ? 4 : 8
             if let nextPhrase = next.phraseBoundaries.first(where: { $0 >= entryPoint && $0 <= entryPoint + maxAhead }) {
                 entryPoint = nextPhrase
             }
@@ -970,13 +975,37 @@ enum DJMixingService {
             print("[DJMixingService] ⚠️ Entry confidence low: introEnd=\(String(format: "%.1f", introEnd))s but vocalStart=\(String(format: "%.1f", vocalStart))s (diverge >8s)")
         }
 
+        // ── Chorus-mislabeled safeguard ──
+        // Backend chorusStartB sometimes points to a verse drop or 2nd-verse
+        // landmark instead of the structural chorus. With our v6 sanitize
+        // fallback (`vocalStart = chorus - 8` when backend returns 0), this
+        // mislabeled chorus drags the inferred vocalStart into post-intro
+        // territory and downstream logic snaps the entry to the chorus literal.
+        // This produced the BRINCANDO regression: chorus=38.4s, introH=29.3s,
+        // vocalStart inferred=30.4s → entry collapsed to 38.4s.
+        //
+        // Detection: chorus is 4–15s past the heuristic intro end. Larger gaps
+        // (>15s) are genuine deep-chorus tracks (hip-hop with mid-song drop)
+        // where chorus targeting is the right call — leave those alone.
+        let chorusLikelyMislabeled: Bool = {
+            guard let h = next.introEndTimeHeuristic, h > 4 else { return false }
+            let gap = chorusStart - h
+            return gap > 4 && gap < 15
+        }()
+        if chorusLikelyMislabeled {
+            print("[DJMixingService] ⚠️ Chorus likely mislabeled: chorusStart=\(String(format: "%.1f", chorusStart))s vs introEndHeuristic=\(String(format: "%.1f", next.introEndTimeHeuristic ?? 0))s (gap \(String(format: "%.1f", chorusStart - (next.introEndTimeHeuristic ?? 0)))s) — pinning entry to heuristic")
+        }
+
         var entry: Double
 
         // ── Vocal-aware entry reference: when B's "real content" starts ──
         // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
         // introEndTime from ML can report 40-60s for songs with immediate vocals.
         // introEndTimeHeuristic (percussive/energy detector) is more reliable.
+        // When chorusLikelyMislabeled, prefer heuristic over the (possibly
+        // sanitize-poisoned) vocalStart.
         let entryReference: Double = {
+            if chorusLikelyMislabeled, let h = next.introEndTimeHeuristic, h > 0 { return h }
             if next.vocalStartTime > 0 { return next.vocalStartTime }
             if let h = next.introEndTimeHeuristic, h > 0 { return h }
             if let first = next.speechSegments.first, first.start > 0 { return first.start }
@@ -984,7 +1013,12 @@ enum DJMixingService {
             return 0
         }()
         let introIsInstrumental = entryReference > 8.0
-        let vocalStartReliable = vocalStart > 0 && (introIsInstrumental || vocalStart < 20)
+        let vocalStartReliable: Bool = {
+            // Sanitize-inferred vocalStart (chorus-8) is poisoned when the
+            // chorus itself is mislabeled — refuse to trust it as a target.
+            if chorusLikelyMislabeled { return false }
+            return vocalStart > 0 && (introIsInstrumental || vocalStart < 20)
+        }()
 
         // ── Vocal overlap avoidance: if both songs have vocals, prefer entering B
         // at an instrumental section so A's vocals can fade before B's vocals start ──
@@ -1027,7 +1061,8 @@ enum DJMixingService {
         let chorusFarFromReference = referenceForGap > 0 && chorusStart > referenceForGap + 20
         let chorusInUsableHalf = chorusStart < bufferDuration * 0.5
         if isDanceable && bufferLongEnough && chorusDeepEnough
-            && chorusFarFromReference && chorusInUsableHalf {
+            && chorusFarFromReference && chorusInUsableHalf
+            && !chorusLikelyMislabeled {
             print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusStart))s (chorus far past reference at \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
             return chorusStart
         }
