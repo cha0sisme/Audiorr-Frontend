@@ -624,6 +624,17 @@ enum DJMixingService {
             // anticipation can run up to 4s before that, so 7s is the sensible
             // ceiling. Below 3s the type is already CUT by another path.
             effectiveFadeDuration = max(3.0, min(7.0, fade.duration))
+        case .fadeOutACutB:
+            // When the energy-crash override fired (high-energy A into instrumental
+            // low-energy B), the original fade may be short (~3s) because of the
+            // short outro window. Force ≥ 5s so A can breathe out before B's
+            // firm entry. Cap at 8s — anything longer turns into a long-tail fade.
+            // For any other path that lands here, behave neutrally.
+            if profile.energyA > 0.40 && profile.energyB < 0.25 {
+                effectiveFadeDuration = max(5.0, min(8.0, fade.duration))
+            } else {
+                effectiveFadeDuration = fade.duration
+            }
         default:
             effectiveFadeDuration = fade.duration
         }
@@ -1431,13 +1442,27 @@ enum DJMixingService {
 
         // ── Shorten when A has no instrumental outro ──
         // If A's outro is vocal (or unconfirmed), A likely has voice until the end.
-        // Reduce fade to minimize vocal overlap from the outgoing track.
+        // Reduce fade to minimize vocal overlap from the outgoing track — UNLESS
+        // B's intro is instrumental, in which case A's tail vocals fall on B's
+        // intro section and can't clash. The Bricksquad → MAMA'S case in v6 had
+        // its fade chopped from ~5s to 2.7s by this reduction even though MAMA'S
+        // opens with a long instrumental intro, forcing a violent CUT.
         if let current = currentAnalysis, current.hasError != true {
             let aOutroVocal = current.hasOutroVocals
                 || (!current.hasOutroData && current.vocalStartTime > 0)
             if aOutroVocal && fadeDuration > 4 {
-                fadeDuration = max(3, fadeDuration * 0.80)
-                decision += " Reducido 20% por outro vocal A a \(String(format: "%.1f", fadeDuration))s."
+                let bIntroInstrumental: Bool = {
+                    guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
+                    if nxt.hasVocalData && !nxt.hasIntroVocals { return true }
+                    if nxt.vocalStartTime > 4 { return true }
+                    return false
+                }()
+                if bIntroInstrumental {
+                    decision += " Outro vocal A pero intro B instrumental — sin reduccion."
+                } else {
+                    fadeDuration = max(3, fadeDuration * 0.80)
+                    decision += " Reducido 20% por outro vocal A a \(String(format: "%.1f", fadeDuration))s."
+                }
             }
         }
 
@@ -2127,6 +2152,28 @@ enum DJMixingService {
             type = .cut
             let normalizedNote = profile.bpmBNormalized != profile.bpmB ? " (norm:\(Int(profile.bpmBNormalized)))" : ""
             reason = "Polirritmia evitada (A:\(Int(profile.bpmA)) B:\(Int(profile.bpmB))\(normalizedNote) diff=\(String(format: "%.1f", profile.bpmDiff))) → CUT forzado"
+        }
+
+        // ── Override: energy crash A → instrumental B ──
+        // Bricksquad → MAMA'S FAVORITE in v6: energyA=0.48 (kick + bass + voice)
+        // crashing into MAMA'S energyB=0.22 instrumental intro. CUT or short
+        // crossfade lands as a slap; the listener feels "the song slammed shut".
+        // FADE_OUT_A_CUT_B with fade ≥ 5s lets A breathe out gracefully while B
+        // emerges from its instrumental intro. Guard requires ≥6s of intro on B
+        // so the boosted fade fits inside the instrumental window. Skip when BPM
+        // is incompatible (CLEAN_HANDOFF / VINYL_STOP already handle that path)
+        // or when type was already a sequential gesture.
+        let bIntroSpace: Double = {
+            guard let next = nextAnalysis, next.hasError != true else { return 0 }
+            return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+        }()
+        if profile.energyA > 0.40 && profile.energyB < 0.25
+            && introInstrumental
+            && bIntroSpace >= 6
+            && profile.bpmRelationship != .incompatible
+            && (type == .cut || type == .crossfade || type == .naturalBlend) {
+            type = .fadeOutACutB
+            reason = "Energy crash A→B instrumental (\(String(format: "%.2f→%.2f", profile.energyA, profile.energyB))) → FADE_OUT_A_CUT_B"
         }
 
         // ── Safety: vocal trainwreck — refine with actual fade zone ──
