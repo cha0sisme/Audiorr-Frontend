@@ -792,10 +792,11 @@ final class QueueManager: AudioEngineDelegate {
                     currentSongAnalysis.introEndTime = curAn.introEndTime
                         ?? curAn.introEndHeuristic
                         ?? min(30, currentDuration)
-                    // vocalStartTime: top-level once backend persists it, fallback to diagnostics
+                    // vocalStartTime: top-level once backend persists it, fallback to diagnostics.
+                    // Keep nil semantics: nil = unknown, propagates so downstream
+                    // falls to introEndHeuristic / speechSegments / introEndTime.
                     currentSongAnalysis.vocalStartTime = curAn.vocalStartTime
                         ?? curAn.vocalStartFromDiagnostics
-                        ?? 0
                     // Mark whether real analysis data was present for outro/intro
                     currentSongAnalysis.hasOutroData = curAn.outroStartTime != nil || curAn.outroStartHeuristic != nil
                     currentSongAnalysis.hasIntroData = curAn.introEndTime != nil || curAn.introEndHeuristic != nil
@@ -856,7 +857,6 @@ final class QueueManager: AudioEngineDelegate {
                         ?? min(30, nextDuration)
                     nextSongAnalysis.vocalStartTime = nxtAn.vocalStartTime
                         ?? nxtAn.vocalStartFromDiagnostics
-                        ?? 0
                     nextSongAnalysis.hasOutroData = nxtAn.outroStartTime != nil || nxtAn.outroStartHeuristic != nil
                     nextSongAnalysis.hasIntroData = nxtAn.introEndTime != nil || nxtAn.introEndHeuristic != nil
                     if let beats = nxtAn.beats, beats.count >= 4 {
@@ -960,7 +960,7 @@ final class QueueManager: AudioEngineDelegate {
                     TransitionDiagnostics.shared.transitionReason = crossfadeResult.transitionReason
                     TransitionDiagnostics.shared.outroStartA = currentSongAnalysis.outroStartTime
                     TransitionDiagnostics.shared.introEndB = nextSongAnalysis.introEndTime
-                    TransitionDiagnostics.shared.vocalStartB = nextSongAnalysis.vocalStartTime
+                    TransitionDiagnostics.shared.vocalStartB = nextSongAnalysis.vocalStartTime ?? -1
                     TransitionDiagnostics.shared.chorusStartB = nextSongAnalysis.chorusStartTime
                     TransitionDiagnostics.shared.hasIntroVocalsB = nextSongAnalysis.hasIntroVocals
                 }

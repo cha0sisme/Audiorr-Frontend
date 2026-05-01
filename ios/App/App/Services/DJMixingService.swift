@@ -130,7 +130,13 @@ enum DJMixingService {
         var key: String?
         var outroStartTime: Double = 0
         var introEndTime: Double = 0
-        var vocalStartTime: Double = 0
+        // Optional semantics (post-backend confirmation 2026-05-01):
+        //   nil → unknown / no detection. Code paths must fall back to
+        //         introEndHeuristic / speechSegments / introEndTime.
+        //   0.0 → literal "vocal at t=0" (track opens singing).
+        //   >0  → real vocal onset timestamp.
+        // Never collapse nil to 0 — that conflates two distinct cases.
+        var vocalStartTime: Double? = nil
         var chorusStartTime: Double = 0
         var phraseBoundaries: [Double] = []
         var downbeatTimes: [Double] = []
@@ -363,9 +369,13 @@ enum DJMixingService {
                 aVocals = cur.lastVocalTime > conservativeCrossfadeZoneA
             } else if !cur.speechSegments.isEmpty {
                 aVocals = cur.speechSegments.contains { $0.end > conservativeCrossfadeZoneA }
+            } else if let vs = cur.vocalStartTime, vs > 0 {
+                // vocalStart known and >0 → assume vocals likely until outro
+                aVocals = cur.outroStartTime <= 0 || cur.outroStartTime > conservativeCrossfadeZoneA
             } else {
-                aVocals = cur.vocalStartTime > 0 &&
-                    (cur.outroStartTime <= 0 || cur.outroStartTime > conservativeCrossfadeZoneA)
+                // vocalStart nil (unknown) or 0 (vocal-at-t=0): without other
+                // signals can't claim vocals in the outro window.
+                aVocals = false
             }
         } else { aVocals = false }
 
@@ -375,8 +385,14 @@ enum DJMixingService {
                 bVocals = true
             } else if !nxt.speechSegments.isEmpty {
                 bVocals = nxt.speechSegments.contains { $0.start < conservativeBEnd }
+            } else if let vs = nxt.vocalStartTime, vs > 0 {
+                bVocals = vs < conservativeBEnd
             } else {
-                bVocals = nxt.vocalStartTime > 0 && nxt.vocalStartTime < conservativeBEnd
+                // vs == nil (unknown) OR vs == 0 (post-backend would mean
+                // literal vocal-at-t=0, but pre-backfill it's still camouflaged
+                // null). Stay conservative: no claim. Once the backfill ships,
+                // a literal 0 here can be flipped to bVocals=true.
+                bVocals = false
             }
         } else { bVocals = false }
 
@@ -874,7 +890,7 @@ enum DJMixingService {
             // songs with immediate vocals — it detects "dense section start").
             // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
             let entryRef: Double = {
-                if next.vocalStartTime > 0 { return next.vocalStartTime }
+                if let vs = next.vocalStartTime, vs > 0 { return vs }
                 if let h = next.introEndTimeHeuristic, h > 0 { return h }
                 if let first = next.speechSegments.first, first.start > 0 { return first.start }
                 if next.hasIntroData { return next.introEndTime }
@@ -956,12 +972,12 @@ enum DJMixingService {
         bufferDuration: Double,
         config: MixModeConfig
     ) -> Double {
-        let vocalStart = next.vocalStartTime
+        let vocalStart = next.vocalStartTime ?? 0
         let chorusStart = next.chorusStartTime
 
         // Vocal-aware entry reference (same chain as smooth/punch)
         let entryRef: Double = {
-            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let vs = next.vocalStartTime, vs > 0 { return vs }
             if let h = next.introEndTimeHeuristic, h > 0 { return h }
             if let first = next.speechSegments.first, first.start > 0 { return first.start }
             if next.hasIntroData { return next.introEndTime }
@@ -1011,7 +1027,12 @@ enum DJMixingService {
         config: MixModeConfig
     ) -> Double {
         let introEnd = next.introEndTime
-        let vocalStart = next.vocalStartTime
+        // vocalStart unwrap: nil → 0 (treat as "no usable target"). The
+        // distinction nil/0 doesn't matter for entry computation here —
+        // both fall through to the fallback chain via the `vocalStart > 0`
+        // guards. Sites where nil semantics matter (detectIntroInstrumental)
+        // unwrap explicitly with `if let`.
+        let vocalStart = next.vocalStartTime ?? 0
         let chorusStart = next.chorusStartTime
 
         // Cross-validate intro/vocal timing
@@ -1056,7 +1077,7 @@ enum DJMixingService {
         // sanitize-poisoned) vocalStart.
         let entryReference: Double = {
             if chorusLikelyMislabeled, let h = next.introEndTimeHeuristic, h > 0 { return h }
-            if next.vocalStartTime > 0 { return next.vocalStartTime }
+            if let vs = next.vocalStartTime, vs > 0 { return vs }
             if let h = next.introEndTimeHeuristic, h > 0 { return h }
             if let first = next.speechSegments.first, first.start > 0 { return first.start }
             if next.hasIntroData { return next.introEndTime }
@@ -1175,7 +1196,7 @@ enum DJMixingService {
 
         a.introEndTime = min(max(0, a.introEndTime), maxT)
         a.outroStartTime = min(max(0, a.outroStartTime), maxT)
-        a.vocalStartTime = min(max(0, a.vocalStartTime), maxT)
+        if let vs = a.vocalStartTime { a.vocalStartTime = min(max(0, vs), maxT) }
         a.chorusStartTime = min(max(0, a.chorusStartTime), maxT)
         if a.hasCuePoint { a.cuePoint = min(max(0, a.cuePoint), maxT) }
         if a.hasVocalEndData { a.lastVocalTime = min(max(0, a.lastVocalTime), maxT) }
@@ -1560,12 +1581,12 @@ enum DJMixingService {
         // opens with a long instrumental intro, forcing a violent CUT.
         if let current = currentAnalysis, current.hasError != true {
             let aOutroVocal = current.hasOutroVocals
-                || (!current.hasOutroData && current.vocalStartTime > 0)
+                || (!current.hasOutroData && (current.vocalStartTime ?? 0) > 0)
             if aOutroVocal && fadeDuration > 4 {
                 let bIntroInstrumental: Bool = {
                     guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
                     if nxt.hasVocalData && !nxt.hasIntroVocals { return true }
-                    if nxt.vocalStartTime > 4 { return true }
+                    if let vs = nxt.vocalStartTime, vs > 4 { return true }
                     return false
                 }()
                 if bIntroInstrumental {
@@ -2323,8 +2344,17 @@ enum DJMixingService {
            let next = nextAnalysis, next.hasError != true,
            type != .cut && type != .stemMix {
 
-            let vocalBStart = next.vocalStartTime - entryPoint
-            let bHasVocalsInFade = next.vocalStartTime > 0 && vocalBStart < fadeDuration
+            // vocalStart unwrap: nil → 0 (safe sentinel for arithmetic).
+            // The `> 0` guard below filters both nil and the literal 0.0
+            // case (vocal-at-t=0 means vocals start AT entryPoint or earlier
+            // → vocalBStart ≤ 0 → bHasVocalsInFade still true via direct check).
+            let vsB = next.vocalStartTime ?? 0
+            let vocalBStart = vsB - entryPoint
+            // bHasVocalsInFade: known vocal onset > 0 AND lands inside fade,
+            // OR literal vocal-at-t=0 (vsB known to be 0 means voice from
+            // file start; if entryPoint>0 we've already missed vocals so
+            // they're not "in fade", but hasIntroVocals flag still flags it).
+            let bHasVocalsInFade = (next.vocalStartTime ?? -1) > 0 && vocalBStart < fadeDuration
             let bIntroVocalOverlap = next.hasIntroVocals || bHasVocalsInFade
 
             if bIntroVocalOverlap {
@@ -2339,11 +2369,11 @@ enum DJMixingService {
                     aHasVocalsAtEnd = current.speechSegments.contains { $0.end > safeOutroA }
                 } else {
                     aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA)
-                        && current.vocalStartTime > 0
+                        && (current.vocalStartTime ?? 0) > 0
                 }
 
                 if aHasVocalsAtEnd {
-                    let bInstrumentalWindow = next.vocalStartTime - entryPoint
+                    let bInstrumentalWindow = vsB - entryPoint
                     if bInstrumentalWindow > fadeDuration * 0.6 {
                         reason += " (vocal overlap OK: B vocals after \(String(format: "%.0f", bInstrumentalWindow))s)"
                     } else {
@@ -2490,9 +2520,18 @@ enum DJMixingService {
         guard let nxt = nextAnalysis, nxt.hasError != true else { return false }
         let bEnd = entryPoint + fadeDuration
 
+        // NOTE on vocalStartTime == 0.0 literal semantics (post-backend
+        // 2026-05-01): backend confirms 0.0 is "vocal at t=0", but until the
+        // backfill batch completes, cached entries written under the old
+        // pipeline still have 0.0 as a camouflaged null. Treating 0.0 as
+        // literal "no instrumental window" right now would mis-flag tracks
+        // like Wu-Tang Forever (real instrumental intro ~50s) cached pre-fix.
+        // Once the backfill is done and caches refreshed, swap the chain
+        // below to: `if vocalStartTime == 0.0 { return false }` first.
+
         // Vocal onset: when B's vocals actually start
         let vocalOnset: Double = {
-            if nxt.vocalStartTime > 0 { return nxt.vocalStartTime }
+            if let vs = nxt.vocalStartTime, vs > 0 { return vs }
             if let first = nxt.speechSegments.first, first.start > 0 { return first.start }
             return 0
         }()

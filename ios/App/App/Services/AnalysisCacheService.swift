@@ -283,11 +283,12 @@ actor AnalysisCacheService {
         analysis.outroStartTime = result.outroStartTime ?? max(duration - 30, 0)
         analysis.introEndTime = result.introEndTime ?? min(30, duration)
         // Top-level vocalStartTime is not yet persisted by all backend versions;
-        // fall back to diagnostics.analysis_log.intro_decision.candidates.vocal,
-        // which is always populated. Without this chain, vocalStartTime collapses
-        // to 0 in 100% of analyses, killing every routing branch that gates on
-        // `vocalStartTime > 0` (entry-point picker, vocalOverlapRisk, intro detection).
-        analysis.vocalStartTime = result.vocalStartTime ?? result.vocalStartFromDiagnostics ?? 0
+        // fall back to diagnostics.analysis_log.intro_decision.candidates.vocal.
+        // Keep `nil` semantics — backend (2026-05-01) confirmed vocalStartTime
+        // null means "unknown / no detection" (track has instrumental intro
+        // or detector failed) and 0.0 means LITERAL vocal-at-t=0. Don't
+        // collapse nil to 0 here: downstream paths handle the optional.
+        analysis.vocalStartTime = result.vocalStartTime ?? result.vocalStartFromDiagnostics
 
         if let beats = result.beats, !beats.isEmpty {
             analysis.downbeatTimes = beats

@@ -178,7 +178,9 @@ final class SmartMixManager {
         var duration: Double { song.duration ?? 240 }
 
         // ── Vocal timing ──
-        var vocalStartTime: Double? { analysis?.vocalStartTime }
+        // Flatten `Double??` (analysis is Optional, vocalStartTime is now
+        // Double?) to plain `Double?`.
+        var vocalStartTime: Double? { analysis?.vocalStartTime ?? nil }
         var lastVocalTime: Double? { analysis?.lastVocalTime }
         var speechSegments: [AnalysisCacheService.AnalysisResult.SpeechSegment] { analysis?.speechSegments ?? [] }
 
