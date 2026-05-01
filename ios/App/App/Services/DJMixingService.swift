@@ -627,11 +627,23 @@ enum DJMixingService {
         case .fadeOutACutB:
             // When the energy-crash override fired (high-energy A into instrumental
             // low-energy B), the original fade may be short (~3s) because of the
-            // short outro window. Force ≥ 5s so A can breathe out before B's
+            // short outro window. Aim for ≥ 5s so A can breathe out before B's
             // firm entry. Cap at 8s — anything longer turns into a long-tail fade.
+            // ALSO cap at A's outro space + 2s so we don't fade through main body
+            // material the listener still expects to hear (very short outros).
             // For any other path that lands here, behave neutrally.
             if profile.energyA > 0.40 && profile.energyB < 0.25 {
-                effectiveFadeDuration = max(5.0, min(8.0, fade.duration))
+                let aOutroLimit: Double = {
+                    guard let cur = safeCurrent, cur.hasError != true,
+                          cur.hasOutroData,
+                          bufferADuration > cur.outroStartTime else {
+                        return 8.0
+                    }
+                    return (bufferADuration - cur.outroStartTime) + 2.0
+                }()
+                let cap = min(8.0, aOutroLimit)
+                let target = max(min(5.0, cap), fade.duration)
+                effectiveFadeDuration = min(cap, target)
             } else {
                 effectiveFadeDuration = fade.duration
             }
