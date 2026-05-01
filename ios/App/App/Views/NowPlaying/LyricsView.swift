@@ -89,6 +89,32 @@ struct LyricsView: View {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
+            .onChange(of: lyrics) { _, newLyrics in
+                // AutoMix song change: lyrics swap to the new song while
+                // activeLineId may land on the same numeric value (LyricLine.id
+                // is a sequential index, so id=2 in song A maps to id=2 in
+                // song B). The activeLineId-based onChange wouldn't fire and
+                // the scroll position would stay frozen on the previous
+                // song's coordinates. Force a re-scroll on lyrics change so
+                // a new song always starts centred on its active line —
+                // matches the seek-to-fix behaviour the user observed.
+                // Also reset the manual-scroll lock: dragging through song A
+                // shouldn't suppress auto-scroll on song B.
+                scrollResumeTask?.cancel()
+                userIsScrolling = false
+                // 50ms delay matches .onAppear pattern — gives the LazyVStack
+                // a frame to materialise the new line views before scrollTo
+                // looks them up.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(Anim.content) {
+                        if let id = activeLineId {
+                            proxy.scrollTo(id, anchor: .center)
+                        } else if let firstId = newLyrics.lines.first?.id {
+                            proxy.scrollTo(firstId, anchor: .top)
+                        }
+                    }
+                }
+            }
         }
     }
 
