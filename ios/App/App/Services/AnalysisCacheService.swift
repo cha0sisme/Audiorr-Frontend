@@ -297,11 +297,26 @@ actor AnalysisCacheService {
             analysis.speechSegments = segments.map { (start: $0.start, end: $0.end) }
         }
 
-        // Extract chorus — prefer diagnostics chorus_structure, fall back to top-level structure
+        // Extract chorus — prefer diagnostics chorus_structure, fall back to top-level structure.
+        // Backend labels like "pre_chorus" / "pre-chorus" must be skipped: matching them as
+        // "chorus" placed chorusStartTime BEFORE introEndTime in 3 of the v6 log transitions
+        // (Ghost Town, WAKARIMASEN, Midnight Tokyo). Also require startTime ≥ introEnd - 2s
+        // so a hook segment that the backend mislabels can't trip the heuristic.
         let chorusSource = result.chorusStructure ?? result.structure
-        if let structure = chorusSource,
-           let chorus = structure.first(where: { $0.label.lowercased().contains("chorus") }) {
-            analysis.chorusStartTime = chorus.startTime
+        if let structure = chorusSource {
+            let introEnd = analysis.introEndTime
+            let chorus = structure.first(where: { seg in
+                let label = seg.label.lowercased()
+                let isChorus = label.contains("chorus")
+                let isPreChorus = label.contains("pre")
+                return isChorus && !isPreChorus && seg.startTime >= introEnd - 2
+            }) ?? structure.first(where: { seg in
+                let label = seg.label.lowercased()
+                return label.contains("chorus") && !label.contains("pre")
+            })
+            if let chorus {
+                analysis.chorusStartTime = chorus.startTime
+            }
         }
 
         // Extract phrase boundaries from structure
