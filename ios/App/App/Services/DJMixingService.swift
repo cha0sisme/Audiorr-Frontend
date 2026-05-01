@@ -1201,17 +1201,22 @@ enum DJMixingService {
             a.outroStartTime = a.lastVocalTime
         }
 
-        // ── 0.5. Heuristic fallback for missing vocalStartTime ──
-        // Caches written before the v2 vocal detector arrive with vocalStartTime=0.
-        // Many routing branches (entry-point picker, vocalOverlapRisk, chorus-promotion,
-        // midScoop gating) gate on `vocalStartTime > 0` and silently degrade.
-        // When chorus is known and well past 0, infer vocal ≈ chorus - 8s — a typical
-        // verse length. Floors to 2s so we never claim vocals at t=0.
-        if a.vocalStartTime <= 0.001 && a.chorusStartTime > 8 {
-            let inferred = max(2.0, a.chorusStartTime - 8.0)
-            print("[DJMixingService] Sanitize: inferred vocalStartTime=\(String(format: "%.1f", inferred))s from chorusStart=\(String(format: "%.1f", a.chorusStartTime))s")
-            a.vocalStartTime = inferred
-        }
+        // ── 0.5. vocalStartTime semantics (post-backend confirmation 2026-05-01) ──
+        // Backend confirmed `vocalStartTime == 0` is LITERAL — the track has
+        // vocals from t=0. It's NOT a "value missing" sentinel. The earlier
+        // sanitize fallback (`vocalStart = chorus - 8`, commit 05d1565)
+        // assumed missing semantics and wrote synthetic values into a field
+        // that already had a valid meaning, which produced the BRINCANDO
+        // regression and other "B tarde" bugs (P0.1 mitigated downstream;
+        // removing the sanitize is the actual root-cause fix).
+        //
+        // With vocalStart=0 left intact, downstream paths that gate on
+        // `vocalStart > 0` correctly treat the track as "vocal at t=0 →
+        // no clean instrumental window" and fall back to heuristic
+        // (`introEndTimeHeuristic` → `speechSegments[0].start` → ML
+        // `introEndTime`). That fallback chain is the right behaviour for
+        // tracks with immediate vocals; it was being short-circuited by
+        // the inferred chorus-8s value.
 
         // ── 1. ML override cross-validation (FIRST — before any caps) ──
         // When the ML model overrode intro/outro values, cross-check with heuristics.
