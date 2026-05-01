@@ -1191,28 +1191,49 @@ class CrossfadeExecutor {
             return maxVolumeA * powf(0.0001 / maxVolumeA, cutP)
 
         case .eqMix, .beatMatchBlend:
-            // Gradual descent: A eases down to 65% by midpoint, then cos² drop.
-            // This gives B time to establish before A exits, avoiding the "cliff" effect.
-            // The EQ filters do most of the separation work — volume just needs a smooth handoff.
+            // Gradual descent: A eases down to 65% by midpoint, then cos² drop to a
+            // floor of 0.15 by progress=0.85, then exponential tail to ~0.
+            // Floor + tail keep A audible during the late-fade window where the v6
+            // log showed a -3 dB perceived dip (volA reaching 0 while B was still
+            // at ~70% of its target). cos² drop is preserved through 50–85% so the
+            // EQ filters still do the spectral handoff work.
             let holdLevel: Float = 0.65
             let holdEnd = 0.50
+            let dropEnd = 0.85
+            let floor: Float = 0.15
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)
-                // Smooth S-curve descent: gentle at start, steeper in middle, gentle at holdEnd
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
             }
-            // cos² drop: maintains equal-power with B's sin² ramp
-            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
-            let angle = dropP * .pi / 2.0
-            return maxVolumeA * holdLevel * cosf(angle) * cosf(angle)
+            if progress < dropEnd {
+                let dropP = Float((progress - holdEnd) / (dropEnd - holdEnd))
+                let angle = dropP * .pi / 2.0
+                let cosSq = cosf(angle) * cosf(angle)
+                return maxVolumeA * holdLevel * (floor + (1.0 - floor) * cosSq)
+            }
+            // Exponential tail: A from holdLevel*floor to ~0 over the last 15%.
+            // Continuous at dropEnd (powf evaluates to 1) and lands at maxVolumeA*0.0001
+            // by progress=1.0 — well below audibility, swap-safe.
+            let tailP = Float((progress - dropEnd) / (1.0 - dropEnd))
+            let tailFloor = holdLevel * floor
+            return maxVolumeA * tailFloor * powf(0.0001 / tailFloor, tailP)
 
         case .naturalBlend:
-            // Equal-power crossfade: smooth cos² curve the entire duration.
-            // No hold phase — A descends gradually from the start.
-            // Combined with B's sin² curve, total perceived loudness stays constant.
-            let angle = Float(progress) * .pi / 2.0
-            return maxVolumeA * cosf(angle) * cosf(angle)
+            // Equal-power crossfade with a low floor: cos² descent until 85%, then
+            // exponential tail. Without the floor, A reached values < 0.04 in the
+            // last third of the fade while B was still climbing, producing the
+            // perceived volume dip the user reported.
+            let dropEnd = 0.85
+            let floor: Float = 0.15
+            if progress < dropEnd {
+                let p = Float(progress / dropEnd)
+                let angle = p * .pi / 2.0
+                let cosSq = cosf(angle) * cosf(angle)
+                return maxVolumeA * (floor + (1.0 - floor) * cosSq)
+            }
+            let tailP = Float((progress - dropEnd) / (1.0 - dropEnd))
+            return maxVolumeA * floor * powf(0.0001 / floor, tailP)
 
         case .cleanHandoff:
             // Quasi-sequential: A descends with cos² over the first 65% of the
@@ -1271,18 +1292,27 @@ class CrossfadeExecutor {
             return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
 
         case .crossfade:
-            // Standard crossfade: gentle descent with S-curve character.
-            // A eases to 70% by 45%, then cos² drop for smooth power handoff.
+            // Standard crossfade with floor + tail (same shape as eqMix/beatMatchBlend
+            // but with a higher hold and a slightly earlier drop). Keeps A audible
+            // through the late fade so the combined power stays close to constant.
             let holdLevel: Float = 0.70
             let holdEnd = 0.45
+            let dropEnd = 0.85
+            let floor: Float = 0.15
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeA * (1.0 - (1.0 - holdLevel) * eased)
             }
-            let dropP = Float((progress - holdEnd) / (1.0 - holdEnd))
-            let angle = dropP * .pi / 2.0
-            return maxVolumeA * holdLevel * cosf(angle) * cosf(angle)
+            if progress < dropEnd {
+                let dropP = Float((progress - holdEnd) / (dropEnd - holdEnd))
+                let angle = dropP * .pi / 2.0
+                let cosSq = cosf(angle) * cosf(angle)
+                return maxVolumeA * holdLevel * (floor + (1.0 - floor) * cosSq)
+            }
+            let tailP = Float((progress - dropEnd) / (1.0 - dropEnd))
+            let tailFloor = holdLevel * floor
+            return maxVolumeA * tailFloor * powf(0.0001 / tailFloor, tailP)
 
         case .vinylStop:
             // Spin-down: A's volume drops cos² in parallel to its rate ramp
@@ -1373,17 +1403,18 @@ class CrossfadeExecutor {
             return maxVolumeB * (0.15 + 0.85 * eased)
 
         case .eqMix, .beatMatchBlend:
-            // Complementary to A's gradual descent (holdEnd=0.50):
-            // B eases to 50% by midpoint (audible, establishes presence),
-            // then sin² ramp to 100% as A's cos² drops — constant total power.
-            let rampStart = 0.45  // B starts ramping slightly before A's drop phase
+            // Complementary to A's gradual descent (holdEnd=0.50). rampStart pulled
+            // earlier (0.45 → 0.35) so B reaches its 50% midpoint before A starts
+            // dropping — addresses the v6 log finding that combined power dipped
+            // ~3 dB during the late fade because B was still climbing while A was
+            // already near zero.
+            let rampStart = 0.35
             if progress < rampStart {
                 let p = Float(progress / rampStart)
                 let target: Float = 0.50
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
             }
-            // sin² ramp complementary to A's cos²
             let rampP = Float((progress - rampStart) / (1.0 - rampStart))
             let angle = rampP * .pi / 2.0
             let sinSq = sinf(angle) * sinf(angle)
@@ -1451,19 +1482,21 @@ class CrossfadeExecutor {
             return maxVolumeB
 
         case .crossfade:
-            // Complementary to A's gradual descent (holdEnd=0.45):
-            // B eases to 45% by 40%, then sin² ramp for smooth power handoff.
-            let rampStart = 0.40
+            // Complementary to A's gradual descent (holdEnd=0.45). rampStart pulled
+            // earlier (0.40 → 0.30) and midpoint target raised (0.45 → 0.50) so B
+            // is established by the time A enters its drop phase. Same rationale
+            // as eqMix/beatMatchBlend.
+            let rampStart = 0.30
             if progress < rampStart {
                 let p = Float(progress / rampStart)
-                let target: Float = 0.45
+                let target: Float = 0.50
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
             }
             let rampP = Float((progress - rampStart) / (1.0 - rampStart))
             let angle = rampP * .pi / 2.0
             let sinSq = sinf(angle) * sinf(angle)
-            return maxVolumeB * (0.45 + 0.55 * sinSq)
+            return maxVolumeB * (0.50 + 0.50 * sinSq)
 
         case .vinylStop:
             // Silent until A's rate has fully wound down (aFadeEnd=0.225) plus
