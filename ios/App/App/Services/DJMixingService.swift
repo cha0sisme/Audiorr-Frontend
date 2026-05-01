@@ -661,7 +661,8 @@ enum DJMixingService {
             fadeDuration: effectiveFadeDuration,
             entryPoint: finalEntry,
             transitionType: transition.type,
-            noRealOutro: noRealOutro
+            noRealOutro: noRealOutro,
+            transitionReason: transition.reason
         )
 
         // ── 8. Time-stretch ──
@@ -1843,7 +1844,7 @@ enum DJMixingService {
         let reason: String
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "") -> AnticipationResult {
         // No-real-outro guard: A is in full groove until the very end, so
         // anticipation (which pre-mutes A for 2-4s before the fade starts)
         // would cut material the listener is still expecting. This is one of
@@ -1852,6 +1853,22 @@ enum DJMixingService {
         if noRealOutro {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: A sin outro real (groove hasta el final)")
+        }
+
+        // Safety-forced CUT (Vocal Trainwreck / Polirritmia): the goal is to
+        // evade a clash, not to artistically preview B. The 4s anticipation
+        // tease still arms preset=anticipation and emits filtered B at low
+        // gain before the kick — perceived as "B con fade innecesario" in
+        // Can I Kick It?→Munch and THE zone~→Girls Want Girls.
+        // Outro-instrumental + B-abrupta CUT keeps its tease (T19 AIR FORCE
+        // → Can I Kick It? 10/10 depends on this — its reason does not
+        // contain these markers).
+        if transitionType == .cut && (
+            transitionReason.contains("Vocal Trainwreck") ||
+            transitionReason.contains("Polirritmia")
+        ) {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: CUT forzado por safety (no tease)")
         }
 
         let hasEnoughIntro = entryPoint >= 5
