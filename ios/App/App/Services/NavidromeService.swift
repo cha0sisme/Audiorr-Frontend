@@ -14,6 +14,14 @@ final class NavidromeService: ObservableObject {
     private let cacheTTL: TimeInterval = 300  // 5 minutes
     private let maxCacheSize = 200
 
+    /// Playlist IDs currently mid-HEAD in `revalidateCoverETags`. Two refresh
+    /// triggers (foreground + view task) firing within the same handful of ms
+    /// would otherwise both build their `needsCheck` lists before either had
+    /// set the TTL tick, double-HEADing each playlist. Set membership is
+    /// inserted under the lock, removed once the result is registered.
+    private var inflightCoverETagChecks: Set<String> = []
+    private let inflightCoverETagLock = NSLock()
+
     private func cacheGet(_ key: String) -> Any? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
@@ -715,37 +723,218 @@ final class NavidromeService: ObservableObject {
         return try? JSONDecoder().decode(GenerateMixesResult.self, from: data)
     }
 
-    /// Fetch cover content hashes from backend (smart-playlists + daily-mixes)
-    /// and register them in PlaylistCoverCache for immutable URL caching.
+    /// Refresh cover content hashes for every playlist with a custom backend cover.
+    ///
+    /// Two layers:
+    ///   1. Bulk JSON endpoints — `/api/smart-playlists` and `/api/daily-mixes`
+    ///      return `coverContentHash` per playlist. One HTTP call covers many.
+    ///   2. ETag fallback — for editorial / Spotify-synced / dynamic / user
+    ///      playlists not listed in the bulk endpoints, do a HEAD on each
+    ///      `/api/playlists/{id}/cover.png` and read the `ETag` (or
+    ///      `Last-Modified`) header. The bulk endpoints don't carry these so
+    ///      without this layer their covers go stale forever after backend
+    ///      regeneration. HEADs are concurrency-limited (8 parallel),
+    ///      per-playlist 60 s TTL'd, and individual failures don't block the
+    ///      others.
+    ///
+    /// Layer 1 always runs first; only IDs not already covered there are
+    /// HEAD-checked. Hash registration is single-pass via
+    /// `registerContentHashes`, which compares old vs new and triggers cover
+    /// invalidation in subscribed views.
     func refreshPlaylistCoverHashes() async {
-        guard let base = backendURL() else { return }
+        guard let base = backendURL() else {
+            print("[NavidromeService] refreshPlaylistCoverHashes: no backend URL configured")
+            return
+        }
         var hashes: [String: String] = [:]
+        var coveredIds = Set<String>()
 
-        // Smart playlists
+        // ── Layer 1a: Smart playlists JSON ──
         if let url = URL(string: "\(base)/api/smart-playlists"),
-           let request = backendRequest(url: url),
-           let (data, _) = try? await URLSession.shared.data(for: request),
-           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let playlists = dict["playlists"] as? [[String: Any]] {
-            for pl in playlists {
-                if let id = pl["navidromeId"] as? String,
-                   let hash = pl["coverContentHash"] as? String {
+           let request = backendRequest(url: url) {
+            do {
+                let (data, _) = try await URLSession.shared.data(for: request)
+                if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let playlists = dict["playlists"] as? [[String: Any]] {
+                    var withHash = 0
+                    for pl in playlists {
+                        if let id = pl["navidromeId"] as? String {
+                            coveredIds.insert(id)
+                            if let hash = pl["coverContentHash"] as? String, !hash.isEmpty {
+                                hashes[id] = hash
+                                withHash += 1
+                            }
+                        }
+                    }
+                    print("[NavidromeService] smart-playlists: \(playlists.count) playlists, \(withHash) with coverContentHash")
+                } else {
+                    print("[NavidromeService] smart-playlists: response shape unexpected (no `playlists` array)")
+                }
+            } catch {
+                print("[NavidromeService] smart-playlists fetch failed: \(error)")
+            }
+        }
+
+        // ── Layer 1b: Daily mixes JSON ──
+        let mixes = await getDailyMixes()
+        var mixWithHash = 0
+        for mix in mixes {
+            if let id = mix.navidromeId {
+                coveredIds.insert(id)
+                if let hash = mix.coverContentHash, !hash.isEmpty {
                     hashes[id] = hash
+                    mixWithHash += 1
                 }
             }
         }
-
-        // Daily mixes (already decoded with coverContentHash field)
-        let mixes = await getDailyMixes()
-        for mix in mixes {
-            if let id = mix.navidromeId, let hash = mix.coverContentHash {
-                hashes[id] = hash
-            }
-        }
+        print("[NavidromeService] daily-mixes: \(mixes.count) playlists, \(mixWithHash) with coverContentHash")
 
         if !hashes.isEmpty {
             PlaylistCoverCache.shared.registerContentHashes(hashes)
         }
+
+        // ── Layer 2: ETag fallback for playlists not in bulk endpoints ──
+        // Editorial, Spotify-synced, dynamic homepage sections, and user-created
+        // playlists with backend-rendered covers all live here. Without ETag
+        // checks the only way to detect a backend regeneration would be a cold
+        // launch with cleared URLCache.
+        if let allPlaylists = try? await getPlaylists() {
+            let uncovered = allPlaylists.map { $0.id }.filter { !coveredIds.contains($0) }
+            if !uncovered.isEmpty {
+                await revalidateCoverETags(playlistIds: uncovered, base: base)
+            }
+        }
+    }
+
+    /// HEAD-based ETag revalidation for playlists with backend-rendered covers
+    /// that the JSON endpoints don't list. Safe to call frequently — a 60 s
+    /// per-playlist TTL skips repeated checks, parallelism is capped at 8,
+    /// and individual network failures (timeout, 5xx) don't propagate.
+    private func revalidateCoverETags(playlistIds: [String], base: String) async {
+        // Two-stage filter, atomic against concurrent callers:
+        //   1. TTL cache (cacheGet) — checked recently, not by us.
+        //   2. inflight set under lock — currently being HEAD-checked by
+        //      another invocation of this function. Insert here so a parallel
+        //      caller arriving microseconds later sees us already on it.
+        let needsCheck: [String] = {
+            var picked: [String] = []
+            inflightCoverETagLock.lock()
+            defer { inflightCoverETagLock.unlock() }
+            for id in playlistIds {
+                if cacheGet("coverEtag.tick:\(id)") != nil { continue }
+                if inflightCoverETagChecks.contains(id) { continue }
+                inflightCoverETagChecks.insert(id)
+                picked.append(id)
+            }
+            return picked
+        }()
+        guard !needsCheck.isEmpty else {
+            print("[NavidromeService] ETag revalidation: all \(playlistIds.count) playlists checked recently or in-flight — skipping HEAD")
+            return
+        }
+        print("[NavidromeService] ETag revalidation: HEAD on \(needsCheck.count) playlists (\(playlistIds.count - needsCheck.count) skipped by TTL/inflight)")
+        defer {
+            // Always release the inflight slots, even if the task group above
+            // throws or this function is cancelled mid-flight.
+            inflightCoverETagLock.lock()
+            for id in needsCheck { inflightCoverETagChecks.remove(id) }
+            inflightCoverETagLock.unlock()
+        }
+
+        var newHashes: [String: String] = [:]
+        var ok = 0, missing = 0, failed = 0
+        let maxConcurrent = 8
+
+        await withTaskGroup(of: (id: String, result: ETagResult).self) { group in
+            var iterator = needsCheck.makeIterator()
+            var inflight = 0
+
+            // Seed the worker pool
+            while inflight < maxConcurrent, let id = iterator.next() {
+                inflight += 1
+                let next = id
+                group.addTask {
+                    let result = await self.fetchCoverETag(playlistId: next, base: base)
+                    return (next, result)
+                }
+            }
+
+            while let (id, result) = await group.next() {
+                // Mark this playlist as checked regardless of outcome — the TTL
+                // throttles all retries equally so a backend that's transiently
+                // 5xx doesn't get hammered.
+                cacheSet("coverEtag.tick:\(id)", value: true, ttl: 60)
+                switch result {
+                case .ok(let etag):
+                    newHashes[id] = etag
+                    ok += 1
+                case .noCover:
+                    missing += 1
+                case .failed:
+                    failed += 1
+                }
+                if let nextId = iterator.next() {
+                    let next = nextId
+                    group.addTask {
+                        let result = await self.fetchCoverETag(playlistId: next, base: base)
+                        return (next, result)
+                    }
+                }
+            }
+        }
+
+        print("[NavidromeService] ETag revalidation done: \(ok) with cover, \(missing) without, \(failed) failed")
+        if !newHashes.isEmpty {
+            PlaylistCoverCache.shared.registerContentHashes(newHashes)
+        }
+    }
+
+    private enum ETagResult {
+        case ok(String)
+        /// Server returned 404 — no custom backend cover for this playlist.
+        /// The Navidrome fallback in `loadCover` will surface its art.
+        case noCover
+        /// Network error or non-200/404 response. Don't update the hash; let
+        /// the next refresh cycle retry.
+        case failed
+    }
+
+    private func fetchCoverETag(playlistId: String, base: String) async -> ETagResult {
+        guard let url = URL(string: "\(base)/api/playlists/\(playlistId)/cover.png"),
+              var request = backendRequest(url: url, method: "HEAD") else {
+            return .failed
+        }
+        request.timeoutInterval = 10
+
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return .failed
+        }
+        if http.statusCode == 404 { return .noCover }
+        guard http.statusCode == 200 else { return .failed }
+
+        // Prefer ETag (content-derived hash). Fall back to Last-Modified for
+        // proxies that strip ETag. URL-encode the value so weak ETags
+        // (`W/"abc/def"`) and HTTP-date Last-Modified strings (`Sun, 06 Nov
+        // 1994 08:49:37 GMT`) survive concatenation into the cover URL.
+        // Stable input string → stable encoded output, so the hash registered
+        // here matches what's compared on the next refresh cycle.
+        let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "+&="))
+        if let etag = http.value(forHTTPHeaderField: "ETag"), !etag.isEmpty {
+            let cleaned = etag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if let encoded = cleaned.addingPercentEncoding(withAllowedCharacters: allowed), !encoded.isEmpty {
+                return .ok(encoded)
+            }
+        }
+        if let lastMod = http.value(forHTTPHeaderField: "Last-Modified"), !lastMod.isEmpty {
+            if let encoded = lastMod.addingPercentEncoding(withAllowedCharacters: allowed), !encoded.isEmpty {
+                return .ok(encoded)
+            }
+        }
+        // 200 but no validators — server isn't helping us. Treat as failed so
+        // we retry rather than register an empty hash that would lock the
+        // current cover in place.
+        return .failed
     }
 
     /// Artist image URL from backend (Last.fm / Spotify).
