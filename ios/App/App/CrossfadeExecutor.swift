@@ -243,9 +243,14 @@ class CrossfadeExecutor {
 
     /// Drop-mix preset: aggressive HPF ramp on A pulling it out fast, B enters clean.
     /// Used for hip hop/R&B drops where B's intro is short and needs to hit immediately.
-    /// A sweeps 600→6000Hz in the fade window (fast, punchy), B bypassed via skipBFilters.
+    /// A sweeps 600→2500 Hz over the fade. The earlier 6000 Hz endFreq turned A
+    /// into a walkie-talkie for the last second or two (squabble up → Midnight
+    /// Tokyo in v6: hpA hit 5263 Hz at t+5s while volA was still 0.124 — the
+    /// listener heard A's filtered remnants louder than B's clean entry and
+    /// attributed the "filtered" sound to B). 2500 Hz still pulls A into the
+    /// upper mids without leaving an overly thin tail in the overlap window.
     static let presetDropMix = FilterPreset(
-        highpassA: .init(startFreq: 600, midFreq: 3000, endFreq: 6000, q: 1.3),
+        highpassA: .init(startFreq: 600, midFreq: 1500, endFreq: 2500, q: 1.3),
         highpassB: .init(startFreq: 200, midFreq: 100, endFreq: 40, q: 0.5),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -14, endGain: -22),
         lowshelfB: .init(frequency: 200, startGain: -10, midGain: -5, endGain: 0),
@@ -434,10 +439,11 @@ class CrossfadeExecutor {
         let isEnergyDown = config.energyB < config.energyA - 0.2
         // Both sides instrumental = clean transition, lighter filters suffice
         let bothInstrumental = config.isOutroInstrumental && config.isIntroInstrumental
+        let basePreset: FilterPreset
         if config.transitionType == .dropMix {
-            preset = Self.presetDropMix
+            basePreset = Self.presetDropMix
         } else if config.transitionType == .stemMix {
-            preset = Self.presetStemMix
+            basePreset = Self.presetStemMix
         } else if config.transitionType == .naturalBlend
                   || config.transitionType == .cleanHandoff
                   || config.transitionType == .vinylStop {
@@ -447,18 +453,51 @@ class CrossfadeExecutor {
             // applyFiltersA early return) so the preset choice here only seeds
             // initial coefficients, which never get exercised. The vinyl-stop
             // gesture is the rate ramp; we don't add filter sweeps on top.
-            preset = Self.presetGentle
+            basePreset = Self.presetGentle
         } else if config.needsAnticipation {
-            preset = Self.presetAnticipation
+            basePreset = Self.presetAnticipation
         } else if isEnergyDown {
-            preset = Self.presetEnergyDown
+            basePreset = Self.presetEnergyDown
         } else if bothInstrumental {
             // Instrumental-to-instrumental: no vocal clash risk, use normal (lighter) preset
-            preset = Self.presetNormal
+            basePreset = Self.presetNormal
         } else if config.useAggressiveFilters {
-            preset = Self.presetAggressive
+            basePreset = Self.presetAggressive
         } else {
-            preset = Self.presetNormal
+            basePreset = Self.presetNormal
+        }
+
+        // ── B-clean override: relax highpassB / lowshelfB on instrumental intros ──
+        // The HPF on B (start 400-800 Hz) and the bass shelf cut (-8 to -12 dB)
+        // exist to prevent vocal/bass clash. When B's intro is purely
+        // instrumental there is no clash to prevent — the filtering just makes
+        // B sound thin and "telephonic" on entry (Ghost Town and similar in v6).
+        // Skip for transition types that already shape B differently
+        // (anticipation, stemMix, dropMix) or bypass B filters anyway
+        // (cleanHandoff, vinylStop).
+        let bCleanEligible: Bool = {
+            switch config.transitionType {
+            case .crossfade, .eqMix, .beatMatchBlend, .naturalBlend, .fadeOutACutB, .cutAFadeInB, .cut:
+                return config.isIntroInstrumental && !config.skipBFilters
+            case .stemMix, .dropMix, .cleanHandoff, .vinylStop:
+                return false
+            }
+        }()
+        if bCleanEligible {
+            let hpQ = basePreset.highpassB.q
+            let lsB = basePreset.lowshelfB
+            preset = FilterPreset(
+                highpassA: basePreset.highpassA,
+                highpassB: .init(startFreq: 150, midFreq: 100, endFreq: 40, q: hpQ),
+                lowshelfA: basePreset.lowshelfA,
+                lowshelfB: .init(frequency: lsB.frequency, startGain: -3, midGain: -2, endGain: 0),
+                lowpassA: basePreset.lowpassA,
+                midScoopA: basePreset.midScoopA,
+                highShelfA: basePreset.highShelfA
+            )
+            print("[CrossfadeExecutor] 🪶 B intro instrumental — relaxed highpassB → 150 Hz, lowshelfB → -3 dB")
+        } else {
+            preset = basePreset
         }
 
         // Energy compensation: if B is much quieter, boost its volume slightly
