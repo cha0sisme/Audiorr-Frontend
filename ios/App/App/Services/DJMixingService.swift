@@ -684,19 +684,28 @@ enum DJMixingService {
             || transition.type == .cleanHandoff
             || transition.type == .vinylStop
 
-        // ── 8b. Aggressive both sides override ──
-        // When A goes through the aggressive preset (notchSweep + dynQ + steep
-        // HPF ramp) AND B would receive parallel filtering on a high-energy
-        // bailable pair, the combined density reads as "el algoritmo está
-        // manipulando demasiado" — Icon → Off The Grid case from the audit.
-        // Stripping B's filters lets A's gesture stay the focal point and
-        // B enters clean. Conditions are tight: aggressive preset + danceable
-        // + both lados energetic — pop / R&B ambient pairs don't trip this.
+        // ── 8b. Aggressive preset gating ──
+        // The aggressive preset stacks bassKill + midScoop + notchSweep + dynamicQ
+        // and pulls hpB to 800 Hz with lsB=-12 dB. That density only works when
+        // both tracks are energetic enough to share the carved-up spectrum.
+        // Two cases force skipBFilters:
+        //   (a) Original: A and B both energetic + danceable → A's gesture is the
+        //       focal point, let B enter clean (Icon → Off The Grid).
+        //   (b) New: A energetic but B almost silent (energyB < 0.15) → applying
+        //       notch + dynamicQ + bassKill on top of a quiet entrance leaves it
+        //       sounding "synthetic, filtered, dizzy" (ILoveUIHateU → WAKARIMASEN
+        //       in v6: energyB=0.11, danceability=0.56). User reported the entry
+        //       as "filtros mal en B"; the gate now bails B out.
+        // Danceability threshold lowered 0.60 → 0.55 so case (b) catches mid-
+        // danceability R&B pairs that were excluded under the previous 0.60 cap.
+        let bothEnergetic = profile.energyA > 0.20 && profile.energyB > 0.20
+        let aOnlyEnergetic = profile.energyA > 0.25 && profile.energyB < 0.15
         if filter.useAggressiveFilters
-            && profile.avgDanceability > 0.6
-            && profile.energyA > 0.20 && profile.energyB > 0.20
+            && profile.avgDanceability > 0.55
+            && (bothEnergetic || aOnlyEnergetic)
             && !skipBFilters {
-            print("[DJMixingService] 🎚️ Aggressive both sides: forcing skipBFilters (dance=\(String(format: "%.2f", profile.avgDanceability)), energyA=\(String(format: "%.2f", profile.energyA)), energyB=\(String(format: "%.2f", profile.energyB)))")
+            let mode = bothEnergetic ? "both-energetic" : "A-only-energetic"
+            print("[DJMixingService] 🎚️ Aggressive \(mode): forcing skipBFilters (dance=\(String(format: "%.2f", profile.avgDanceability)), energyA=\(String(format: "%.2f", profile.energyA)), energyB=\(String(format: "%.2f", profile.energyB)))")
             skipBFilters = true
         }
 
@@ -1670,13 +1679,19 @@ enum DJMixingService {
             bassKillCompatibleType = false
         }
 
+        // Both sides need ≥ 0.20 energy: bassKill exists to prevent "double-bombo"
+        // when both tracks have a kicking low-end at the same time. From Florida
+        // With Love (energyA=0.06) → Ghost Town (energyB=0.14) had bassKill on
+        // and B entering with a -8 dB shelf — neither side had enough bass for
+        // the kill to make sense. The user heard it as "B sounds telephonic".
         if bassKillCompatibleType
             && profile.bpmTrusted
             && profile.avgDanceability > 0.5
             && fadeDuration > 4.0
+            && profile.energyA >= 0.20 && profile.energyB >= 0.20
             && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow == .energyUp)) {
             useBassKill = true
-            reasons.append("bassKill: dance=\(String(format: "%.2f", profile.avgDanceability)) bpmOK")
+            reasons.append("bassKill: dance=\(String(format: "%.2f", profile.avgDanceability)) energyA=\(String(format: "%.2f", profile.energyA)) energyB=\(String(format: "%.2f", profile.energyB))")
         }
 
         // ── Dynamic Q Resonance: bell-shaped Q sweep on highpass ──
