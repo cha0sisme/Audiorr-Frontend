@@ -312,18 +312,35 @@ enum DJMixingService {
         let hasNext = nextAnalysis != nil && nextAnalysis?.hasError != true
 
         // ── Energy (per-section preferred) ──
-        let eA: Double
-        if let cur = currentAnalysis, hasCurrent, cur.hasEnergyProfile {
-            eA = cur.energyOutro
-        } else {
-            eA = hasCurrent ? (currentAnalysis?.energy ?? 0.5) : 0.5
-        }
-        let eB: Double
-        if let nxt = nextAnalysis, hasNext, nxt.hasEnergyProfile {
-            eB = nxt.energyIntro
-        } else {
-            eB = hasNext ? (nextAnalysis?.energy ?? 0.5) : 0.5
-        }
+        // Backend bug pendiente de fix: 6/49 pistas en log v7 reportan
+        // energy/energyOutro = 0.00 con audio claramente audible (D Rose,
+        // LIKE WEEZY, Champion, Vamp Anthem, Down Hill, God Is). El integrador
+        // RMS sale en 0 cuando deberia normalizar — el backend NO ha
+        // confirmado fix para este. Mientras tanto, floor a 0.10 cuando hay
+        // duracion suficiente para asumir que la pista tiene contenido real.
+        // 0.10 es el limite inferior plausible para musica con audio audible
+        // y NO afecta tracks con energy=0.10 reales (que ya quedaban abajo).
+        let eA: Double = {
+            let raw: Double
+            if let cur = currentAnalysis, hasCurrent, cur.hasEnergyProfile {
+                raw = cur.energyOutro
+            } else {
+                raw = hasCurrent ? (currentAnalysis?.energy ?? 0.5) : 0.5
+            }
+            // Floor solo si raw es claramente bug (≤ 0.02) Y hay evidencia
+            // de pista real (duracion > 30s). Pistas <30s pueden ser jingles
+            // / SFX donde energy=0 es legitimo.
+            return raw <= 0.02 && bufferADuration > 30 ? 0.10 : raw
+        }()
+        let eB: Double = {
+            let raw: Double
+            if let nxt = nextAnalysis, hasNext, nxt.hasEnergyProfile {
+                raw = nxt.energyIntro
+            } else {
+                raw = hasNext ? (nextAnalysis?.energy ?? 0.5) : 0.5
+            }
+            return raw <= 0.02 && bufferBDuration > 30 ? 0.10 : raw
+        }()
         let gap = eB - eA
         let flow: EnergyFlow
         if gap > 0.15 { flow = .energyUp }
@@ -521,7 +538,23 @@ enum DJMixingService {
             // Confirm with energy: short outro window + still-energetic =
             // groove vivo, not a 3-second decay. energyOutro is preferred when
             // available; energy global is the fallback.
-            let outroEnergy = cur.hasEnergyProfile ? cur.energyOutro : cur.energy
+            // Backend bug guard: when energyOutro collapses to ≤0.02, look at
+            // cur.energy as second opinion before assuming bug. Only activate
+            // the "groove vivo" default when BOTH signals are suspiciously low
+            // (typical of the integrator-fail bug, not legit silent outros).
+            // Avoids false positive on baladas with intentional silent fade.
+            let primary = cur.hasEnergyProfile ? cur.energyOutro : cur.energy
+            let outroEnergy: Double
+            if primary > 0.02 {
+                outroEnergy = primary
+            } else if cur.hasEnergyProfile && cur.energy > 0.02 {
+                // energyOutro=0 but global energy>0 — use global as proxy
+                outroEnergy = cur.energy
+            } else {
+                // Both signals zero — true silent track OR backend bug.
+                // Don't assume bug: respect the data and treat as quiet outro.
+                outroEnergy = primary
+            }
             return outroEnergy > 0.15
         }()
 
