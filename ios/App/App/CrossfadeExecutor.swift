@@ -1284,9 +1284,16 @@ class CrossfadeExecutor {
             // over "musical respiro", so this trades the sequential feel for a
             // brief audible blend. A still reaches 0 at progress=0.70, leaving
             // 30% of the fade window for DSP residue to clear before the swap.
-            let aFadeEnd = 0.70
-            if progress < aFadeEnd {
-                let p = Float(progress / aFadeEnd)
+            //
+            // Low-energy A extension: when A is quiet (energyA<0.20, e.g. Suge
+            // → Congratulations: energyA=0.16, fade=3.5s), the 0.70 ceiling
+            // collapses A's tail in ~2.5s — that drop reads as cut-off on a
+            // gentle outro. Push the ceiling to 0.85 so A descends more
+            // gradually; B's sin ramp from 0.45 still keeps RMS ≥ 0.4 in the
+            // overlap zone.
+            let aFadeEnd: Float = config.energyA < 0.20 ? 0.85 : 0.70
+            if progress < Double(aFadeEnd) {
+                let p = Float(progress / Double(aFadeEnd))
                 let angle = p * .pi / 2.0
                 return maxVolumeA * cosf(angle)
             }
