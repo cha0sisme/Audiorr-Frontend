@@ -1017,6 +1017,12 @@ enum DJMixingService {
             return 0
         }()
 
+        // Margen 2s antes de vocalStart — vocalStartTime es "primer evento
+        // vocal" (grito, coro, sample) no "primer verso". Entrar 2s antes
+        // deja que el evento surja al fadear. Ver calculatePunchEntry para
+        // contexto completo.
+        let vocalEntryTarget = max(2, vocalStart - 2)
+
         switch profile.energyFlow {
         case .energyUp:
             // Energy rising (A chill → B hot): prefer chorus or vocalStart for impact.
@@ -1025,8 +1031,8 @@ enum DJMixingService {
                 print("[DJMixingService] 🔥 Dramatic UP: chorus entry at \(String(format: "%.1f", chorusStart))s")
                 return chorusStart
             } else if vocalStart > 3 {
-                print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalStart))s")
-                return vocalStart
+                print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalEntryTarget))s (vocal at \(String(format: "%.1f", vocalStart))s -2s margin)")
+                return vocalEntryTarget
             } else if entryRef > 3 {
                 return entryRef
             } else {
@@ -1043,7 +1049,7 @@ enum DJMixingService {
         case .steady:
             // Harmonic clash with steady energy: moderate entry, avoid extending overlap.
             if vocalStart > 3 {
-                return vocalStart
+                return vocalEntryTarget
             } else if entryRef > 3 {
                 return entryRef
             } else {
@@ -1068,7 +1074,20 @@ enum DJMixingService {
         let vocalStart = next.vocalStartTime ?? 0
         let chorusStart = next.chorusStartTime
 
-        // Cross-validate intro/vocal timing
+        // Early-vocal-in-intro detection.
+        //
+        // Originally a "data corruption" guard ("vocal way before intro_end →
+        // suspicious"). Backend (2026-05-01) clarified that this is a LEGITIMATE
+        // case: vocalStartTime is the first vocal EVENT (grito, coro polifónico,
+        // sample, ad-lib, vocoder), not the first verse — and intros frequently
+        // contain such events while the structural intro continues afterwards.
+        // Example: ROSALÍA "Focu 'ranni" — vocalStart=9.6s (coros), introEnd=14.7s.
+        //
+        // Behaviour stays the same: when this fires, downstream branches prefer
+        // chorusStart over vocalStart as the entry target. That's still musically
+        // correct — the chorus is a stronger landing point than a coro/ad-lib in
+        // the intro. The flag name is kept for backward-compat with existing
+        // print logs and reasoning chains.
         let hasReliableIntro = next.hasIntroData && introEnd > 3
         let introVocalDiverge: Bool = {
             guard hasReliableIntro, vocalStart > 0 else { return false }
@@ -1076,7 +1095,7 @@ enum DJMixingService {
         }()
 
         if introVocalDiverge {
-            print("[DJMixingService] ⚠️ Entry confidence low: introEnd=\(String(format: "%.1f", introEnd))s but vocalStart=\(String(format: "%.1f", vocalStart))s (diverge >8s)")
+            print("[DJMixingService] 🎤 Early vocal in intro: introEnd=\(String(format: "%.1f", introEnd))s vocalStart=\(String(format: "%.1f", vocalStart))s — preferring chorus over vocalStart as entry target")
         }
 
         // ── Chorus-mislabeled safeguard ──
@@ -1181,16 +1200,25 @@ enum DJMixingService {
         // with immediate vocals. entryReference uses the fallback chain:
         // vocalStartTime → speechSegments[0] → introEndTime.
 
+        // Margen 2s antes de vocalStart (backend confirmation 2026-05-01):
+        // vocalStartTime es "primer evento vocal", no "primer verso" — puede
+        // ser un grito ("Beat it!"), un coro polifónico, un sample vocal, etc.
+        // Entrar EXACTAMENTE en ese momento se siente abrupto. Entrar 2s antes
+        // deja que el evento vocal surja al fadear, comportamiento DJ humano.
+        // Floor a 2s para no forzar entry pre-musical en pistas con
+        // vocalStart bajo (e.g. ad-lib temprano a t=4 → entry=2 mejor que 0).
+        let vocalEntryTarget = max(2, vocalStart - 2)
+
         if profile.styleAffinity > 0.7 {
             // Same "world" — go for the most impactful entry
             if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
-                entry = vocalStart
+                entry = vocalEntryTarget
             } else if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
             } else if chorusStart > 4 {
                 entry = chorusStart
             } else if vocalStartReliable && vocalStart > 2 {
-                entry = vocalStart
+                entry = vocalEntryTarget
             } else if entryReference > 3 {
                 entry = entryReference
             } else {
@@ -1201,9 +1229,9 @@ enum DJMixingService {
             if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
             } else if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
-                entry = vocalStart
+                entry = vocalEntryTarget
             } else if vocalStartReliable && vocalStart > 2 {
-                entry = vocalStart
+                entry = vocalEntryTarget
             } else if entryReference > 3 {
                 entry = entryReference
             } else {
