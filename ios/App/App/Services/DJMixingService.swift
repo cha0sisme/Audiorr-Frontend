@@ -829,9 +829,36 @@ enum DJMixingService {
         // ── Character-driven entry strategy ──
         switch profile.character {
         case .minimal:
-            // Both low energy — very early entry, invisible handoff.
-            // No structural targeting at all. B plays from the beginning.
+            // Both low energy — gentle handoff. Previously hardcoded to ~2.0s,
+            // which dropped the listener mid-instrumental-intro of B (Awful
+            // Things → DILEMMA: entry=2.0s but chorus=13.7s; Gyalchester →
+            // Father Stretch: entry=2.0s but chorus=51s after a 33s intro).
+            // Pick a structural landmark when one is reasonable: prefer the
+            // heuristic intro end (percussive/energy-based, robust against
+            // backend mislabeling) so B enters at the start of "real content"
+            // rather than at file t=0.
             let earlyEntry = min(2.0, bufferDuration * config.fallbackPercent)
+            // An early chorus (<8s) means real content starts almost
+            // immediately — even a "long" introEndHeuristic is suspect in
+            // that case (Vamp Anthem: chorus=4.7s but heuristic=30.7s).
+            // Don't trust the heuristic when the chorus contradicts it.
+            let chorusEarly = next.chorusStartTime > 0 && next.chorusStartTime < 8
+            let candidates: [(Double, String)] = {
+                var c: [(Double, String)] = []
+                if let h = next.introEndTimeHeuristic, h > 4, h < 35, !chorusEarly {
+                    c.append((max(earlyEntry, h - 1.0), "introEndHeuristic"))
+                }
+                if next.chorusStartTime > 5, next.chorusStartTime < 35,
+                   next.chorusStartTime > earlyEntry + 3 {
+                    c.append((max(earlyEntry, next.chorusStartTime - 2.0), "chorus-aligned"))
+                }
+                return c
+            }()
+            if let pick = candidates.min(by: { $0.0 < $1.0 }) {
+                entryPoint = max(0, min(pick.0, bufferDuration - 1))
+                print("[DJMixingService] 🌙 Minimal+\(pick.1): entry=\(String(format: "%.1f", entryPoint))s (low energy + structural target)")
+                return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (\(pick.1))", usedFallback: false, isBeatSynced: false)
+            }
             entryPoint = max(0, earlyEntry)
             print("[DJMixingService] 🌙 Minimal: entry=\(String(format: "%.1f", entryPoint))s (both low energy, gentle handoff)")
             return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (low energy)", usedFallback: false, isBeatSynced: false)
