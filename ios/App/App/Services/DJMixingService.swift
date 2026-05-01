@@ -722,6 +722,28 @@ enum DJMixingService {
             skipBFilters = true
         }
 
+        // ── 8c. Quiet-B gate when B is being filtered hard ──
+        // anticipation/aggressive presets carve B's spectrum (highpass ramp,
+        // bass shelf -12 dB, optional mid-scoop / dynamicQ). When B is quiet
+        // (energyB < 0.15) AND not strongly danceable (<0.70), or borderline
+        // quiet on a low-dance pair, those filters land as "filtered fade-in"
+        // instead of "DJ technique" — user reported "B con fade innecesario"
+        // in: D Rose→PRIDE., PRIDE.→New Magic Wand, Empty→Leave Me Alone,
+        // The Alchemist.→Suge.
+        // Threshold tuned to preserve the joyas (T19 AIR FORCE→Can I Kick:
+        // dance=0.96, T28 BOMB→No Stylist: dance=0.81, T31 Silent Hill→2024:
+        // energyB=0.24).
+        let bQuietNotDanceable = profile.energyB < 0.15 && profile.avgDanceability < 0.70
+        let bMidQuietLowDance = profile.energyB <= 0.18 && profile.avgDanceability < 0.50
+        let bIsBeingFiltered = anticipation.needsAnticipation || filter.useAggressiveFilters
+        if bIsBeingFiltered
+            && (bQuietNotDanceable || bMidQuietLowDance)
+            && !skipBFilters {
+            let mode = bQuietNotDanceable ? "B-quiet" : "B-mid-quiet+low-dance"
+            print("[DJMixingService] 🎚️ Quiet-B (\(mode)): forcing skipBFilters (energyB=\(String(format: "%.2f", profile.energyB)), dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            skipBFilters = true
+        }
+
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
 
