@@ -1740,8 +1740,18 @@ class CrossfadeExecutor {
         let totalFilterDur = timings.transitionEndTime - timings.filterStartTime
         guard totalFilterDur > 0 else { return }
 
-        // Pivot = where filters shift from gentle to aggressive (aligned with volume drop)
-        let pivotTime = timings.filterStartTime + totalFilterDur * 0.60
+        // Pivot = where filters shift from gentle barrido to aggressive top end.
+        // Lowered 0.60 → 0.40 (audit v8, 2026-05-04): with pivot=0.60 the start→mid
+        // sweep (subtle low frequencies) ate up the first 60% of the fade and the
+        // audible mid→end sweep (e.g. 2500→5000 Hz) was crammed into the last 40%
+        // — exactly when volA was already collapsing. User reported "filtros A
+        // cambian de repente" in 12+ transitions. Moving pivot to 0.40 stretches
+        // the audible portion of the sweep over the second 60% of the fade, where
+        // A is still loud enough to register the change as "DJ technique" rather
+        // than "filter dump at the death". Dynamic Q bell (line ~1776) intentionally
+        // left at center=0.55 — it now peaks slightly after the pivot, which is
+        // musically correct (Q resonance shines on the higher frequencies).
+        let pivotTime = timings.filterStartTime + totalFilterDur * 0.40
 
         // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
         var freqA: Float
