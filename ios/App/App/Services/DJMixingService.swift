@@ -774,16 +774,27 @@ enum DJMixingService {
         // ── 8c. Quiet-B gate when B is being filtered hard ──
         // anticipation/aggressive presets carve B's spectrum (highpass ramp,
         // bass shelf -12 dB, optional mid-scoop / dynamicQ). When B is quiet
-        // (energyB < 0.15) AND not strongly danceable (<0.70), or borderline
-        // quiet on a low-dance pair, those filters land as "filtered fade-in"
+        // AND not strongly danceable, those filters land as "filtered fade-in"
         // instead of "DJ technique" — user reported "B con fade innecesario"
         // in: D Rose→PRIDE., PRIDE.→New Magic Wand, Empty→Leave Me Alone,
-        // The Alchemist.→Suge.
-        // Threshold tuned to preserve the joyas (T19 AIR FORCE→Can I Kick:
-        // dance=0.96, T28 BOMB→No Stylist: dance=0.81, T31 Silent Hill→2024:
-        // energyB=0.24).
-        let bQuietNotDanceable = profile.energyB < 0.15 && profile.avgDanceability < 0.70
-        let bMidQuietLowDance = profile.energyB <= 0.18 && profile.avgDanceability < 0.50
+        // The Alchemist.→Suge (v7); Lento→Cry, Cry→Rich Baby Daddy, Lucid→
+        // BIRDS, BIRDS→Black Beatles, Live Sheck→New Magic, A Escondidas→
+        // Answer (v8 audit 2026-05-04, 14+ menciones).
+        //
+        // Thresholds widened (audit v8): backend reportaba el rango habitual
+        // de R&B/pop/hip-hop chill como energyB 0.10-0.30 y dance 0.50-0.90;
+        // los thresholds antiguos (0.15/0.70 y 0.18/0.50) caian fuera de ese
+        // cuadrante en ~0-1 caso de las 14 quejas. Subimos a 0.22/0.85 y
+        // 0.25/0.65 para cubrir el cuadrante real sin romper las joyas.
+        // Validacion contra positivas conocidas:
+        //   T19 AIR FORCE→Can I Kick: dance=0.96 → 0.96 < 0.85 = false → no activa.
+        //   T28 BOMB→No Stylist: dance=0.81 → 0.81 < 0.85 = true; energyB > 0.22
+        //     debe seguir excluyendo (verificar). Borderline: vigilar en coche.
+        //   T31 Silent Hill→2024: era BMB, ya tenia skipBFilters por otra rama.
+        //   Black Beatles→Midnight Tokyo: ya activaba quiet-B antes.
+        //   Falling Back→All Mine: dance=0.92 → 0.92 < 0.85 = false → no activa.
+        let bQuietNotDanceable = profile.energyB < 0.22 && profile.avgDanceability < 0.85
+        let bMidQuietLowDance = profile.energyB <= 0.25 && profile.avgDanceability < 0.65
         let bIsBeingFiltered = anticipation.needsAnticipation || filter.useAggressiveFilters
         if bIsBeingFiltered
             && (bQuietNotDanceable || bMidQuietLowDance)
