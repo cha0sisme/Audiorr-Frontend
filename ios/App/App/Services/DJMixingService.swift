@@ -2435,6 +2435,25 @@ enum DJMixingService {
             }
         }
 
+        // ── Override: B abre con voz acapella / hablada ──
+        // Cosita #4 del DJ humano (audit v8 sesion 2, 2026-05-04): "voz hablada
+        // o acapella no se mezcla, se presenta". Crossfade sobre intro vocal
+        // suena horrible — silencio breve antes de la voz se siente profesional.
+        // Detectable: vocalStartTime de B muy temprano (<=1s, voz literal-
+        // inmediata o ad-lib en t=0..1) AND entry calculado tambien temprano
+        // (<3s, no estamos haciendo chorus promotion lejos) AND chorus B no
+        // es inmediato (>5s, descarta tracks que arrancan con chorus directo).
+        // Solo afecta a transiciones "blendy" — CUT, STEM_MIX, DROP_MIX,
+        // VINYL_STOP no se tocan (ya tienen su propio gesto).
+        if let next = nextAnalysis, next.hasError != true,
+           let vsB = next.vocalStartTime, vsB <= 1.0,
+           entryPoint < 3.0,
+           next.chorusStartTime > 5.0,
+           type == .crossfade || type == .beatMatchBlend || type == .naturalBlend || type == .eqMix {
+            type = .cleanHandoff
+            reason = "B abre con voz acapella/inmediata (vocalStart=\(String(format: "%.1f", vsB))s, chorus=\(String(format: "%.0f", next.chorusStartTime))s) → CLEAN_HANDOFF (presentar voz)"
+        }
+
         // ── Safety: extreme BPM jump override ──
         let bpmCutThreshold: Double = useFilters ? 35 : 20
         if profile.bpmDiff > bpmCutThreshold && fadeDuration > 3 && type != .cut {
