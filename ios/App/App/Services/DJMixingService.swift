@@ -2362,7 +2362,17 @@ enum DJMixingService {
                 let bIsAbruptIntro = !introInstrumental
                     && (bChorusStart < 3 || bIntroLen < 2)
                     && profile.energyB > 0.20
-                let aIsBassHeavy = profile.energyA > 0.30 && profile.avgDanceability > 0.50
+                // VINYL_STOP gates ablandados conservador (audit v8 sesion 2,
+                // 2026-05-04): de 0/40 en log v8 a target ~2-4/40. Solo aqui
+                // (ruta "Punch + bass-heavy"); las otras dos rutas (dramatic
+                // DOWN extremo + BPMs incompatibles + energy drop) sin tocar.
+                // Compensamos el threshold energy mas bajo subiendo dance:
+                //   energyA > 0.25 (de 0.30): incluye R&B/hip-hop con bass
+                //     claro pero no extremo
+                //   dance > 0.55 (de 0.50): exigencia mayor de bailabilidad
+                //     para que el gesto de frenada quede justificado
+                // Cooldown intacto. bpmRelationship!=.identical intacto.
+                let aIsBassHeavy = profile.energyA > 0.25 && profile.avgDanceability > 0.55
                 let vinylStopFits = !isOnCooldown(.vinylStop)
                     && aIsBassHeavy
                     && bIsAbruptIntro
