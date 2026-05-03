@@ -1721,10 +1721,21 @@ class CrossfadeExecutor {
     private func applyFiltersA(at t: Double) {
         guard t >= timings.filterStartTime else { return }
 
-        // Short CUT: highpass ramp is pointless — the quick fade handles separation.
-        if (config.transitionType == .cut || config.transitionType == .cutAFadeInB),
-           config.fadeDuration < 5.0 {
-            return
+        // CUT family: special handling.
+        // - fade < 5s: highpass ramp is pointless — the quick fade handles separation.
+        // - fade >= 5s: skip filters during the HOLD (when vol A is at 100%).
+        //   Aplicar barrido espectral mientras volA está plano se percibia como
+        //   "alguien moviendo la perilla del filtro sin justificacion" (queja
+        //   Die Nigga Die->Live Sheck Wes). Solo barremos durante el cut
+        //   exponencial (ultimos 3s), donde filtro acompaña la caida de vol.
+        //   P0.1 (pivot 0.40) hizo este fix mas urgente porque concentro el
+        //   sweep audible justo en la zona del hold. Audit v8, 2026-05-04.
+        if (config.transitionType == .cut || config.transitionType == .cutAFadeInB) {
+            if config.fadeDuration < 5.0 { return }
+            let volDuration = timings.transitionEndTime - timings.volumeFadeStartTime
+            let cutDuration = min(3.0, volDuration)
+            // Hold ends when t enters the final cutDuration window.
+            if t < timings.transitionEndTime - cutDuration { return }
         }
 
         // CLEAN_HANDOFF / VINYL_STOP: A and B never overlap, so spectral shaping

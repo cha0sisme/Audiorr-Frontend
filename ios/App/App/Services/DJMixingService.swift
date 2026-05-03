@@ -1039,8 +1039,13 @@ enum DJMixingService {
             // Energy rising (A chill → B hot): prefer chorus or vocalStart for impact.
             // The dramatic energy jump benefits from landing on a strong moment.
             if chorusStart > 4 && chorusStart < bufferDuration * 0.4 {
-                print("[DJMixingService] 🔥 Dramatic UP: chorus entry at \(String(format: "%.1f", chorusStart))s")
-                return chorusStart
+                // Margen 2s antes del chorus (P1.1, audit v8 2026-05-04):
+                // simetria con vocalEntryTarget. El chorus suele empezar con
+                // un golpe estructural (kick + voz). Aterrizar 2s antes deja
+                // que la anacrusa / build-in entre dentro del fade.
+                let chorusEntryTarget = max(2, chorusStart - 2)
+                print("[DJMixingService] 🔥 Dramatic UP: chorus entry at \(String(format: "%.1f", chorusEntryTarget))s (chorus at \(String(format: "%.1f", chorusStart))s -2s margin)")
+                return chorusEntryTarget
             } else if vocalStart > 3 {
                 print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalEntryTarget))s (vocal at \(String(format: "%.1f", vocalStart))s -2s margin)")
                 return vocalEntryTarget
@@ -1197,8 +1202,13 @@ enum DJMixingService {
         if isDanceable && bufferLongEnough && chorusDeepEnough
             && chorusFarFromReference && chorusInUsableHalf
             && !chorusLikelyMislabeled {
-            print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusStart))s (chorus far past reference at \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
-            return chorusStart
+            // Margen 2s antes del chorus (P1.1, audit v8 2026-05-04): simetria
+            // con vocalEntryTarget. Quejas Rich Baby Daddy->Lucid, Anxiety->
+            // Location, B Pero, BRINCANDO eran "B tarde al punch" — entrar
+            // 2s antes deja respirar la subida del chorus dentro del fade.
+            let chorusEntryTarget = max(2, chorusStart - 2)
+            print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus at \(String(format: "%.1f", chorusStart))s -2s margin, ref \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            return chorusEntryTarget
         }
 
         // ── Style affinity modulates how aggressively we target ──
@@ -1227,7 +1237,8 @@ enum DJMixingService {
             } else if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
             } else if chorusStart > 4 {
-                entry = chorusStart
+                // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
+                entry = max(2, chorusStart - 2)
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalEntryTarget
             } else if entryReference > 3 {
@@ -1253,7 +1264,8 @@ enum DJMixingService {
         // ── Energy boost: rising energy → prefer chorus if nearby ──
         if profile.energyFlow == .energyUp && profile.energyGap > 0.25 {
             if chorusStart > entry && chorusStart < entry + 30 {
-                entry = chorusStart
+                // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
+                entry = max(2, chorusStart - 2)
             }
         }
 
@@ -1890,19 +1902,35 @@ enum DJMixingService {
             bassKillCompatibleType = false
         }
 
-        // Both sides need ≥ 0.20 energy: bassKill exists to prevent "double-bombo"
+        // Both sides need bass content: bassKill exists to prevent "double-bombo"
         // when both tracks have a kicking low-end at the same time. From Florida
         // With Love (energyA=0.06) → Ghost Town (energyB=0.14) had bassKill on
         // and B entering with a -8 dB shelf — neither side had enough bass for
         // the kill to make sense. The user heard it as "B sounds telephonic".
+        //
+        // Gates relajados (audit v8 2026-05-04): el efecto se disparaba 0/40
+        // en el log v8 a pesar de ser la prioridad #1 segun el DJ humano.
+        // Bajamos thresholds para que el gesto reconocible-DJ del bass kill
+        // empiece a aparecer en el set:
+        //   - dance > 0.4 (de 0.5): R&B chill / pop intimo bailable
+        //   - energies >= 0.15 cada (de 0.20): cubre el rango habitual
+        //   - aceptamos character .smooth con condicion adicional de bpm
+        //     trusted Y dance >= 0.55 (proteccion: smooth+dance suele ser
+        //     R&B con beat claro tipo Frank Ocean Pyramids; smooth+no-dance
+        //     es ambient real, no queremos kill ahi).
+        let dramaticEligible = profile.character == .dramatic && profile.energyFlow == .energyUp
+        let punchEligible = profile.character == .punch
+        let smoothEligible = profile.character == .smooth && profile.avgDanceability >= 0.55
+        let characterEligible = punchEligible || dramaticEligible || smoothEligible
         if bassKillCompatibleType
             && profile.bpmTrusted
-            && profile.avgDanceability > 0.5
+            && profile.avgDanceability > 0.4
             && fadeDuration > 4.0
-            && profile.energyA >= 0.20 && profile.energyB >= 0.20
-            && (profile.character == .punch || (profile.character == .dramatic && profile.energyFlow == .energyUp)) {
+            && profile.energyA >= 0.15 && profile.energyB >= 0.15
+            && characterEligible {
             useBassKill = true
-            reasons.append("bassKill: dance=\(String(format: "%.2f", profile.avgDanceability)) energyA=\(String(format: "%.2f", profile.energyA)) energyB=\(String(format: "%.2f", profile.energyB))")
+            let charLabel = punchEligible ? "punch" : (dramaticEligible ? "dramatic-up" : "smooth+dance")
+            reasons.append("bassKill[\(charLabel)]: dance=\(String(format: "%.2f", profile.avgDanceability)) energyA=\(String(format: "%.2f", profile.energyA)) energyB=\(String(format: "%.2f", profile.energyB))")
         }
 
         // ── Dynamic Q Resonance: bell-shaped Q sweep on highpass ──
