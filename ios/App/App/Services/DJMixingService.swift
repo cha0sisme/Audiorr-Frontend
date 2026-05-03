@@ -706,12 +706,19 @@ enum DJMixingService {
         // noRealOutro suppresses the tease entirely — A is in full groove
         // until the very end, so pre-muting A would cut material the listener
         // is still expecting.
+        // bIntroSpace para PRE_PUNCH path: cuanto espacio instrumental
+        // tiene B antes de su primer evento "fuerte" (vocal / chorus).
+        let bIntroSpaceForAnticipation: Double = {
+            guard let next = safeNext, next.hasError != true else { return 0 }
+            return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+        }()
         let anticipation = decideAnticipation(
             fadeDuration: effectiveFadeDuration,
             entryPoint: finalEntry,
             transitionType: transition.type,
             noRealOutro: noRealOutro,
-            transitionReason: transition.reason
+            transitionReason: transition.reason,
+            bIntroSpace: bIntroSpaceForAnticipation
         )
 
         // ── 8. Time-stretch ──
@@ -740,11 +747,17 @@ enum DJMixingService {
 
         // Skip B filters for very short fades, DROP_MIX (B enters clean and full),
         // CLEAN_HANDOFF or VINYL_STOP (sequential — B enters from silence, no
-        // spectral shaping needed; the gesture on A is the effect).
+        // spectral shaping needed; the gesture on A is the effect), o PRE_PUNCH
+        // (B suena clean varios segundos antes del punch — el TEASE largo NO
+        // tiene sentido si B viene filtrada; queremos su beat / intro al aire).
         var skipBFilters = effectiveFadeDuration <= 3.0
             || transition.type == .dropMix
             || transition.type == .cleanHandoff
             || transition.type == .vinylStop
+            || anticipation.isPrePunch
+        if anticipation.isPrePunch {
+            print("[DJMixingService] 🎬 PRE_PUNCH: forzando skipBFilters (B clean durante tease largo)")
+        }
 
         // ── 8b. Aggressive preset gating ──
         // The aggressive preset stacks bassKill + midScoop + notchSweep + dynamicQ
@@ -2033,9 +2046,20 @@ enum DJMixingService {
         let needsAnticipation: Bool
         let anticipationTime: Double
         let reason: String
+        // PRE_PUNCH flag (audit v8 sesion 2): cuando B tiene intro instrumental
+        // larga (>=6s) y el tipo es blendy, B suena clean varios segundos antes
+        // del punch real. El llamador usa este flag para forzar skipBFilters.
+        let isPrePunch: Bool
+
+        init(needsAnticipation: Bool, anticipationTime: Double, reason: String, isPrePunch: Bool = false) {
+            self.needsAnticipation = needsAnticipation
+            self.anticipationTime = anticipationTime
+            self.reason = reason
+            self.isPrePunch = isPrePunch
+        }
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "") -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0) -> AnticipationResult {
         // No-real-outro guard: A is in full groove until the very end, so
         // anticipation (which pre-mutes A for 2-4s before the fade starts)
         // would cut material the listener is still expecting. This is one of
@@ -2090,6 +2114,41 @@ enum DJMixingService {
             let time = min(4.0, max(2.5, entryPoint * 0.3))
             return AnticipationResult(needsAnticipation: true, anticipationTime: time,
                                       reason: "Anticipacion CUT: tease +\(String(format: "%.1f", time))s antes del swap")
+        }
+
+        // ── PRE_PUNCH path (audit v8 sesion 2, 2026-05-04) ──
+        // Cosita #1 del DJ humano + peticion del usuario: "dejamos el beat de
+        // playerB sonando mientras playerA va muriendo, posicionados un poco
+        // antes del punch para preparar".
+        //
+        // Cuando B tiene intro instrumental clara (bIntroSpace >= 6s) y el
+        // tipo es blendy (crossfade / BMB / EQ), extendemos el tease para que
+        // B suene clean los 4-7 segundos previos al fade real. El llamador
+        // forza skipBFilters al ver isPrePunch=true → B audible desde el
+        // primer instante del tease, con su beat / intro al aire mientras A
+        // todavia esta sonando y bajando despacio.
+        //
+        // Restricciones:
+        // - Requiere entryPoint >= 7 (margen suficiente para que el tease
+        //   no caiga en zona pre-musical).
+        // - Solo blendy types (crossfade, beatMatchBlend, eqMix). CUT, STEM,
+        //   DROP, CLEAN, VINYL ya tienen sus gestos propios — no los pisamos.
+        // - bIntroSpace debe ser >= 6 (intro instrumental clara, no solo
+        //   "B chorus inmediato"). Esa es la senal de que B "se merece"
+        //   sonar solo unos segundos.
+        let prePunchEligibleType = transitionType == .crossfade
+            || transitionType == .beatMatchBlend
+            || transitionType == .eqMix
+        if bIntroSpace >= 6 && entryPoint >= 7 && prePunchEligibleType {
+            // Tease largo, capado por el espacio instrumental disponible y por
+            // entryPoint para no irse antes de t=2s en B.
+            let prePunchTime = min(7.0, max(4.0, bIntroSpace - 2.0))
+            return AnticipationResult(
+                needsAnticipation: true,
+                anticipationTime: prePunchTime,
+                reason: "PRE_PUNCH: B suena clean \(String(format: "%.1f", prePunchTime))s antes (intro instrumental \(String(format: "%.1f", bIntroSpace))s)",
+                isPrePunch: true
+            )
         }
 
         let needs = fadeDuration < 8 && hasEnoughIntro
