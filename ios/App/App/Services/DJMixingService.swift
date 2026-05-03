@@ -1713,10 +1713,25 @@ enum DJMixingService {
             profile.bassConflictRisk ||
             isVeryShort
 
-        let useAggressive = (hasVocals || isShort ||
+        // useAggressive endurecido (audit v8, 2026-05-04): el flag hasVocals
+        // se cumple en ~80% del catalogo pop/hip-hop/R&B (cualquier voz en
+        // outroA o introB). Eso enviaba a aggressive (notch + dynamicQ +
+        // bassKill + midScoop + hpB 800Hz + lsB -12dB) a la mitad de las
+        // transiciones de Mix Relajante, donde un blend gentle hubiera sido
+        // mas musical. Ahora hasVocals solo dispara aggressive si AMBAS
+        // pistas tienen energia suficiente para sostener la densidad
+        // espectral (>0.20). Resto de triggers (clash, vocal-overlap,
+        // bassConflict, isVeryShort) quedan como antes — son razones de
+        // seguridad. Quitamos isShort (<4s) como trigger general porque
+        // disparaba aggressive en demasiadas transiciones medianas; isVeryShort
+        // (<3s) sigue siendo defensivo.
+        let useAggressive = useFilters && (
+            (hasVocals && profile.energyA > 0.20 && profile.energyB > 0.20) ||
             profile.harmonic.compatibility == .clash ||
             profile.vocalOverlapRisk == .both ||
-            profile.bassConflictRisk) && useFilters
+            profile.bassConflictRisk ||
+            isVeryShort
+        )
 
         var reasons: [String] = []
         if hasVocals { reasons.append("voces") }
@@ -1726,6 +1741,7 @@ enum DJMixingService {
         if profile.harmonic.compatibility == .clash { reasons.append("clash tonal") }
         if profile.bassConflictRisk { reasons.append("bass conflict") }
         if isVeryShort { reasons.append("fade<3s") }
+        if isShort && !isVeryShort { reasons.append("fade<4s (no aggressive)") }
 
         let reason = useFilters ? "Filtros ON: \(reasons.joined(separator: ", "))" : "Filtros OFF: mezcla simple"
 
