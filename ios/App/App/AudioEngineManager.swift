@@ -1137,12 +1137,20 @@ class AudioEngineManager {
             // ═══ STEP 1: Compute bPosition WHILE playerA (post-swap) is still active ═══
             // After swap, playerA is the new song's player (was playerB). Read its
             // current position BEFORE stopping it for the DSP restart.
+            // Capture sampleTime alongside bPosition so playStartOffset/pauseSampleTime
+            // stay coupled — without anchoring pauseSampleTime to the same instant,
+            // currentTime() would later compute deltaSamples = sampleTime - 0,
+            // double-counting the samples B already rendered during the fade and
+            // pushing reported time ~crossfadeDuration seconds ahead of reality.
             let bPosition: Double
+            let bSampleTime: AVAudioFramePosition
             if let nodeTime = self.playerA.lastRenderTime,
                nodeTime.isSampleTimeValid,
                let pTime = self.playerA.playerTime(forNodeTime: nodeTime) {
-                bPosition = startOffset + Double(pTime.sampleTime) / pTime.sampleRate
+                bSampleTime = pTime.sampleTime
+                bPosition = startOffset + Double(bSampleTime) / pTime.sampleRate
             } else {
+                bSampleTime = 0
                 bPosition = startOffset
             }
 
@@ -1190,9 +1198,13 @@ class AudioEngineManager {
                 print("[AudioEngineManager] post-swap: timePitchA bypass=OFF (drain complete, rate=\(String(format: "%.3f", tp.rate)))")
             }
 
-            // Update playback state (playerA is already playing, just reset DSP)
+            // Update playback state (playerA is already playing, just reset DSP).
+            // playStartOffset + pauseSampleTime must come from the same instant:
+            // currentTime() computes raw = playStartOffset + (sampleTime - pauseSampleTime)/sr,
+            // so anchoring pauseSampleTime to the swap-time sampleTime ensures the
+            // delta only counts samples rendered AFTER the swap.
             self.playStartOffset = bPosition
-            self.pauseSampleTime = 0
+            self.pauseSampleTime = bSampleTime
             self.playSequence += 1
 
             // Reset stereo pan (post-swap: both must be centered)
