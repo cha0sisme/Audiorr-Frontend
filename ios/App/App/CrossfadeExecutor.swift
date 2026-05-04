@@ -1269,7 +1269,11 @@ class CrossfadeExecutor {
                 holdEnd = min(holdEnd, 0.45)
                 dropEnd = max(holdEnd + 0.20, dropEnd - 0.10)
             } else if config.bIntroBars >= 4 && !config.needsAnticipation {
-                holdEnd = min(0.60, dropEnd - 0.20)  // intro larga → A respira mas
+                // Intro larga → A respira mas. Extender holdEnd y tambien
+                // dropEnd un poco para no comprimir el cos² (si solo movemos
+                // holdEnd, el gradiente del descenso se hace mas pronunciado).
+                holdEnd = min(0.60, dropEnd - 0.20)
+                dropEnd = min(0.90, dropEnd + 0.05)
             }
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)
@@ -1385,7 +1389,10 @@ class CrossfadeExecutor {
                 holdEnd = min(holdEnd, 0.40)
                 dropEnd = max(holdEnd + 0.20, dropEnd - 0.10)
             } else if config.bIntroBars >= 4 && !config.needsAnticipation {
+                // Ver comentario equivalente en .eqMix sobre por que tambien
+                // extendemos dropEnd: evitar compresion del cos².
                 holdEnd = min(0.55, dropEnd - 0.20)
+                dropEnd = min(0.90, dropEnd + 0.05)
             }
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)

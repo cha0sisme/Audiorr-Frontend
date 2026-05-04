@@ -843,6 +843,11 @@ enum DJMixingService {
         // finalEntry hasta el primer evento musical fuerte. Usamos
         // introEndTimeHeuristic primero para evitar el bug ML-override
         // (40-60s en hip-hop) visto en v6/v7.
+        // entrySafe defensivo: finalEntry no deberia ser negativo, pero si lo
+        // fuese (snapResult.entry sin clamp) inflaria las diferencias y
+        // dispararia los flags falsamente. Clamp local sin tocar el resto del
+        // flujo (que ya espera finalEntry como esta).
+        let entrySafe = max(0, finalEntry)
         let bIntroBarsForA: Int = {
             guard let next = safeNext, next.hasError != true else { return 0 }
             let intro = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
@@ -851,8 +856,11 @@ enum DJMixingService {
             // bug backend de double/half-time. Fuera de ese rango el conteo
             // de compases es ruido — mejor devolver 0 que activar/no-activar
             // por una razon equivocada.
-            guard intro > finalEntry, bi >= 0.25, bi <= 1.2 else { return 0 }
-            return Int((intro - finalEntry) / (bi * 4.0))  // asumiendo 4/4
+            guard intro > entrySafe, bi >= 0.25, bi <= 1.2 else { return 0 }
+            // .rounded() en lugar de truncacion: 3.99 bars → 4 (fires) en
+            // vez de 3 (no fires). 0.01s de jitter en el boundary no deberia
+            // cambiar comportamiento.
+            return Int(((intro - entrySafe) / (bi * 4.0)).rounded())  // asumiendo 4/4
         }()
         // Flag 2 — bImmediateImpact: voz o chorus llegan en los primeros
         // segundos DESPUES de finalEntry. Defensa contra chorusStart <
@@ -868,8 +876,8 @@ enum DJMixingService {
             let intro = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
             let chorus = next.chorusStartTime
             let validChorusInRange = chorus > 0 && chorus >= max(0, intro - 1.0)
-            let chorusFromEntry: Double = validChorusInRange ? (chorus - finalEntry) : .infinity
-            let vocalFromEntry: Double = next.vocalStartTime.map { $0 - finalEntry } ?? .infinity
+            let chorusFromEntry: Double = validChorusInRange ? (chorus - entrySafe) : .infinity
+            let vocalFromEntry: Double = next.vocalStartTime.map { $0 - entrySafe } ?? .infinity
             let chorusEarly = chorusFromEntry >= 0 && chorusFromEntry < 6.0
             let vocalEarly = vocalFromEntry >= 0 && vocalFromEntry < 4.0
             return chorusEarly || vocalEarly
