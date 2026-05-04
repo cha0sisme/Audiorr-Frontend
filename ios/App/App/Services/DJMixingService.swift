@@ -706,11 +706,16 @@ enum DJMixingService {
         // noRealOutro suppresses the tease entirely — A is in full groove
         // until the very end, so pre-muting A would cut material the listener
         // is still expecting.
-        // bIntroSpace para PRE_PUNCH path: cuanto espacio instrumental
-        // tiene B antes de su primer evento "fuerte" (vocal / chorus).
+        // bIntroSpace + vocalStartB para PRE_PUNCH path: cuanto espacio
+        // instrumental tiene B antes de su primer evento "fuerte" + posicion
+        // del primer vocal (para cap conservador del tease).
         let bIntroSpaceForAnticipation: Double = {
             guard let next = safeNext, next.hasError != true else { return 0 }
             return next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+        }()
+        let vocalStartBForAnticipation: Double = {
+            guard let next = safeNext, next.hasError != true else { return 0 }
+            return next.vocalStartTime ?? 0
         }()
         let anticipation = decideAnticipation(
             fadeDuration: effectiveFadeDuration,
@@ -718,7 +723,8 @@ enum DJMixingService {
             transitionType: transition.type,
             noRealOutro: noRealOutro,
             transitionReason: transition.reason,
-            bIntroSpace: bIntroSpaceForAnticipation
+            bIntroSpace: bIntroSpaceForAnticipation,
+            vocalStartB: vocalStartBForAnticipation
         )
 
         // ── 8. Time-stretch ──
@@ -2059,7 +2065,7 @@ enum DJMixingService {
         }
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0, vocalStartB: Double = 0) -> AnticipationResult {
         // No-real-outro guard: A is in full groove until the very end, so
         // anticipation (which pre-mutes A for 2-4s before the fade starts)
         // would cut material the listener is still expecting. This is one of
@@ -2140,15 +2146,30 @@ enum DJMixingService {
             || transitionType == .beatMatchBlend
             || transitionType == .eqMix
         if bIntroSpace >= 6 && entryPoint >= 7 && prePunchEligibleType {
-            // Tease largo, capado por el espacio instrumental disponible y por
-            // entryPoint para no irse antes de t=2s en B.
-            let prePunchTime = min(7.0, max(4.0, bIntroSpace - 2.0))
-            return AnticipationResult(
-                needsAnticipation: true,
-                anticipationTime: prePunchTime,
-                reason: "PRE_PUNCH: B suena clean \(String(format: "%.1f", prePunchTime))s antes (intro instrumental \(String(format: "%.1f", bIntroSpace))s)",
-                isPrePunch: true
-            )
+            // Cap conservador (audit v8 sesion 2 review, 2026-05-04): el tease
+            // entero debe quedar ANTES del primer vocal de B con 2s de margen,
+            // para garantizar que B suena su intro instrumental durante todo
+            // el tease y no que el "punch" del fade real caiga DESPUES del
+            // primer evento vocal.
+            //
+            // Mecanica: B reproduce desde entryPoint. Durante el tease (X
+            // segundos), B suena posiciones entryPoint..entryPoint+X. Si
+            // vocalStartB es la posicion del primer vocal, queremos
+            // entryPoint + X <= vocalStartB - 2  →  X <= vocalStartB - entryPoint - 2.
+            //
+            // Si vocalSafetyMargin < 4 (minimo prePunchTime razonable), NO
+            // activamos PRE_PUNCH y caemos al path tradicional. Si vocalStartB
+            // es 0/desconocido, vocalSafetyMargin es negativo → no activamos.
+            let vocalSafetyMargin = vocalStartB - entryPoint - 2.0
+            if vocalSafetyMargin >= 4.0 {
+                let prePunchTime = min(7.0, max(4.0, min(bIntroSpace - 2.0, vocalSafetyMargin)))
+                return AnticipationResult(
+                    needsAnticipation: true,
+                    anticipationTime: prePunchTime,
+                    reason: "PRE_PUNCH: B suena clean \(String(format: "%.1f", prePunchTime))s antes (intro instr \(String(format: "%.1f", bIntroSpace))s, vocal margin \(String(format: "%.1f", vocalSafetyMargin))s)",
+                    isPrePunch: true
+                )
+            }
         }
 
         let needs = fadeDuration < 8 && hasEnoughIntro
