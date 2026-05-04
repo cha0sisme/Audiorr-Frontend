@@ -295,6 +295,11 @@ enum DJMixingService {
         let triggerBias: Double
         /// Human-readable reason for the trigger bias.
         let triggerBiasReason: String
+        // B→A communication (audit v8 sesion 3, 2026-05-04): A consulta estos
+        // 3 flags de B para ajustar su curva de salida en transiciones blendy.
+        let bIntroBars: Int
+        let bImmediateImpact: Bool
+        let bHarmonicClashLevel: Double
     }
 
     // MARK: - Build Transition Profile
@@ -823,6 +828,52 @@ enum DJMixingService {
             skipBFilters = true
         }
 
+        // ── 8d. B→A communication flags (audit v8 sesion 3, 2026-05-04) ──
+        // 3 flags minimos del analisis de B que la curva de A consulta para
+        // ajustar su forma. Solo se aplican en transiciones blendy
+        // (.crossfade, .eqMix, .beatMatchBlend) — el resto los ignora en el
+        // executor. Defensive contra bugs backend conocidos.
+        //
+        // Flag 1 — bIntroBars: compases instrumentales de B antes del primer
+        // evento musical fuerte. Usamos introEndTimeHeuristic primero para
+        // evitar el bug ML-override (40-60s en hip-hop) que vimos en v6/v7.
+        let bIntroBarsForA: Int = {
+            guard let next = safeNext, next.hasError != true else { return 0 }
+            let intro = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+            let bi = next.beatInterval
+            guard intro > 0, bi > 0 else { return 0 }
+            return Int(intro / (bi * 4.0))  // asumiendo 4/4
+        }()
+        // Flag 2 — bImmediateImpact: B abre con voz o chorus en los primeros
+        // segundos. Defensa contra chorusStart < introEnd (37.5% en v6) y
+        // contra chorusStart=0 (missing, no "drop al inicio"). vocalStart=0
+        // SI cuenta (literal "voz en t=0", semantica post-2026-05-01).
+        let bImmediateImpactForA: Bool = {
+            guard let next = safeNext, next.hasError != true else { return false }
+            let intro = next.introEndTimeHeuristic ?? next.introEndTime
+            let chorus = next.chorusStartTime
+            let validChorusEarly = chorus > 0 && chorus >= max(0, intro - 1.0) && chorus < 6.0
+            let validVocalEarly: Bool = {
+                if let v = next.vocalStartTime, v < 4.0 { return true }
+                return false
+            }()
+            return validChorusEarly || validVocalEarly
+        }()
+        // Flag 3 — bHarmonicClashLevel: 0..1 derivado de profile.harmonic.
+        // Solo activa la rama de la curva de A cuando >= 0.7 (clash puro);
+        // tense (0.6) ya esta cubierto por el recorte de fadeDuration.
+        let bHarmonicClashLevelForA: Double = {
+            switch profile.harmonic.compatibility {
+            case .compatible: return 0.0
+            case .acceptable: return 0.3
+            case .tense:      return 0.6
+            case .clash:      return 1.0
+            }
+        }()
+        if bIntroBarsForA >= 4 || bImmediateImpactForA || bHarmonicClashLevelForA >= 0.7 {
+            print("[DJMixingService] 🎚️ B→A flags: bIntroBars=\(bIntroBarsForA) bImmediateImpact=\(bImmediateImpactForA) bHarmonicClash=\(String(format: "%.1f", bHarmonicClashLevelForA))")
+        }
+
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
 
@@ -869,7 +920,10 @@ enum DJMixingService {
             useStutterCut: djEffects.useStutterCut,
             transitionReason: transition.reason,
             triggerBias: trigger.bias,
-            triggerBiasReason: trigger.reason
+            triggerBiasReason: trigger.reason,
+            bIntroBars: bIntroBarsForA,
+            bImmediateImpact: bImmediateImpactForA,
+            bHarmonicClashLevel: bHarmonicClashLevelForA
         )
     }
 

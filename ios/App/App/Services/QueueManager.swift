@@ -952,7 +952,10 @@ final class QueueManager: AudioEngineDelegate {
                     useBassKill: crossfadeResult.useBassKill,
                     useDynamicQ: crossfadeResult.useDynamicQ,
                     useNotchSweep: crossfadeResult.useNotchSweep,
-                    useStutterCut: crossfadeResult.useStutterCut
+                    useStutterCut: crossfadeResult.useStutterCut,
+                    bIntroBars: crossfadeResult.bIntroBars,
+                    bImmediateImpact: crossfadeResult.bImmediateImpact,
+                    bHarmonicClashLevel: crossfadeResult.bHarmonicClashLevel
                 )
 
                 // Publish transition reason to diagnostics
@@ -1009,7 +1012,10 @@ final class QueueManager: AudioEngineDelegate {
                         useBassKill: config.useBassKill,
                         useDynamicQ: config.useDynamicQ,
                         useNotchSweep: config.useNotchSweep,
-                        useStutterCut: config.useStutterCut
+                        useStutterCut: config.useStutterCut,
+                        bIntroBars: config.bIntroBars,
+                        bImmediateImpact: config.bImmediateImpact,
+                        bHarmonicClashLevel: config.bHarmonicClashLevel
                     )
                 } else {
                     finalConfig = config

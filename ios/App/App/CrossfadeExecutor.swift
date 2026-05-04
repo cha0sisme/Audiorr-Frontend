@@ -98,6 +98,20 @@ class CrossfadeExecutor {
         /// > 0.55 + hasBeatGridA. The executor still performs an additional runtime
         /// check (cut moment within beatInterval/4 of a real beat) before activating.
         let useStutterCut: Bool
+        // B→A communication (audit v8 sesion 3, 2026-05-04): A consulta 3 flags
+        // de B para ajustar su curva de salida en transiciones blendy
+        // (.crossfade, .eqMix, .beatMatchBlend). El resto de tipos las ignoran.
+        /// Compases instrumentales de B antes del primer evento musical fuerte.
+        /// Derivado de introEndHeuristic / (beatIntervalB * 4). Si >= 4, A puede
+        /// prolongar su hold (B tiene espacio para respirar).
+        let bIntroBars: Int
+        /// B abre con voz o chorus en los primeros segundos. Si true, A comprime
+        /// su tail para morir antes de que llegue el "punch" de B.
+        let bImmediateImpact: Bool
+        /// Nivel de clash armonico A↔B en 0..1. compatible=0, acceptable=0.3,
+        /// tense=0.6, clash=1.0. Si >= 0.7, A baja su holdLevel para acortar
+        /// la zona de superposicion donde se oye la disonancia.
+        let bHarmonicClashLevel: Double
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -111,7 +125,9 @@ class CrossfadeExecutor {
              danceability: Double = 0.5, skipBFilters: Bool = false,
              useBassKill: Bool = false, useDynamicQ: Bool = false,
              useNotchSweep: Bool = false,
-             useStutterCut: Bool = false) {
+             useStutterCut: Bool = false,
+             bIntroBars: Int = 0, bImmediateImpact: Bool = false,
+             bHarmonicClashLevel: Double = 0) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -138,6 +154,9 @@ class CrossfadeExecutor {
             self.useDynamicQ = useDynamicQ
             self.useNotchSweep = useNotchSweep
             self.useStutterCut = useStutterCut
+            self.bIntroBars = bIntroBars
+            self.bImmediateImpact = bImmediateImpact
+            self.bHarmonicClashLevel = bHarmonicClashLevel
         }
     }
 
@@ -1236,10 +1255,22 @@ class CrossfadeExecutor {
             // log showed a -3 dB perceived dip (volA reaching 0 while B was still
             // at ~70% of its target). cos² drop is preserved through 50–85% so the
             // EQ filters still do the spectral handoff work.
-            let holdLevel: Float = 0.65
-            let holdEnd = 0.50
-            let dropEnd = 0.85
+            var holdLevel: Float = 0.65
+            var holdEnd = 0.50
+            var dropEnd = 0.85
             let floor: Float = 0.15
+            // B→A communication (audit v8 sesion 3): ajustar la forma segun lo
+            // que B esta haciendo. Acotado por el orden if/else-if para que
+            // intro-aware e impact-aware no colisionen.
+            if config.bHarmonicClashLevel >= 0.7 {
+                holdLevel -= 0.15  // clash → A se aparta antes
+            }
+            if config.bImmediateImpact {
+                holdEnd = min(holdEnd, 0.45)
+                dropEnd = max(holdEnd + 0.20, dropEnd - 0.10)
+            } else if config.bIntroBars >= 4 && !config.needsAnticipation {
+                holdEnd = min(0.60, dropEnd - 0.20)  // intro larga → A respira mas
+            }
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)
                 let eased = p * p * (3.0 - 2.0 * p)
@@ -1342,10 +1373,20 @@ class CrossfadeExecutor {
             // Standard crossfade with floor + tail (same shape as eqMix/beatMatchBlend
             // but with a higher hold and a slightly earlier drop). Keeps A audible
             // through the late fade so the combined power stays close to constant.
-            let holdLevel: Float = 0.70
-            let holdEnd = 0.45
-            let dropEnd = 0.85
+            var holdLevel: Float = 0.70
+            var holdEnd = 0.45
+            var dropEnd = 0.85
             let floor: Float = 0.15
+            // B→A communication (audit v8 sesion 3) — mismo patron que .eqMix.
+            if config.bHarmonicClashLevel >= 0.7 {
+                holdLevel -= 0.15
+            }
+            if config.bImmediateImpact {
+                holdEnd = min(holdEnd, 0.40)
+                dropEnd = max(holdEnd + 0.20, dropEnd - 0.10)
+            } else if config.bIntroBars >= 4 && !config.needsAnticipation {
+                holdEnd = min(0.55, dropEnd - 0.20)
+            }
             if progress < holdEnd {
                 let p = Float(progress / holdEnd)
                 let eased = p * p * (3.0 - 2.0 * p)
