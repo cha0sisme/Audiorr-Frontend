@@ -834,30 +834,45 @@ enum DJMixingService {
         // (.crossfade, .eqMix, .beatMatchBlend) — el resto los ignora en el
         // executor. Defensive contra bugs backend conocidos.
         //
-        // Flag 1 — bIntroBars: compases instrumentales de B antes del primer
-        // evento musical fuerte. Usamos introEndTimeHeuristic primero para
-        // evitar el bug ML-override (40-60s en hip-hop) que vimos en v6/v7.
+        // Importante: TODOS los flags miden tiempo RELATIVO a finalEntry (el
+        // oyente solo "ve" B desde finalEntry hacia adelante). Si entry=10 y
+        // vocal=2, el listener nunca oye ese vocal — calcular flags en
+        // tiempo absoluto seria un falso positivo.
+        //
+        // Flag 1 — bIntroBars: compases instrumentales QUE QUEDAN desde
+        // finalEntry hasta el primer evento musical fuerte. Usamos
+        // introEndTimeHeuristic primero para evitar el bug ML-override
+        // (40-60s en hip-hop) visto en v6/v7.
         let bIntroBarsForA: Int = {
             guard let next = safeNext, next.hasError != true else { return 0 }
             let intro = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
             let bi = next.beatInterval
-            guard intro > 0, bi > 0 else { return 0 }
-            return Int(intro / (bi * 4.0))  // asumiendo 4/4
+            // Clamp bi a rango plausible (50-240 BPM) para neutralizar el
+            // bug backend de double/half-time. Fuera de ese rango el conteo
+            // de compases es ruido — mejor devolver 0 que activar/no-activar
+            // por una razon equivocada.
+            guard intro > finalEntry, bi >= 0.25, bi <= 1.2 else { return 0 }
+            return Int((intro - finalEntry) / (bi * 4.0))  // asumiendo 4/4
         }()
-        // Flag 2 — bImmediateImpact: B abre con voz o chorus en los primeros
-        // segundos. Defensa contra chorusStart < introEnd (37.5% en v6) y
-        // contra chorusStart=0 (missing, no "drop al inicio"). vocalStart=0
-        // SI cuenta (literal "voz en t=0", semantica post-2026-05-01).
+        // Flag 2 — bImmediateImpact: voz o chorus llegan en los primeros
+        // segundos DESPUES de finalEntry. Defensa contra chorusStart <
+        // introEnd (37.5% en v6) y contra chorusStart=0 (missing, no
+        // "drop al inicio"). vocalStart=0 SI cuenta (literal "voz en t=0",
+        // semantica post-2026-05-01) cuando finalEntry tambien es 0.
         let bImmediateImpactForA: Bool = {
             guard let next = safeNext, next.hasError != true else { return false }
-            let intro = next.introEndTimeHeuristic ?? next.introEndTime
+            // Mismo fallback que flag 1: si hasIntroData=false el campo
+            // introEndTime puede contener basura stale (default 0 o valor
+            // viejo de cache), no deberia bloquear el chorus de un track
+            // valido. Solo defenderse cuando hay dato fiable.
+            let intro = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
             let chorus = next.chorusStartTime
-            let validChorusEarly = chorus > 0 && chorus >= max(0, intro - 1.0) && chorus < 6.0
-            let validVocalEarly: Bool = {
-                if let v = next.vocalStartTime, v < 4.0 { return true }
-                return false
-            }()
-            return validChorusEarly || validVocalEarly
+            let validChorusInRange = chorus > 0 && chorus >= max(0, intro - 1.0)
+            let chorusFromEntry: Double = validChorusInRange ? (chorus - finalEntry) : .infinity
+            let vocalFromEntry: Double = next.vocalStartTime.map { $0 - finalEntry } ?? .infinity
+            let chorusEarly = chorusFromEntry >= 0 && chorusFromEntry < 6.0
+            let vocalEarly = vocalFromEntry >= 0 && vocalFromEntry < 4.0
+            return chorusEarly || vocalEarly
         }()
         // Flag 3 — bHarmonicClashLevel: 0..1 derivado de profile.harmonic.
         // Solo activa la rama de la curva de A cuando >= 0.7 (clash puro);
@@ -871,7 +886,21 @@ enum DJMixingService {
             }
         }()
         if bIntroBarsForA >= 4 || bImmediateImpactForA || bHarmonicClashLevelForA >= 0.7 {
-            print("[DJMixingService] 🎚️ B→A flags: bIntroBars=\(bIntroBarsForA) bImmediateImpact=\(bImmediateImpactForA) bHarmonicClash=\(String(format: "%.1f", bHarmonicClashLevelForA))")
+            // Resolver que rama de la curva de A actuara (impact gana sobre
+            // intro-bars en CrossfadeExecutor; clash es ortogonal y se suma).
+            // Solo aplica a .crossfade, .eqMix, .beatMatchBlend; otras ramas
+            // ignoran los flags.
+            let intoBlendyType = transition.type == .crossfade
+                || transition.type == .eqMix
+                || transition.type == .beatMatchBlend
+            var effective: [String] = []
+            if intoBlendyType {
+                if bImmediateImpactForA { effective.append("impact-tail") }
+                else if bIntroBarsForA >= 4 && !anticipation.needsAnticipation { effective.append("intro-hold") }
+                if bHarmonicClashLevelForA >= 0.7 { effective.append("clash-retreat") }
+            }
+            let effStr = effective.isEmpty ? "ninguno (tipo=\(transition.type) no-blendy o gateado)" : effective.joined(separator: "+")
+            print("[DJMixingService] 🎚️ B→A flags: bIntroBars=\(bIntroBarsForA) bImmediateImpact=\(bImmediateImpactForA) bHarmonicClash=\(String(format: "%.1f", bHarmonicClashLevelForA)) → \(effStr)")
         }
 
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──

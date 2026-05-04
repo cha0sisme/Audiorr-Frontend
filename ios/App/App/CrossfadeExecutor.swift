@@ -1263,7 +1263,7 @@ class CrossfadeExecutor {
             // que B esta haciendo. Acotado por el orden if/else-if para que
             // intro-aware e impact-aware no colisionen.
             if config.bHarmonicClashLevel >= 0.7 {
-                holdLevel -= 0.15  // clash → A se aparta antes
+                holdLevel = max(0.40, holdLevel - 0.15)  // clash → A se aparta antes
             }
             if config.bImmediateImpact {
                 holdEnd = min(holdEnd, 0.45)
@@ -1379,7 +1379,7 @@ class CrossfadeExecutor {
             let floor: Float = 0.15
             // B→A communication (audit v8 sesion 3) — mismo patron que .eqMix.
             if config.bHarmonicClashLevel >= 0.7 {
-                holdLevel -= 0.15
+                holdLevel = max(0.40, holdLevel - 0.15)
             }
             if config.bImmediateImpact {
                 holdEnd = min(holdEnd, 0.40)
