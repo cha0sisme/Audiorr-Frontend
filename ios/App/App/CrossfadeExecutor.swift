@@ -1,7 +1,7 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║                                                                      ║
-// ║   CrossfadeExecutor — Part of "Velvet Transition" v3.0               ║
-// ║   Codename: "Phantom Cut"                                            ║
+// ║   CrossfadeExecutor — Part of "Velvet Transition" v4.0               ║
+// ║   Codename: "Echo Curves"                                            ║
 // ║                                                                      ║
 // ║   Audiorr — Audiophile-grade music player                            ║
 // ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
@@ -18,6 +18,15 @@
 // ║          alignment (startOffset = entryPoint - totalTime),            ║
 // ║          bass-first mixing (25%), stereo micro-separation (±0.08),   ║
 // ║          PeakLimiter on mainMixer, skipBFilters for short fades      ║
+// ║   v4.0 — Echo Curves: A's outgoing curve listens to B's incoming     ║
+// ║          structure (bIntroBars / bImmediateImpact / bHarmonic-       ║
+// ║          ClashLevel) and adapts. Three modulation branches in        ║
+// ║          .crossfade / .eqMix / .beatMatchBlend: impact-tail (B       ║
+// ║          punches early → A retreats faster), intro-hold (B has       ║
+// ║          long instrumental intro → A breathes longer), clash-       ║
+// ║          retreat (keys clash → A holds lower). Anchored pause-      ║
+// ║          sample-time at swap (lyrics no longer jump ahead). The     ║
+// ║          curve is no longer blind — it hears what's coming.         ║
 // ║                                                                      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -27,9 +36,11 @@ import Foundation
 import UIKit
 
 /// CrossfadeExecutor — real-time crossfade state machine.
-/// Part of the "Phantom Cut" v3.0 engine.
+/// Part of the "Echo Curves" v4.0 engine.
 /// Drives volume curves (equal-power, beat-match, EQ mix), filter automation,
 /// beat-aligned bass swap, time-stretch rate ramp, and energy compensation.
+/// A's curve consults B's flags (bIntroBars, bImmediateImpact, bHarmonicClashLevel)
+/// to adapt — the outgoing track is no longer blind to what's incoming.
 class CrossfadeExecutor {
 
     // MARK: - Tipos

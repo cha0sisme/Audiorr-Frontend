@@ -1,7 +1,7 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
 // ║                                                                      ║
-// ║   DJMixingService — "Crossfade Intelligence Engine" v4.0             ║
-// ║   Codename: "Chameleon Mix"                                          ║
+// ║   DJMixingService — "Crossfade Intelligence Engine" v5.0             ║
+// ║   Codename: "Silent DJ"                                              ║
 // ║                                                                      ║
 // ║   Audiorr — Audiophile-grade music player                            ║
 // ║   Copyright (c) 2025-2026 cha0sisme (github.com/cha0sisme)          ║
@@ -9,8 +9,8 @@
 // ║   Pure crossfade intelligence — no side effects, no audio playback.  ║
 // ║   Analyzes the RELATIONSHIP between any two tracks to decide         ║
 // ║   the optimal transition. The same song B will sound different       ║
-// ║   depending on what song A precedes it — like a chameleon adapting   ║
-// ║   to its context.                                                     ║
+// ║   depending on what song A precedes it. The best DJ is the one you   ║
+// ║   don't notice — knows when to apply effects AND when to step back.  ║
 // ║                                                                      ║
 // ║   v1.0 — JS DJMixingAlgorithms.ts (basic crossfade + beat sync)     ║
 // ║   v2.0 — Velvet Transition: equal-power curves, bass swap,           ║
@@ -30,6 +30,20 @@
 // ║          Outro-anchored triggers (DJ exits at outro, not at end).    ║
 // ║          Calibrated energy thresholds (danceability-aware).           ║
 // ║          Conservative harmonic BPM (half/double only, 6% max stretch)║
+// ║   v5.0 — Silent DJ: discipline of restraint. The DJ now knows when   ║
+// ║          NOT to apply effects. Bidirectional awareness (B→A flags:   ║
+// ║          intro bars, immediate impact, harmonic clash level) lets    ║
+// ║          A's curve adapt to what's coming. Chill recipe (cinturón    ║
+// ║          quíntuple) detects tranquil context and kills moving        ║
+// ║          filters (notch sweeps, dynamic Q, bass kill, stutter cut)   ║
+// ║          while preserving static hygiene. Bass-of-B guard protects   ║
+// ║          incoming tracks where the bass IS the song. CUT timing      ║
+// ║          dead-zone snap (entries 0.05–2.5s before chorus snap        ║
+// ║          backward by default) and CUT+harmonic-clash midScoop kill   ║
+// ║          handle the edge cases of forced cuts. Distinguishes static  ║
+// ║          filter hygiene (always-on, invisible) from dynamic filter   ║
+// ║          drama (off in chill — listener doesn't want tricks where    ║
+// ║          there's no drama to underline).                              ║
 // ║                                                                      ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
