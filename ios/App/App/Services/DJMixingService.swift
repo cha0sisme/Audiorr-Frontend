@@ -314,6 +314,10 @@ enum DJMixingService {
         let bIntroBars: Int
         let bImmediateImpact: Bool
         let bHarmonicClashLevel: Double
+        // v9 (audit 2026-05-05): salta el fade-in lento de B cuando A sale
+        // limpio + B abre con punch. CrossfadeExecutor cambia la curva de B
+        // a hold-en-0 + ramp final ease, evitando el "lavado" reportado.
+        let bRapidFadeIn: Bool
     }
 
     // MARK: - Build Transition Profile
@@ -1021,6 +1025,38 @@ enum DJMixingService {
             isChillContext: isChillContext
         )
 
+        // ── 11. bRapidFadeIn (audit v9 2026-05-05) ──
+        // Activa la curva "B en 0 hasta el ramp final" cuando A sale limpio + B
+        // abre con punch. El usuario reporto en el log v8 sesion 4 que el fade-in
+        // gradual de B se percibia como "lavado" en transiciones donde A despeja
+        // por su cuenta y B tiene material contundente desde el inicio. Ataca
+        // 6+ casos del log: Awful Things, BOTL, OPM BABI, WAP, RATHER LIE, F33l
+        // Lik3 Dyin (este ultimo entro tarde precisamente porque el fade lento
+        // de B comio el espacio).
+        //
+        // Gates conservadores — si alguno falla, mantenemos curva clasica:
+        //   - outroInstrumental A: A sale limpio sin voz/melodia que defender
+        //   - bImmediateImpact: B abre con voz/chorus en primeros 4-6s
+        //   - tipo "blendy" o CUT con anticipation: las ramas que tienen ramp
+        //     audible de B. naturalBlend/cleanHandoff/stemMix/dropMix tienen
+        //     curvas con caracter propio que NO debe sustituirse.
+        //   - !chillContext: en chill el flujo es invisible, sin cambios bruscos.
+        let bRapidFadeIn: Bool = {
+            guard outroInstrumental else { return false }
+            guard bImmediateImpactForA else { return false }
+            guard !isChillContext else { return false }
+            switch transition.type {
+            case .crossfade, .eqMix, .beatMatchBlend, .cut:
+                return true
+            case .cutAFadeInB, .fadeOutACutB, .naturalBlend, .cleanHandoff,
+                 .stemMix, .dropMix, .vinylStop:
+                return false
+            }
+        }()
+        if bRapidFadeIn {
+            print("[DJMixingService] ⚡ bRapidFadeIn ON (outroInstrumental + B impact, type=\(transition.type))")
+        }
+
         return CrossfadeResult(
             entryPoint: finalEntry,
             fadeDuration: effectiveFadeDuration,
@@ -1055,7 +1091,8 @@ enum DJMixingService {
             triggerBiasReason: trigger.reason,
             bIntroBars: bIntroBarsForA,
             bImmediateImpact: bImmediateImpactForA,
-            bHarmonicClashLevel: bHarmonicClashLevelForA
+            bHarmonicClashLevel: bHarmonicClashLevelForA,
+            bRapidFadeIn: bRapidFadeIn
         )
     }
 
@@ -2123,7 +2160,11 @@ enum DJMixingService {
         // Bajamos thresholds para que el gesto reconocible-DJ del bass kill
         // empiece a aparecer en el set:
         //   - dance > 0.4 (de 0.5): R&B chill / pop intimo bailable
-        //   - energies >= 0.15 cada (de 0.20): cubre el rango habitual
+        //   - energies >= 0.10 cada (de 0.15, audit v9 2026-05-05): el log
+        //     v8 sesion 4 mostro bassKill 0/32 — la mitad del set caia bajo
+        //     el floor 0.15 porque backend tiene `energy` muy comprimida
+        //     (rango tipico 0.05-0.30). Bajar a 0.10 cubre ~80% del log y
+        //     deja fuera solo la cola muy baja (tail/decay).
         //   - aceptamos character .smooth con condicion adicional de bpm
         //     trusted Y dance >= 0.55 (proteccion: smooth+dance suele ser
         //     R&B con beat claro tipo Frank Ocean Pyramids; smooth+no-dance
@@ -2136,7 +2177,7 @@ enum DJMixingService {
             && profile.bpmTrusted
             && profile.avgDanceability > 0.4
             && fadeDuration > 4.0
-            && profile.energyA >= 0.15 && profile.energyB >= 0.15
+            && profile.energyA >= 0.10 && profile.energyB >= 0.10
             && characterEligible {
             useBassKill = true
             let charLabel = punchEligible ? "punch" : (dramaticEligible ? "dramatic-up" : "smooth+dance")
@@ -2164,16 +2205,21 @@ enum DJMixingService {
         // want it when there's clear room and intent:
         //   1. Dynamic Q is already on (philosophical pairing — same musical context)
         //   2. B's filters are NOT skipped (the notch lives on band 2 of B)
-        //   3. NOT in anticipation mode (B already runs a complex multi-stage curve;
-        //      stacking a sweep on top would muddy the careful tease)
-        //   4. Fade > 5s (notch needs room to sweep musically)
-        //   5. Danceability > 0.5 (it's a club/DJ technique, suits groove music)
-        //   6. NOT a stem mix (the stem swap is its own dramatic moment — adding
+        //   3. Fade > 5s (notch needs room to sweep musically)
+        //   4. Danceability > 0.5 (it's a club/DJ technique, suits groove music)
+        //   5. NOT a stem mix (the stem swap is its own dramatic moment — adding
         //      a colorful notch on top obscures the intentional vocal/mid-only
         //      character of B's entry; real DJs don't stack effects on stem moves)
+        //
+        // Audit v9 2026-05-05: removed !needsAnticipation gate. The gate was
+        // disparando notchSweep 0/32 en el log v8 sesion 4 porque CUT siempre
+        // lleva needsAnticipation=true. La preocupacion original era que la curva
+        // de B en anticipacion (multi-stage hpB+lsB) "se ensucie" al stack-ear.
+        // Pero notchSweep vive en band 2 (parametric), no choca matematicamente
+        // con band 0 (highpass) ni band 1 (lowshelf) — son biquads independientes.
+        // La curva de anticipation queda intacta; el notch añade color complementario.
         if useDynamicQ
             && !skipBFilters
-            && !needsAnticipation
             && transitionType != .stemMix
             && fadeDuration > 5.0
             && profile.avgDanceability > 0.5 {

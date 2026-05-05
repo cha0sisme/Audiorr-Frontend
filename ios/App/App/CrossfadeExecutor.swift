@@ -123,6 +123,15 @@ class CrossfadeExecutor {
         /// tense=0.6, clash=1.0. Si >= 0.7, A baja su holdLevel para acortar
         /// la zona de superposicion donde se oye la disonancia.
         let bHarmonicClashLevel: Double
+        // v9 (audit 2026-05-05): cuando A sale limpio + B abre con punch
+        // contundente, el fade-in completo de B se percibe como "lavado" en vez
+        // de crossfade — el usuario reporto 6+ casos en el log v8 sesion 4
+        // (Awful Things, BOTL, OPM BABI, WAP, F33l Lik3 Dyin tarde, RATHER LIE).
+        /// B no necesita fade-in lento: en eqMix/beatMatchBlend/crossfade, B se
+        /// queda en 0 hasta el 55% del fade y luego sube ease-in 0→100% en el
+        /// 45% restante (curva tipo cutAFadeInB). DJMixingService lo activa
+        /// cuando outroInstrumental A + B tiene impacto en los primeros segundos.
+        let bRapidFadeIn: Bool
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -138,7 +147,8 @@ class CrossfadeExecutor {
              useNotchSweep: Bool = false,
              useStutterCut: Bool = false,
              bIntroBars: Int = 0, bImmediateImpact: Bool = false,
-             bHarmonicClashLevel: Double = 0) {
+             bHarmonicClashLevel: Double = 0,
+             bRapidFadeIn: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -168,6 +178,7 @@ class CrossfadeExecutor {
             self.bIntroBars = bIntroBars
             self.bImmediateImpact = bImmediateImpact
             self.bHarmonicClashLevel = bHarmonicClashLevel
+            self.bRapidFadeIn = bRapidFadeIn
         }
     }
 
@@ -1104,14 +1115,29 @@ class CrossfadeExecutor {
         // ── DJ effects: Bass Kill + Dynamic Q Resonance + Phaser Notch Sweep ──
         useBassKill = config.useBassKill && useBassManagement && preset.lowshelfA != nil
         useDynamicQ = config.useDynamicQ && !useLowpassA  // Only with highpass sweep, not lowpass
-        // Notch sweep on B's band 2 — same gates as the init() block (kept in sync intentionally
-        // so that both the published log line and the actual automation see identical state).
-        useNotchSweep = config.useNotchSweep && !config.skipBFilters
-            && !config.needsAnticipation && useDynamicQ
+        // Notch sweep on B's band 2 — same gates as decideDJEffects (kept in sync
+        // intentionally so that both the published log line and the actual automation
+        // see identical state). Audit v9 2026-05-05: !needsAnticipation gate dropped
+        // (notch lives on band 2, no clash with anticipation's hpB/lsB on bands 0-1).
+        useNotchSweep = config.useNotchSweep && !config.skipBFilters && useDynamicQ
 
         // ── Compute initial biquad coefficients for A ──
+        // CUT with hold (fade>=5s): A's filters stay passthrough until the cut
+        // sweep window starts. Seeding startFreq=600Hz at t=0 used to plant an
+        // audible highpass during the entire hold ("filter por fases" bug, audit
+        // v9 2026-05-05): user heard a subtle filter at hold-start, then a brusque
+        // jump to ~3.6kHz when applyFiltersA finally took over (the precomputed
+        // ramp position assumed the sweep had been running since t=anticipation).
+        // Now: dspA stays neutral during hold; applyFiltersA seeds band0/1 itself
+        // with cut-local progress (startFreq → endFreq across cutDuration).
+        let isCutWithHold = (config.transitionType == .cut || config.transitionType == .cutAFadeInB)
+            && config.fadeDuration >= 5.0
+
         let band0A: BiquadCoefficients
-        if useLowpassA, let lpA = preset.lowpassA {
+        if isCutWithHold {
+            band0A = .passthrough
+            diagFreqA = 0
+        } else if useLowpassA, let lpA = preset.lowpassA {
             band0A = BiquadCoefficientCalculator.lowpass(frequency: lpA.startFreq, sampleRate: sampleRate, Q: lpA.q)
             diagFreqA = lpA.startFreq
         } else {
@@ -1120,7 +1146,10 @@ class CrossfadeExecutor {
         }
 
         let band1A: BiquadCoefficients
-        if useBassManagement, let lsA = preset.lowshelfA {
+        if isCutWithHold {
+            band1A = .passthrough
+            diagLsGainA = 0
+        } else if useBassManagement, let lsA = preset.lowshelfA {
             band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsA.startGain)
             diagLsGainA = lsA.startGain
         } else {
@@ -1128,14 +1157,14 @@ class CrossfadeExecutor {
         }
 
         let band2A: BiquadCoefficients
-        if useMidScoop, let ms = preset.midScoopA {
+        if !isCutWithHold, useMidScoop, let ms = preset.midScoopA {
             band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: ms.startGain, bandwidth: ms.bandwidth)
         } else {
             band2A = .passthrough
         }
 
         let band3A: BiquadCoefficients
-        if useHighShelfCut, let hs = preset.highShelfA {
+        if !isCutWithHold, useHighShelfCut, let hs = preset.highShelfA {
             band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hs.startGain)
         } else {
             band3A = .passthrough
@@ -1443,6 +1472,16 @@ class CrossfadeExecutor {
 
     func gainForPlayerB(at t: Double) -> Float {
         if config.needsAnticipation {
+            // Rapid-in path (audit v9 2026-05-05): cuando A sale limpio + B abre
+            // con punch, el tease+creep durante anticipation se percibe como
+            // "lavado". Saltamos el tease/creep y dejamos B en 0 durante todo
+            // el hold; el ramp final (gestionado por la curva del transitionType
+            // abajo) hace el resto. Solo skipea el preludio — la curva post-hold
+            // sigue intacta. La curva CUT abajo lee bRapidFadeIn y arranca desde
+            // 0 (no desde 0.45) para no introducir un escalón al cruzar.
+            if config.bRapidFadeIn {
+                return 0
+            }
             if t < timings.anticipationStartTime {
                 return 0
             } else if t < timings.filterStartTime {
@@ -1474,8 +1513,13 @@ class CrossfadeExecutor {
             // With anticipation, B was already teasing at 35% filtered.
             let cutZone = min(3.0, fadeInDuration)
             let bRampStart = timings.fadeInEndTime - cutZone
+            // bRapidFadeIn (audit v9 2026-05-05) anula tease/creep — B en 0 durante
+            // hold y arranca el ramp final desde 0 (no desde 0.45) para evitar
+            // escalon perceptible. startLevel salta de 0.45 a 0 cuando el flag esta
+            // on, asumiendo que A se va limpio por su lado.
+            let useRapidIn = config.bRapidFadeIn && config.needsAnticipation
             if t < bRampStart {
-                if config.needsAnticipation {
+                if config.needsAnticipation && !useRapidIn {
                     // Don't freeze B at a flat level for long fades.
                     // Gradually creep from 0.35 → 0.45 over max 4s, then hold at 0.45.
                     let holdStart = timings.fadeInStartTime
@@ -1490,7 +1534,7 @@ class CrossfadeExecutor {
                 }
                 return 0
             }
-            let startLevel: Float = config.needsAnticipation ? 0.45 : 0.0
+            let startLevel: Float = (config.needsAnticipation && !useRapidIn) ? 0.45 : 0.0
             let rampP = Float(min(1.0, (t - bRampStart) / 1.5))
             return maxVolumeB * (startLevel + (1.0 - startLevel) * rampP)
 
@@ -1509,6 +1553,22 @@ class CrossfadeExecutor {
             return maxVolumeB * (0.15 + 0.85 * eased)
 
         case .eqMix, .beatMatchBlend:
+            // Rapid-in path (audit v9 2026-05-05): cuando A sale limpio + B abre
+            // con punch en los primeros segundos, el ramp gradual completo se
+            // percibe como "lavado". DJMixingService activa bRapidFadeIn solo en
+            // ese contexto. Curva: B en 0 hasta 55%, luego ease firme 0→100% en
+            // 45% restante. needsAnticipation tiene baseLevel=0.35 (B ya teasing
+            // filtrado), no aplica este shortcut — su curva multi-stage es
+            // intencional y no se debe sustituir.
+            if config.bRapidFadeIn && !config.needsAnticipation {
+                let holdEnd = 0.55
+                if progress < holdEnd {
+                    return 0
+                }
+                let rampP = Float((progress - holdEnd) / (1.0 - holdEnd))
+                let eased = rampP * rampP * (3.0 - 2.0 * rampP)
+                return maxVolumeB * eased
+            }
             // Complementary to A's gradual descent (holdEnd=0.50). rampStart pulled
             // earlier (0.45 → 0.35) so B reaches its 50% midpoint before A starts
             // dropping — addresses the v6 log finding that combined power dipped
@@ -1587,6 +1647,17 @@ class CrossfadeExecutor {
             return maxVolumeB
 
         case .crossfade:
+            // Rapid-in path (audit v9 2026-05-05): mismo shortcut que eqMix/
+            // beatMatchBlend cuando A sale limpio + B punch inicial.
+            if config.bRapidFadeIn && !config.needsAnticipation {
+                let holdEnd = 0.55
+                if progress < holdEnd {
+                    return 0
+                }
+                let rampP = Float((progress - holdEnd) / (1.0 - holdEnd))
+                let eased = rampP * rampP * (3.0 - 2.0 * rampP)
+                return maxVolumeB * eased
+            }
             // Complementary to A's gradual descent (holdEnd=0.45). rampStart pulled
             // earlier (0.40 → 0.30) and midpoint target raised (0.45 → 0.50) so B
             // is established by the time A enters its drop phase. Same rationale
@@ -1789,12 +1860,24 @@ class CrossfadeExecutor {
         //   exponencial (ultimos 3s), donde filtro acompaña la caida de vol.
         //   P0.1 (pivot 0.40) hizo este fix mas urgente porque concentro el
         //   sweep audible justo en la zona del hold. Audit v8, 2026-05-04.
+        //
+        // Audit v9 2026-05-05 — "filtro por fases" fix: durante CUT, rebasear
+        // el ramp window al sub-intervalo (cutStart, transitionEnd). El cálculo
+        // anterior usaba (filterStartTime, transitionEnd) y, como filterStartTime
+        // = anticipation (4s), el progress en el primer tick post-hold caía en
+        // 0.4–0.5 (zona post-pivot, frecuencia ~3.6kHz). Resultado: salto brusco
+        // 600→3640Hz en un tick. Con el rebase, freqA arranca en startFreq y
+        // recorre hasta endFreq suavemente sobre los 3s del cut.
+        var rampStart = timings.filterStartTime
+        let rampEnd = timings.transitionEndTime
         if (config.transitionType == .cut || config.transitionType == .cutAFadeInB) {
             if config.fadeDuration < 5.0 { return }
             let volDuration = timings.transitionEndTime - timings.volumeFadeStartTime
             let cutDuration = min(3.0, volDuration)
             // Hold ends when t enters the final cutDuration window.
-            if t < timings.transitionEndTime - cutDuration { return }
+            let cutStart = timings.transitionEndTime - cutDuration
+            if t < cutStart { return }
+            rampStart = cutStart
         }
 
         // CLEAN_HANDOFF / VINYL_STOP: A and B never overlap, so spectral shaping
@@ -1807,7 +1890,7 @@ class CrossfadeExecutor {
             return
         }
 
-        let totalFilterDur = timings.transitionEndTime - timings.filterStartTime
+        let totalFilterDur = rampEnd - rampStart
         guard totalFilterDur > 0 else { return }
 
         // Pivot = where filters shift from gentle barrido to aggressive top end.
@@ -1821,7 +1904,13 @@ class CrossfadeExecutor {
         // than "filter dump at the death". Dynamic Q bell (line ~1776) intentionally
         // left at center=0.55 — it now peaks slightly after the pivot, which is
         // musically correct (Q resonance shines on the higher frequencies).
-        let pivotTime = timings.filterStartTime + totalFilterDur * 0.40
+        let pivotTime = rampStart + totalFilterDur * 0.40
+
+        // For CUT, bassSwap target may be earlier than rampStart (computed against
+        // volumeFadeStartTime, not the cut window). Clamp it so band1A's pre/post
+        // split lands inside the active ramp; otherwise preDur turns negative and
+        // postP runs from t=cutStart with already-saturated values.
+        let effectiveBassSwapTime = max(bassSwapTime, rampStart)
 
         // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
         var freqA: Float
@@ -1829,19 +1918,19 @@ class CrossfadeExecutor {
         if useLowpassA, let lpA = preset.lowpassA {
             let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
             if t < pivotTime {
-                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let p = Float((t - rampStart) / (pivotTime - rampStart))
                 freqA = expInterp(lpA.startFreq, midFreq, min(1, p))
             } else {
-                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
                 freqA = expInterp(midFreq, lpA.endFreq, min(1, p))
             }
             band0A = BiquadCoefficientCalculator.lowpass(frequency: freqA, sampleRate: sampleRate, Q: lpA.q)
         } else {
             if t < pivotTime {
-                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let p = Float((t - rampStart) / (pivotTime - rampStart))
                 freqA = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
             } else {
-                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
                 freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
             // Dynamic Q Resonance: bell-shaped Q curve that peaks mid-crossfade.
@@ -1850,7 +1939,7 @@ class CrossfadeExecutor {
             // Hard-clamped at 4.0 to prevent filter instability/self-oscillation.
             let qValue: Float
             if useDynamicQ, totalFilterDur > 0 {
-                let qProgress = Float((t - timings.filterStartTime) / totalFilterDur)
+                let qProgress = Float((t - rampStart) / totalFilterDur)
                 // Gaussian bell: center at 55% of crossfade, width 30% — peaks during
                 // the most active filter sweep phase (around pivotTime).
                 let bellCenter: Float = 0.55
@@ -1872,40 +1961,37 @@ class CrossfadeExecutor {
         // ── Band 1: Bass swap lowshelf (or Bass Kill) ──
         var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
-            let filterDur = timings.transitionEndTime - timings.filterStartTime
-            if filterDur > 0 {
-                var lsGain: Float
-                if useBassKill {
-                    // Bass Kill: hold at natural level, then instant cut at bassSwapTime.
-                    // 100ms anti-click ramp — imperceptible but prevents clicks/pops
-                    // from abrupt coefficient changes in the biquad delay line.
-                    let killRampDuration: Double = 0.1
-                    let killDepth: Float = -60.0  // effectively silence below shelf freq
-                    if t < bassSwapTime {
-                        lsGain = lsA.startGain  // 0dB — full bass until the kill
-                    } else if t < bassSwapTime + killRampDuration {
-                        let rampP = Float((t - bassSwapTime) / killRampDuration)
-                        lsGain = linInterp(lsA.startGain, killDepth, rampP)
-                    } else {
-                        lsGain = killDepth  // -60dB — bass is dead
-                    }
+            var lsGain: Float
+            if useBassKill {
+                // Bass Kill: hold at natural level, then instant cut at bassSwapTime.
+                // 100ms anti-click ramp — imperceptible but prevents clicks/pops
+                // from abrupt coefficient changes in the biquad delay line.
+                let killRampDuration: Double = 0.1
+                let killDepth: Float = -60.0  // effectively silence below shelf freq
+                if t < bassSwapTime {
+                    lsGain = lsA.startGain  // 0dB — full bass until the kill
+                } else if t < bassSwapTime + killRampDuration {
+                    let rampP = Float((t - bassSwapTime) / killRampDuration)
+                    lsGain = linInterp(lsA.startGain, killDepth, rampP)
                 } else {
-                    // Standard gradual bass swap
-                    let scaledMidGain = lsA.midGain * danceabilityBassScale
-                    let scaledEndGain = lsA.endGain * danceabilityBassScale
-                    if t < bassSwapTime {
-                        let preDur = bassSwapTime - timings.filterStartTime
-                        let preP = preDur > 0 ? Float((t - timings.filterStartTime) / preDur) : 1.0
-                        lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
-                    } else {
-                        let postDur = timings.transitionEndTime - bassSwapTime
-                        let postP = postDur > 0 ? Float((t - bassSwapTime) / postDur) : 1.0
-                        lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
-                    }
+                    lsGain = killDepth  // -60dB — bass is dead
                 }
-                diagLsGainA = lsGain
-                band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain)
+            } else {
+                // Standard gradual bass swap
+                let scaledMidGain = lsA.midGain * danceabilityBassScale
+                let scaledEndGain = lsA.endGain * danceabilityBassScale
+                if t < effectiveBassSwapTime {
+                    let preDur = effectiveBassSwapTime - rampStart
+                    let preP = preDur > 0 ? Float((t - rampStart) / preDur) : 1.0
+                    lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
+                } else {
+                    let postDur = rampEnd - effectiveBassSwapTime
+                    let postP = postDur > 0 ? Float((t - effectiveBassSwapTime) / postDur) : 1.0
+                    lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
+                }
             }
+            diagLsGainA = lsGain
+            band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain)
         }
 
         // ── Band 2: Mid scoop ──
@@ -1914,10 +2000,10 @@ class CrossfadeExecutor {
             var msGain: Float
             let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
             if t < pivotTime {
-                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let p = Float((t - rampStart) / (pivotTime - rampStart))
                 msGain = linInterp(ms.startGain, holdTarget, min(1, p))
             } else {
-                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
                 msGain = linInterp(holdTarget, ms.endGain, min(1, p))
             }
             band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: msGain, bandwidth: ms.bandwidth)
@@ -1929,10 +2015,10 @@ class CrossfadeExecutor {
             var hsGain: Float
             let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
             if t < pivotTime {
-                let p = Float((t - timings.filterStartTime) / (pivotTime - timings.filterStartTime))
+                let p = Float((t - rampStart) / (pivotTime - rampStart))
                 hsGain = linInterp(hs.startGain, holdTarget, min(1, p))
             } else {
-                let p = Float((t - pivotTime) / (timings.transitionEndTime - pivotTime))
+                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
                 hsGain = linInterp(holdTarget, hs.endGain, min(1, p))
             }
             band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain)

@@ -955,7 +955,8 @@ final class QueueManager: AudioEngineDelegate {
                     useStutterCut: crossfadeResult.useStutterCut,
                     bIntroBars: crossfadeResult.bIntroBars,
                     bImmediateImpact: crossfadeResult.bImmediateImpact,
-                    bHarmonicClashLevel: crossfadeResult.bHarmonicClashLevel
+                    bHarmonicClashLevel: crossfadeResult.bHarmonicClashLevel,
+                    bRapidFadeIn: crossfadeResult.bRapidFadeIn
                 )
 
                 // Publish transition reason to diagnostics
@@ -1015,7 +1016,8 @@ final class QueueManager: AudioEngineDelegate {
                         useStutterCut: config.useStutterCut,
                         bIntroBars: config.bIntroBars,
                         bImmediateImpact: config.bImmediateImpact,
-                        bHarmonicClashLevel: config.bHarmonicClashLevel
+                        bHarmonicClashLevel: config.bHarmonicClashLevel,
+                        bRapidFadeIn: config.bRapidFadeIn
                     )
                 } else {
                     finalConfig = config
