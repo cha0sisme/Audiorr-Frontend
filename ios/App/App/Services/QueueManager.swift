@@ -956,7 +956,8 @@ final class QueueManager: AudioEngineDelegate {
                     bIntroBars: crossfadeResult.bIntroBars,
                     bImmediateImpact: crossfadeResult.bImmediateImpact,
                     bHarmonicClashLevel: crossfadeResult.bHarmonicClashLevel,
-                    bRapidFadeIn: crossfadeResult.bRapidFadeIn
+                    bRapidFadeIn: crossfadeResult.bRapidFadeIn,
+                    tier4Active: crossfadeResult.tier4Active
                 )
 
                 // Publish transition reason to diagnostics
@@ -1017,7 +1018,8 @@ final class QueueManager: AudioEngineDelegate {
                         bIntroBars: config.bIntroBars,
                         bImmediateImpact: config.bImmediateImpact,
                         bHarmonicClashLevel: config.bHarmonicClashLevel,
-                        bRapidFadeIn: config.bRapidFadeIn
+                        bRapidFadeIn: config.bRapidFadeIn,
+                        tier4Active: config.tier4Active
                     )
                 } else {
                     finalConfig = config

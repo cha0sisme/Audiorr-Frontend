@@ -61,6 +61,11 @@ final class TransitionDiagnostics {
     /// dispara también las "curvas espejo" de A (hold pleno hasta 0.55, cos²
     /// drop después). Sin este log no podiamos auditar si el flag dispara.
     var bRapidFadeIn = false
+    /// Tier 4 (audit v10 2026-05-05). True cuando el decisor adelantó el
+    /// entryPoint de B al primer kick de su intro instrumental, ANTES del
+    /// chorus, para que B acompañe los últimos 6-10 compases de A. Activa la
+    /// curva `earlyBlend` en CrossfadeExecutor.
+    var tier4Active = false
 
     // Analysis
     var energyA: Double = 0
@@ -140,6 +145,7 @@ final class TransitionDiagnostics {
         let useStutterCut: Bool
         let skipBFilters: Bool
         let bRapidFadeIn: Bool
+        let tier4Active: Bool
         // Beat / BPM
         let beatSynced: Bool
         let beatSyncInfo: String
@@ -263,6 +269,7 @@ final class TransitionDiagnostics {
         useStutterCut: Bool,
         skipBFilters: Bool,
         bRapidFadeIn: Bool,
+        tier4Active: Bool,
         energyA: Double,
         energyB: Double,
         isOutroInstrumental: Bool,
@@ -298,6 +305,7 @@ final class TransitionDiagnostics {
             self.useStutterCut = useStutterCut
             self.skipBFilters = skipBFilters
             self.bRapidFadeIn = bRapidFadeIn
+            self.tier4Active = tier4Active
             self.energyA = energyA
             self.energyB = energyB
             self.isOutroInstrumental = isOutroInstrumental
@@ -404,6 +412,7 @@ final class TransitionDiagnostics {
                 useStutterCut: self.useStutterCut,
                 skipBFilters: self.skipBFilters,
                 bRapidFadeIn: self.bRapidFadeIn,
+                tier4Active: self.tier4Active,
                 beatSynced: self.isBeatSynced,
                 beatSyncInfo: self.beatSyncInfo,
                 bpmA: self.bpmA,
@@ -656,7 +665,7 @@ final class TransitionDiagnostics {
           enabled=\(filtersEnabled)  preset=\(filterPreset)
           midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
           bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)  stutterCut=\(useStutterCut)
-          bRapidFadeIn=\(bRapidFadeIn)
+          bRapidFadeIn=\(bRapidFadeIn)  tier4Active=\(tier4Active)
 
         ANALYSIS:
           energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))

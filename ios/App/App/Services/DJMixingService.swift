@@ -72,6 +72,19 @@ enum DJMixingService {
     /// hasta que Tier 4 demuestre que el contexto cambia, o se elimine la rama.
     private static let kEnableRapidFadeIn = false
 
+    /// Tier 4 (audit v10 2026-05-05): adelanta entryPoint de B al primer kick
+    /// de su intro instrumental, ANTES del chorus, cuando el setup es claro
+    /// (A en outro instrumental + B con intro instrumental real + BPMs
+    /// confiables fuera de franja toxica + sin ad-libs/speech en intro de B).
+    /// Curva nueva `earlyBlend` en CrossfadeExecutor: B entra al ~75% desde el
+    /// primer downbeat (escalon, no rampa lenta), A mantiene 100% los primeros
+    /// 50% del solape, A cae acelerada en los ultimos 25%, B sube 75→100% en
+    /// el downbeat del chorus. Heuristica revisada por architect (mediana de
+    /// delta de downbeats vs bi*4, paridad anclada a evento musical) y backend
+    /// validator (gates contra half-time franja 140-180, structure rota
+    /// chorusStart<5s, vocalStart=0 literal, energy=0 espurio).
+    private static let kEnableTier4 = true
+
     /// Returns true if `type` should be skipped this round because it was used
     /// too recently. Called inside `decideTransitionType` before committing to
     /// an expressive type (currently only VINYL_STOP — extend as new types
@@ -328,6 +341,12 @@ enum DJMixingService {
         // limpio + B abre con punch. CrossfadeExecutor cambia la curva de B
         // a hold-en-0 + ramp final ease, evitando el "lavado" reportado.
         let bRapidFadeIn: Bool
+        // v10 (audit 2026-05-05): Tier 4 — entryPoint adelantado a la intro
+        // instrumental de B. Cuando true, CrossfadeExecutor activa la curva
+        // earlyBlend: B entra al ~75% desde t=0 (escalon, no rampa), A
+        // mantiene 100% los primeros 50% del fade, A cae acelerada en los
+        // ultimos 25%, B sube 75→100% en el downbeat del chorus.
+        let tier4Active: Bool
     }
 
     // MARK: - Build Transition Profile
@@ -684,9 +703,37 @@ enum DJMixingService {
             fadeDuration: fade.duration,
             harmonicClashLevel: harmonicClashLevel
         )
-        let finalEntry = snapResult.entry
+        let snapEntry = snapResult.entry
         if snapResult.snapped {
             print("[DJMixingService] 🎯 \(snapResult.info)")
+        }
+
+        // ── 6.5. Tier 4: adelantar entryPoint al primer kick de la intro de B ──
+        // Cuando A esta en outro instrumental confiable + B tiene intro
+        // instrumental real con kick (sin voz), adelantar entry para que B
+        // acompane los ultimos 6-10 compases de A. Curva nueva `earlyBlend`
+        // se activa via tier4Active. Si gates fallan, fallback al snapEntry.
+        // IMPORTANTE: corre ANTES de los flags B→A (8d) para que
+        // bImmediateImpact se recalcule con el entry adelantado.
+        let tier4Result = Self.computeTier4Entry(
+            safeCurrent: safeCurrent,
+            safeNext: safeNext,
+            profile: profile,
+            bufferADuration: bufferADuration,
+            bufferBDuration: bufferBDuration,
+            fadeDuration: fade.duration,
+            originalEntry: snapEntry,
+            transitionType: transition.type
+        )
+        let finalEntry: Double
+        let tier4Active: Bool
+        if let result = tier4Result {
+            finalEntry = result.entry
+            tier4Active = true
+            print("[DJMixingService] ⚡ \(result.reason)")
+        } else {
+            finalEntry = snapEntry
+            tier4Active = false
         }
 
         // ── 6b. Fade duration overrides per transition type ──
@@ -1130,7 +1177,8 @@ enum DJMixingService {
             bIntroBars: bIntroBarsForA,
             bImmediateImpact: bImmediateImpactForA,
             bHarmonicClashLevel: bHarmonicClashLevelForA,
-            bRapidFadeIn: bRapidFadeIn
+            bRapidFadeIn: bRapidFadeIn,
+            tier4Active: tier4Active
         )
     }
 
@@ -2971,6 +3019,144 @@ enum DJMixingService {
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: diferencia demasiado grande (±\(Int(diff)) BPM)")
         }
+    }
+
+    // MARK: - Tier 4: Adelantar entryPoint al primer kick de la intro de B
+
+    /// Computa un entryPoint adelantado cuando el setup es claro: A en outro
+    /// instrumental confiable + B con intro instrumental real con kick + percu.
+    /// Retorna nil si cualquier gate falla — fallback al entry original.
+    ///
+    /// Heuristica revisada por architect (delta de downbeats vs bi*4, paridad
+    /// anclada al evento musical) y backend validator (gates contra half-time
+    /// franja 140-180, structure rota, vocalStart=0 literal, energy=0 espurio).
+    /// DJ profesional confirmo escalado por BPM: 6 compases <90 BPM, 8 90-130,
+    /// 10 >130 BPM. Curva `earlyBlend` se activa via flag `tier4Active` en Config.
+    private static func computeTier4Entry(
+        safeCurrent: SongAnalysis?,
+        safeNext: SongAnalysis?,
+        profile: TransitionProfile,
+        bufferADuration: Double,
+        bufferBDuration: Double,
+        fadeDuration: Double,
+        originalEntry: Double,
+        transitionType: TransitionType
+    ) -> (entry: Double, reason: String)? {
+        guard kEnableTier4 else { return nil }
+
+        // ── Gate: tipo de transicion compatible ──
+        // Tier 4 solo para blendy types — CUT/cleanHandoff tienen caracter propio
+        // (caida exp, sin solape) que no encaja con "B entra antes con beat".
+        switch transitionType {
+        case .crossfade, .eqMix, .beatMatchBlend:
+            break
+        default:
+            return nil
+        }
+
+        // ── Gate: A confiable + outro real (replicamos outroInstrumentalConfident) ──
+        guard let cur = safeCurrent, cur.hasError != true else { return nil }
+        guard cur.hasVocalEndData else { return nil }
+        let crossfadeStartA = bufferADuration - fadeDuration
+        guard (crossfadeStartA - cur.lastVocalTime) >= 2.0 else { return nil }
+
+        // ── Gate: B confiable ──
+        guard let next = safeNext, next.hasError != true else { return nil }
+
+        // ── Gate: BPMs trusted + ambos fuera de franja toxica 140-180 ──
+        // (backend validator: half-time bug afecta esa franja, bpmDiff<6%
+        // no protege si A y B caen ambos en la franja con el mismo error)
+        guard profile.bpmTrusted else { return nil }
+        let bpmAToxic = profile.bpmA >= 140 && profile.bpmA <= 180
+        let bpmBToxic = profile.bpmB >= 140 && profile.bpmB <= 180
+        guard !bpmAToxic, !bpmBToxic else { return nil }
+
+        // ── Gate: downbeats suficientes ──
+        let downbeats = next.downbeatTimes
+        guard downbeats.count >= 4 else { return nil }
+
+        // ── Compute barDur from downbeat deltas (mediana, robusto a half-time
+        //    y metricas no-4/4) ──
+        var deltas: [Double] = []
+        for i in 1..<min(downbeats.count, 8) {
+            deltas.append(downbeats[i] - downbeats[i-1])
+        }
+        let sortedDeltas = deltas.sorted()
+        let medianDelta = sortedDeltas[sortedDeltas.count / 2]
+        guard medianDelta >= 1.0, medianDelta <= 4.0 else { return nil }
+        let barDur = medianDelta
+
+        // ── Gate: structure no roto, intro real ──
+        let introEnd = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
+        guard introEnd > 0 else { return nil }
+
+        // vocalStart: descarta nil y literal 0 (track abre cantando)
+        guard let vocalStart = next.vocalStartTime, vocalStart > 0 else { return nil }
+        let chorusStart = next.chorusStartTime
+        // chorusStart < 5s tipicamente es missing o ruido (memoria backend
+        // 2026-05-05: A Escondidas con chorusStart=0.1s literal)
+        let chorusValid = chorusStart > 5.0
+
+        let firstEventB = min(vocalStart, chorusValid ? chorusStart : .infinity)
+        guard firstEventB.isFinite else { return nil }
+        // Sanity structure: si introEnd > firstEventB - 12 compases, la estructura
+        // es incoherente (37.5% de tracks v8 tenian chorusStart < introEnd) → fallback
+        guard introEnd + 12 * barDur < firstEventB else { return nil }
+
+        // ── Gate: B sin voz en intro ──
+        guard !next.hasIntroVocals else { return nil }
+        guard vocalStart > introEnd + 4 * barDur else { return nil }
+        if !next.speechSegments.isEmpty {
+            let speechInIntro = next.speechSegments.contains { seg in
+                seg.start < firstEventB - barDur
+            }
+            guard !speechInIntro else { return nil }
+        }
+
+        // ── Gate: energy ratio (defensa contra energy=0 espurio) ──
+        let energyA = profile.energyA
+        let energyB = profile.energyB
+        guard energyA > 0.05, energyB > 0.05 else { return nil }
+        guard energyB <= 1.3 * energyA else { return nil }
+
+        // ── Gate: bufferB suficiente para reproducir desde el entry adelantado ──
+        guard bufferBDuration > firstEventB + 30 else { return nil }
+
+        // ── Compute target — escalado por BPM (DJ recommendation) ──
+        let bpmB = profile.bpmB
+        let barsAhead: Double
+        if bpmB < 90 {
+            barsAhead = 6
+        } else if bpmB > 130 {
+            barsAhead = 10
+        } else {
+            barsAhead = 8
+        }
+        let target = firstEventB - barsAhead * barDur
+        let lowerBound = max(introEnd + 4 * barDur, firstEventB - 12 * barDur)
+        let upperBound = firstEventB - 4 * barDur
+        guard target >= lowerBound, target <= upperBound else { return nil }
+
+        // ── Snap al downbeat mas cercano a target en compas par anclado al
+        //    evento musical (firstEventB - 8 bars, 10 bars, 12 bars... son
+        //    compases pares relativos al evento, robustos a downbeats[0] tardio) ──
+        let candidates = downbeats.filter { db in
+            guard db >= lowerBound, db <= upperBound else { return false }
+            let barsFromFirstEvent = (firstEventB - db) / barDur
+            let nearestBars = barsFromFirstEvent.rounded()
+            guard Int(nearestBars) % 2 == 0 else { return false }
+            // Tolerancia 0.25 compases respecto al boundary perfecto
+            return abs(barsFromFirstEvent - nearestBars) < 0.25
+        }
+        guard !candidates.isEmpty else { return nil }
+        let bestCandidate = candidates.min { abs($0 - target) < abs($1 - target) }!
+
+        // Sanity: nuevo entry debe ser estrictamente menor que el original
+        // (si snap acaba cayendo cerca del entry original, no aporta nada)
+        guard bestCandidate < originalEntry - 1.0 else { return nil }
+
+        let reason = "Tier4: BPM=\(Int(bpmB)) bars=\(Int(barsAhead)) entry: \(String(format: "%.1f", originalEntry))→\(String(format: "%.1f", bestCandidate))s"
+        return (entry: bestCandidate, reason: reason)
     }
 
     // MARK: - Instrumental Detection (refined with actual fade zone)
