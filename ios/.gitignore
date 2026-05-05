@@ -10,4 +10,9 @@ capacitor-cordova-ios-plugins
 
 # Generated Config files
 App/App/capacitor.config.json
-App/App/config.xml
+# config.xml: comiteado a proposito (2026-05-05) para que Xcode Cloud lo
+# encuentre. Este repo no tiene tooling Capacitor (no capacitor.config.ts,
+# no package.json) asi que NO se regenera con `npx cap sync` — el archivo
+# es estatico. Si en el futuro se restaura el toolchain Capacitor en raiz,
+# revisar si conviene volver a ignorar (pero entonces hay que arrancar
+# `npx cap sync ios` en un ci_post_clone.sh para Xcode Cloud).
