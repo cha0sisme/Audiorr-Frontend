@@ -3066,13 +3066,23 @@ enum DJMixingService {
         // ── Gate 10: clash armonico < 0.7 (sin choque tonal duro) ──
         guard profile.harmonic.compatibility != .clash else { return nil }
 
-        // ── Compute target con barsAhead = 6 default (DJ v11) ──
+        // ── Compute target con barsAhead = 6 fijo (DJ v11) ──
+        // v11.1 (audit 2026-05-05): barsAhead ahora constante 6 (antes
+        // 6/6/8 escalado por BPM era no-monotonico, bug). El plan v11 dijo
+        // "default 6". 6 compases tipicos a 120 BPM = 12s, 90 BPM = 16s,
+        // 140 BPM = 10s — rangos razonables para que B acompane a A.
         let bpmB = profile.bpmB
-        let barsAhead: Double = bpmB < 90 ? 6 : (bpmB > 130 ? 8 : 6)
-        let target = firstEventB - barsAhead * barDur
+        let barsAhead: Double = 6
         let lowerBound = max(introEnd + 4 * barDur, firstEventB - 10 * barDur)
         let upperBound = firstEventB - 4 * barDur
-        guard target >= lowerBound, target <= upperBound else { return nil }
+        // Sanity: rango valido. Si la intro es muy corta o esta mal detectada,
+        // lowerBound puede igualar/superar upperBound — sin rango no hay snap.
+        guard lowerBound < upperBound else { return nil }
+        // Target ideal = barsAhead bars antes del firstEventB. Clamp al rango
+        // para evitar fallo silencioso cuando intros largas empujan target
+        // antes de lowerBound (bug v11.0: ~30% de candidatos se perdian asi).
+        let targetIdeal = firstEventB - barsAhead * barDur
+        let target = min(max(targetIdeal, lowerBound), upperBound)
 
         // ── Snap a downbeat mas cercano a target, paridad anclada al evento musical ──
         let candidates = downbeats.filter { db in
