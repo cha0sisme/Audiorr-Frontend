@@ -62,6 +62,16 @@ enum DJMixingService {
     private static var recentTypes: [TransitionType] = []
     private static let recentTypesLimit = 12
 
+    // MARK: - Feature flags (audit v10 2026-05-05)
+
+    /// bRapidFadeIn: cuando true, activa la curva "B silenciosa 55% + curvas
+    /// espejo de A" en transiciones blendy con outroInstrumentalConfident +
+    /// bImmediateImpact. Tras coche-test del v9.5, esta curva genero 4
+    /// regresiones a 0/10 ("valle de energia + clash brutal" segun DJ). El fix
+    /// correcto es Tier 4 (entry adelantado), no curva-spejo. Flag false
+    /// hasta que Tier 4 demuestre que el contexto cambia, o se elimine la rama.
+    private static let kEnableRapidFadeIn = false
+
     /// Returns true if `type` should be skipped this round because it was used
     /// too recently. Called inside `decideTransitionType` before committing to
     /// an expressive type (currently only VINYL_STOP — extend as new types
@@ -1057,7 +1067,17 @@ enum DJMixingService {
             let crossfadeStartA = bufferADuration - effectiveFadeDuration
             return (crossfadeStartA - cur.lastVocalTime) >= 2.0
         }()
+        // v10 (2026-05-05) — bRapidFadeIn DESACTIVADO via feature flag tras
+        // coche-test del v9.5 reportar 4 regresiones a 0/10 (Jesus Lord→Awful
+        // Things, Awful Things→Institutionalized, STORM II→BOTL, FUSC→Good
+        // Drank). Patron comun: A en outro instrumental + curvas espejo + B
+        // silencio 55% → "valle de energia, B irrumpe sobre hueco, clash brutal"
+        // (DJ profesional). El fix correcto NO es la curva sino adelantar el
+        // entryPoint (Tier 4) — pendiente commit aparte. Mantenemos el codigo
+        // de las ramas en CrossfadeExecutor como codigo muerto preservado para
+        // re-activacion futura si Tier 4 cambia el contexto.
         let bRapidFadeIn: Bool = {
+            guard Self.kEnableRapidFadeIn else { return false }
             guard outroInstrumentalConfident else { return false }
             guard bImmediateImpactForA else { return false }
             guard !isChillContext else { return false }
@@ -1071,7 +1091,7 @@ enum DJMixingService {
         }()
         if bRapidFadeIn {
             print("[DJMixingService] ⚡ bRapidFadeIn ON (outroInstrumental confident + B impact, type=\(transition.type))")
-        } else if outroInstrumental && bImmediateImpactForA && !outroInstrumentalConfident {
+        } else if Self.kEnableRapidFadeIn && outroInstrumental && bImmediateImpactForA && !outroInstrumentalConfident {
             print("[DJMixingService] ⚠️ bRapidFadeIn skipped — outroInstrumental no confiable (sin hasVocalEndData o margen<2s)")
         }
 
