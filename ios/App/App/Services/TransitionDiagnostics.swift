@@ -55,6 +55,12 @@ final class TransitionDiagnostics {
     /// off-grid; this flag reflects the decision-layer intent, not runtime state.)
     var useStutterCut = false
     var skipBFilters = false
+    /// Rapid fade-in B (audit v9 2026-05-05). True cuando el decisor detectó
+    /// outro instrumental A + impacto inmediato B → curva de B comprime el
+    /// fade-in al ramp final firme en vez del crossfade lento. En blendy types
+    /// dispara también las "curvas espejo" de A (hold pleno hasta 0.55, cos²
+    /// drop después). Sin este log no podiamos auditar si el flag dispara.
+    var bRapidFadeIn = false
 
     // Analysis
     var energyA: Double = 0
@@ -133,6 +139,7 @@ final class TransitionDiagnostics {
         let useNotchSweep: Bool
         let useStutterCut: Bool
         let skipBFilters: Bool
+        let bRapidFadeIn: Bool
         // Beat / BPM
         let beatSynced: Bool
         let beatSyncInfo: String
@@ -255,6 +262,7 @@ final class TransitionDiagnostics {
         useNotchSweep: Bool,
         useStutterCut: Bool,
         skipBFilters: Bool,
+        bRapidFadeIn: Bool,
         energyA: Double,
         energyB: Double,
         isOutroInstrumental: Bool,
@@ -289,6 +297,7 @@ final class TransitionDiagnostics {
             self.useNotchSweep = useNotchSweep
             self.useStutterCut = useStutterCut
             self.skipBFilters = skipBFilters
+            self.bRapidFadeIn = bRapidFadeIn
             self.energyA = energyA
             self.energyB = energyB
             self.isOutroInstrumental = isOutroInstrumental
@@ -394,6 +403,7 @@ final class TransitionDiagnostics {
                 useNotchSweep: self.useNotchSweep,
                 useStutterCut: self.useStutterCut,
                 skipBFilters: self.skipBFilters,
+                bRapidFadeIn: self.bRapidFadeIn,
                 beatSynced: self.isBeatSynced,
                 beatSyncInfo: self.beatSyncInfo,
                 bpmA: self.bpmA,
@@ -646,6 +656,7 @@ final class TransitionDiagnostics {
           enabled=\(filtersEnabled)  preset=\(filterPreset)
           midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
           bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)  stutterCut=\(useStutterCut)
+          bRapidFadeIn=\(bRapidFadeIn)
 
         ANALYSIS:
           energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))

@@ -688,6 +688,7 @@ class CrossfadeExecutor {
             useNotchSweep: useNotchSweep,
             useStutterCut: stutterActive,
             skipBFilters: config.skipBFilters,
+            bRapidFadeIn: config.bRapidFadeIn,
             energyA: config.energyA,
             energyB: config.energyB,
             isOutroInstrumental: config.isOutroInstrumental,
@@ -1122,19 +1123,25 @@ class CrossfadeExecutor {
         useNotchSweep = config.useNotchSweep && !config.skipBFilters && useDynamicQ
 
         // ── Compute initial biquad coefficients for A ──
-        // CUT with hold (fade>=5s): A's filters stay passthrough until the cut
-        // sweep window starts. Seeding startFreq=600Hz at t=0 used to plant an
-        // audible highpass during the entire hold ("filter por fases" bug, audit
-        // v9 2026-05-05): user heard a subtle filter at hold-start, then a brusque
-        // jump to ~3.6kHz when applyFiltersA finally took over (the precomputed
-        // ramp position assumed the sweep had been running since t=anticipation).
-        // Now: dspA stays neutral during hold; applyFiltersA seeds band0/1 itself
-        // with cut-local progress (startFreq → endFreq across cutDuration).
-        let isCutWithHold = (config.transitionType == .cut || config.transitionType == .cutAFadeInB)
-            && config.fadeDuration >= 5.0
+        // CUT family: A's filters stay passthrough until the cut sweep window
+        // starts. Seeding startFreq=600Hz at t=0 used to plant an audible
+        // highpass ("filter por fases" bug, audit v9 2026-05-05): user heard a
+        // subtle filter at hold-start, then a brusque jump to ~3.6kHz when
+        // applyFiltersA finally took over (the precomputed ramp position assumed
+        // the sweep had been running since t=anticipation). Now: dspA stays
+        // neutral until applyFiltersA seeds band0/1 itself with cut-local
+        // progress (startFreq → endFreq across cutDuration).
+        //
+        // v9.5 (audit 2026-05-05) — extender a CUT con fade<5s también: el gate
+        // anterior `fadeDuration >= 5` dejaba a CUT corto plantando 600Hz fijo
+        // toda la transición (applyFiltersA hace early-return en fade<5, asi
+        // que el highpass plantado en init se quedaba estatico). Ahora todos
+        // los CUT arrancan passthrough; CUT corto simplemente nunca aplica
+        // ningun filter movement, lo cual es lo correcto para fades cortos.
+        let isCutTransition = config.transitionType == .cut || config.transitionType == .cutAFadeInB
 
         let band0A: BiquadCoefficients
-        if isCutWithHold {
+        if isCutTransition {
             band0A = .passthrough
             diagFreqA = 0
         } else if useLowpassA, let lpA = preset.lowpassA {
@@ -1146,7 +1153,7 @@ class CrossfadeExecutor {
         }
 
         let band1A: BiquadCoefficients
-        if isCutWithHold {
+        if isCutTransition {
             band1A = .passthrough
             diagLsGainA = 0
         } else if useBassManagement, let lsA = preset.lowshelfA {
@@ -1157,14 +1164,14 @@ class CrossfadeExecutor {
         }
 
         let band2A: BiquadCoefficients
-        if !isCutWithHold, useMidScoop, let ms = preset.midScoopA {
+        if !isCutTransition, useMidScoop, let ms = preset.midScoopA {
             band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: ms.startGain, bandwidth: ms.bandwidth)
         } else {
             band2A = .passthrough
         }
 
         let band3A: BiquadCoefficients
-        if !isCutWithHold, useHighShelfCut, let hs = preset.highShelfA {
+        if !isCutTransition, useHighShelfCut, let hs = preset.highShelfA {
             band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hs.startGain)
         } else {
             band3A = .passthrough
@@ -1280,15 +1287,39 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut, .cutAFadeInB:
-            // Hard cut: A stays full, then drops exponentially over 3s.
+            // Hard cut: A stays full, then drops exponentially over 3s (4s en BPMs lentos).
             // Wider drop zone prevents the jarring "BAM" effect of 1.5s cuts.
-            let cutDuration = min(3.0, duration)
+            // v9.5 (2026-05-05): danceability<0.5 → cap 4.0s. DJ matiz: en chill
+            // 70-85 BPM los 3s del barrido del filtro y la caida exp se quedaban
+            // cortos; 4s les da espacio para sentirse "DJ humano".
+            let cutCap: Double = config.danceability < 0.5 ? 4.0 : 3.0
+            let cutDuration = min(cutCap, duration)
             let cutStart = max(0, 1.0 - cutDuration / duration)
             if progress < cutStart { return maxVolumeA }
             let cutP = Float((progress - cutStart) / (1.0 - cutStart))
             return maxVolumeA * powf(0.0001 / maxVolumeA, cutP)
 
         case .eqMix, .beatMatchBlend:
+            // Mirror curves path (audit v9.5 2026-05-05): cuando bRapidFadeIn ON,
+            // B se queda en 0 hasta progress=0.55 y luego sube ease firme. La
+            // curva clasica de A (holdLevel=0.65, dropEnd=0.85) baja MIENTRAS B
+            // esta callado → dip perceptual de ~12 dB en progress 0.55-0.70 que
+            // el DJ describio como "valle donde el set pierde energia". Solucion:
+            // A se mantiene plena (1.0) hasta progress=0.55 (espejo del hold de
+            // B) y luego cos² drop sobre los ultimos 0.45 — espejo de la rampa
+            // de B. floor=0.10 conservado para que A no muera abrupta antes del
+            // swap (manteniendo continuidad con la curva clasica).
+            if config.bRapidFadeIn && !config.needsAnticipation {
+                let holdEndMirror = 0.55
+                let floor: Float = 0.10
+                if progress < holdEndMirror {
+                    return maxVolumeA  // A plena, dueña del momento
+                }
+                let dropP = Float((progress - holdEndMirror) / (1.0 - holdEndMirror))
+                let angle = dropP * .pi / 2.0
+                let cosSq = cosf(angle) * cosf(angle)
+                return maxVolumeA * (floor + (1.0 - floor) * cosSq)
+            }
             // Gradual descent: A eases down to 65% by midpoint, then cos² drop to a
             // floor of 0.15 by progress=0.85, then exponential tail to ~0.
             // Floor + tail keep A audible during the late-fade window where the v6
@@ -1414,6 +1445,19 @@ class CrossfadeExecutor {
             return maxVolumeA * holdLevel * powf(0.0001 / holdLevel, dropP)
 
         case .crossfade:
+            // Mirror curves path (audit v9.5 2026-05-05): mismo shortcut que
+            // eqMix/beatMatchBlend cuando bRapidFadeIn ON. Ver comentario alli.
+            if config.bRapidFadeIn && !config.needsAnticipation {
+                let holdEndMirror = 0.55
+                let floorMirror: Float = 0.10
+                if progress < holdEndMirror {
+                    return maxVolumeA
+                }
+                let dropP = Float((progress - holdEndMirror) / (1.0 - holdEndMirror))
+                let angle = dropP * .pi / 2.0
+                let cosSq = cosf(angle) * cosf(angle)
+                return maxVolumeA * (floorMirror + (1.0 - floorMirror) * cosSq)
+            }
             // Standard crossfade with floor + tail (same shape as eqMix/beatMatchBlend
             // but with a higher hold and a slightly earlier drop). Keeps A audible
             // through the late fade so the combined power stays close to constant.
@@ -1508,10 +1552,13 @@ class CrossfadeExecutor {
 
         switch config.transitionType {
         case .cut:
-            // Cut: B enters during the last 3s (matching A's drop zone),
-            // ramping over 1.5s to avoid the jarring "BAM" effect.
+            // Cut: B enters during the last 3s (4s en BPMs lentos) — matching A's
+            // drop zone. Ramping over 1.5s para evitar el "BAM" effect.
             // With anticipation, B was already teasing at 35% filtered.
-            let cutZone = min(3.0, fadeInDuration)
+            // v9.5 (2026-05-05): cap 4.0s cuando danceability<0.5 — coordinado con
+            // la caida exp de A en gainForPlayerA y el filter ramp en applyFiltersA.
+            let cutCap: Double = config.danceability < 0.5 ? 4.0 : 3.0
+            let cutZone = min(cutCap, fadeInDuration)
             let bRampStart = timings.fadeInEndTime - cutZone
             // bRapidFadeIn (audit v9 2026-05-05) anula tease/creep — B en 0 durante
             // hold y arranca el ramp final desde 0 (no desde 0.45) para evitar
@@ -1873,7 +1920,11 @@ class CrossfadeExecutor {
         if (config.transitionType == .cut || config.transitionType == .cutAFadeInB) {
             if config.fadeDuration < 5.0 { return }
             let volDuration = timings.transitionEndTime - timings.volumeFadeStartTime
-            let cutDuration = min(3.0, volDuration)
+            // v9.5 (2026-05-05): cap 4.0s cuando danceability<0.5 — coordinado
+            // con gainForPlayerA/B. Mantiene coherencia entre la caida exp de A,
+            // el ramp de B, y el filter sweep en CUT con BPMs lentos.
+            let cutCap: Double = config.danceability < 0.5 ? 4.0 : 3.0
+            let cutDuration = min(cutCap, volDuration)
             // Hold ends when t enters the final cutDuration window.
             let cutStart = timings.transitionEndTime - cutDuration
             if t < cutStart { return }
@@ -1937,13 +1988,22 @@ class CrossfadeExecutor {
             // Creates the classic DJ "sweeping filter" resonance at the cutoff frequency.
             // Q rises from the preset's base Q to a peak (3.5) and back down.
             // Hard-clamped at 4.0 to prevent filter instability/self-oscillation.
+            //
+            // v9.5 (audit 2026-05-05): cuando rampStart esta rebased a cutStart
+            // (CUT con hold), totalFilterDur cae de ~7s a ~3s. La bell de width
+            // 0.30 se comprime: el peak Q dura ~0.9s en vez de ~2.1s y se siente
+            // como "blink" en vez de "barrido". En CUT ampliamos width a 0.45
+            // para que el peak vuelva a durar ~1.4s, manteniendo el caracter del
+            // efecto en la ventana cutDuration mas corta.
             let qValue: Float
             if useDynamicQ, totalFilterDur > 0 {
                 let qProgress = Float((t - rampStart) / totalFilterDur)
-                // Gaussian bell: center at 55% of crossfade, width 30% — peaks during
-                // the most active filter sweep phase (around pivotTime).
+                // Gaussian bell: center at 55% of crossfade, width adapts to ramp scope —
+                // 0.30 cuando la ventana es full crossfade (~7s+); 0.45 cuando es CUT-local
+                // (~3s) para evitar el "blink" causado por la ventana comprimida.
                 let bellCenter: Float = 0.55
-                let bellWidth: Float = 0.30
+                let isCutLocalRamp = config.transitionType == .cut || config.transitionType == .cutAFadeInB
+                let bellWidth: Float = isCutLocalRamp ? 0.45 : 0.30
                 let exponent = -powf((qProgress - bellCenter) / bellWidth, 2) / 2.0
                 // Clamp exponent to avoid expf underflow on extreme values
                 let bellValue = expf(max(-10, exponent))
@@ -2138,11 +2198,27 @@ class CrossfadeExecutor {
         // exponentially 250 → 6000 Hz over B's filter window, while depth follows a
         // bell (-6 → -24 → -6 dB). Sounds like a static phaser sweep "riding through" B.
         // Pre-gated in setupInitialEQ + init: useNotchSweep already implies
-        // !skipBFilters && !needsAnticipation && useDynamicQ.
+        // !skipBFilters && useDynamicQ (audit v9 quito el gate !needsAnticipation).
+        //
+        // v9.5 (audit 2026-05-05) — cuando needsAnticipation ON, retrasar el
+        // sweep activo del notch hasta la 2nd mitad del bWindow. Durante la 1ra
+        // mitad (que coincide con el final de la curva multi-stage del highpass
+        // de B 300→endFreq), el notch se queda quieto en notchStartFreq con tail
+        // gain (-6dB). Asi evita que dos sweeps audibles (highpass + notch)
+        // arranquen a la vez — DJ profesional describio el solape como "knob
+        // mareado, sobre-procesado". En el segundo 50% el highpass ya esta cerca
+        // de su endFreq estable y el notch tiene espacio para hacer su gesto.
         let band2B: BiquadCoefficients
         if useNotchSweep && bWindowDur > 0 {
             let notchProgress = Float((t - timings.fadeInStartTime) / bWindowDur)
-            let p = min(1, max(0, notchProgress))
+            let notchProgressEffective: Float
+            if config.needsAnticipation {
+                // Re-mapear [0.5, 1.0] → [0.0, 1.0]; antes de 0.5 quedarse en p=0.
+                notchProgressEffective = max(0, (notchProgress - 0.5) * 2.0)
+            } else {
+                notchProgressEffective = notchProgress
+            }
+            let p = min(1, max(0, notchProgressEffective))
             // Exponential frequency sweep — perceptually linear (octaves per second).
             let notchFreq = expInterp(Self.notchStartFreq, Self.notchEndFreq, p)
             // Bell-shaped depth: peaks at notchPeakGain at notchBellCenter, returns

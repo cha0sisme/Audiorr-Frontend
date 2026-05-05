@@ -1041,8 +1041,24 @@ enum DJMixingService {
         //     audible de B. naturalBlend/cleanHandoff/stemMix/dropMix tienen
         //     curvas con caracter propio que NO debe sustituirse.
         //   - !chillContext: en chill el flujo es invisible, sin cambios bruscos.
+        //
+        // v9.5 (2026-05-05) — defensa Tier 3 contra falso-positivo de
+        // outroInstrumental: el detector base puede inferir "instrumental" de
+        // speechSegments o flags backend cuando no hay hasVocalEndData fiable
+        // (riesgo: "se le come el final del track"). Exigimos:
+        //   - hasVocalEndData == true (señal directa: backend conoce el fin de
+        //     la voz exactamente, no inferido de heuristicas).
+        //   - margen >= 2s entre lastVocalTime y el inicio del crossfade (si la
+        //     voz acaba en el limite, el "outro instrumental" es solo el filtro
+        //     de salida del fade — no una cola real para meter B sin chocar).
+        let outroInstrumentalConfident: Bool = {
+            guard outroInstrumental, let cur = safeCurrent, cur.hasError != true else { return false }
+            guard cur.hasVocalEndData else { return false }
+            let crossfadeStartA = bufferADuration - effectiveFadeDuration
+            return (crossfadeStartA - cur.lastVocalTime) >= 2.0
+        }()
         let bRapidFadeIn: Bool = {
-            guard outroInstrumental else { return false }
+            guard outroInstrumentalConfident else { return false }
             guard bImmediateImpactForA else { return false }
             guard !isChillContext else { return false }
             switch transition.type {
@@ -1054,7 +1070,9 @@ enum DJMixingService {
             }
         }()
         if bRapidFadeIn {
-            print("[DJMixingService] ⚡ bRapidFadeIn ON (outroInstrumental + B impact, type=\(transition.type))")
+            print("[DJMixingService] ⚡ bRapidFadeIn ON (outroInstrumental confident + B impact, type=\(transition.type))")
+        } else if outroInstrumental && bImmediateImpactForA && !outroInstrumentalConfident {
+            print("[DJMixingService] ⚠️ bRapidFadeIn skipped — outroInstrumental no confiable (sin hasVocalEndData o margen<2s)")
         }
 
         return CrossfadeResult(
