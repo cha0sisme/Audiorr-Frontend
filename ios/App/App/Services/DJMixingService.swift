@@ -636,12 +636,25 @@ enum DJMixingService {
         // same final entry). The pre-decision calcs (fade, djFilters, pre-detect
         // instrumental) keep the original entry — they're heuristics tolerant
         // of a 1-2s shift.
+        // harmonicClashLevel: misma conversion que B→A flag #4 (8d). Computado
+        // aqui porque snap lo necesita ANTES de la seccion 8d. Reusable mas
+        // abajo via la misma expresion (no DRY-ificado a una let arriba para
+        // no extender el scope al inicio del metodo).
+        let harmonicClashLevel: Double = {
+            switch profile.harmonic.compatibility {
+            case .compatible: return 0.0
+            case .acceptable: return 0.3
+            case .tense:      return 0.6
+            case .clash:      return 1.0
+            }
+        }()
         let snapResult = snapCutEntryToDownbeat(
             entry: entry.entryPoint,
             transitionType: transition.type,
             next: safeNext,
             bufferBDuration: bufferBDuration,
-            fadeDuration: fade.duration
+            fadeDuration: fade.duration,
+            harmonicClashLevel: harmonicClashLevel
         )
         let finalEntry = snapResult.entry
         if snapResult.snapped {
@@ -885,14 +898,8 @@ enum DJMixingService {
         // Flag 3 — bHarmonicClashLevel: 0..1 derivado de profile.harmonic.
         // Solo activa la rama de la curva de A cuando >= 0.7 (clash puro);
         // tense (0.6) ya esta cubierto por el recorte de fadeDuration.
-        let bHarmonicClashLevelForA: Double = {
-            switch profile.harmonic.compatibility {
-            case .compatible: return 0.0
-            case .acceptable: return 0.3
-            case .tense:      return 0.6
-            case .clash:      return 1.0
-            }
-        }()
+        // Reusamos `harmonicClashLevel` computado en 6c (mismo mapeo).
+        let bHarmonicClashLevelForA: Double = harmonicClashLevel
         if bIntroBarsForA >= 4 || bImmediateImpactForA || bHarmonicClashLevelForA >= 0.7 {
             // Resolver que rama de la curva de A actuara (impact gana sobre
             // intro-bars en CrossfadeExecutor; clash es ortogonal y se suma).
@@ -911,6 +918,79 @@ enum DJMixingService {
             print("[DJMixingService] 🎚️ B→A flags: bIntroBars=\(bIntroBarsForA) bImmediateImpact=\(bImmediateImpactForA) bHarmonicClash=\(String(format: "%.1f", bHarmonicClashLevelForA)) → \(effStr)")
         }
 
+        // ── 8e. Chill recipe (audit v8 sesion 4, 2026-05-05) ──
+        // Detecta contexto chill global: ambas pistas tranquilas, baile mediocre,
+        // sin impacto inmediato en B, B respira (>6s vocal, >8s chorus). Cuando
+        // dispara: skipBFilters siempre + suprime DJ effects (bassKill / dynamicQ
+        // / notchSweep / stutterCut). NO toca filtros estaticos/higiene del preset
+        // (lowshelf -6dB en A para evitar double-bombo, etc.) — solo mata las
+        // automatizaciones (lo que se MUEVE) que es lo que el usuario percibe
+        // como "filtros que mancha en chill" (Cupid→No Police, Tourner→Save Your
+        // Tears, Power→Day in the Life en log 2026-05-05).
+        //
+        // Triple cinturon vocal/chorus contra ad-libs de R&B moderno (DJ humano:
+        // "hay temas que tecnicamente no son lead vocal pero ya es voz en t=2-3"):
+        // exigir TODOS de:
+        //   - vocalStartB - entry > 6.0  (lead vocal)
+        //   - chorusStartB - entry > 8.0 (chorus/drop)
+        //   - !bImmediateImpact          (defensa flag #3 v8 incluyendo intro-vocals)
+        // Si el backend marca solo lead pero hay ad-libs antes, los flags v8 ya
+        // los capturan via chorusStart o intro-vocals; este triple cierra el resto.
+        let chillVocalSpace: Double = {
+            guard let next = safeNext, next.hasError != true,
+                  let v = next.vocalStartTime
+            else { return .infinity }  // sin vocal data → asumir espacio sobrado
+            // v=0 cuenta literal: si vocal en t=0 y entry en t=5, listener no
+            // oye el vocal. chillVocalSpace = -5 < 6 → no chill (correcto).
+            return v - entrySafe
+        }()
+        let chillChorusSpace: Double = {
+            guard let next = safeNext, next.hasError != true,
+                  next.chorusStartTime > 0
+            else { return .infinity }
+            return next.chorusStartTime - entrySafe
+        }()
+        let isChillContext = profile.energyA < 0.30
+            && profile.energyB < 0.30
+            && profile.avgDanceability < 0.55
+            && !bImmediateImpactForA
+            && chillVocalSpace > 6.0
+            && chillChorusSpace > 8.0
+        if isChillContext && !skipBFilters {
+            print("[DJMixingService] 🌙 Chill recipe: forcing skipBFilters (energyA=\(String(format: "%.2f", profile.energyA)), energyB=\(String(format: "%.2f", profile.energyB)), dance=\(String(format: "%.2f", profile.avgDanceability)), vocSpace=\(String(format: "%.1f", chillVocalSpace))s, chorusSpace=\(String(format: "%.1f", chillChorusSpace))s)")
+            skipBFilters = true
+        }
+
+        // ── 8f. Bass-de-B-alta gate (audit v8 sesion 4) ──
+        // DJ humano: "no toques nunca el bajo de la entrante en los primeros 8
+        // compases si el bajo de B esta en el percentil alto de energia sub".
+        // Aproximacion sin subBassEnergy del backend: usar energyB > 0.40 como
+        // proxy (Save Your Tears tiene bajo prominente y deberia disparar; chill
+        // R&B con energyB ~0.10-0.20 no dispara). Independiente de chill: si
+        // energyB es alta, B entra con bajo SI O SI sea cual sea el contexto.
+        if profile.energyB > 0.40 && !skipBFilters {
+            print("[DJMixingService] 🎸 Bass-of-B high (\(String(format: "%.2f", profile.energyB))): forcing skipBFilters (DJ rule — no tocar bajo de B prominente)")
+            skipBFilters = true
+        }
+
+        // ── 8g. CUT + clash → kill midScoop on A (audit v8 sesion 4) ──
+        // DJ humano: "un cut seco con keys que chocan es el peor escenario; sumar
+        // mid-scoop en A durante ese momento agrava la disonancia". Para CUT con
+        // tonalidades en tense (>=0.6) o clash (1.0), apagamos midScoop. La fade
+        // ya viene recortada -15%/-25% por harmonic en calculateAdaptiveFadeDuration
+        // (ventana de superposicion mas corta), y v8 flag #4 ya pone clash-retreat
+        // en blendy types — esto cubre la rama .cut que ignora los flags.
+        let effectiveMidScoop: Bool = {
+            let isCut = transition.type == .cut || transition.type == .cutAFadeInB
+            if isCut && harmonicClashLevel >= 0.6 {
+                if djFilters.useMidScoop {
+                    print("[DJMixingService] 🎚️ CUT+clash (\(String(format: "%.1f", harmonicClashLevel))): killing midScoop on A")
+                }
+                return false
+            }
+            return djFilters.useMidScoop
+        }()
+
         // ── 9. Trigger bias — how much earlier/later A should start the crossfade ──
         let trigger = calculateTriggerBias(profile: profile, fadeDuration: effectiveFadeDuration)
 
@@ -923,7 +1003,8 @@ enum DJMixingService {
             isEnergyDown: isEnergyDown,
             needsAnticipation: anticipation.needsAnticipation,
             skipBFilters: skipBFilters,
-            hasBeatGridA: !dbA.isEmpty
+            hasBeatGridA: !dbA.isEmpty,
+            isChillContext: isChillContext
         )
 
         return CrossfadeResult(
@@ -945,7 +1026,7 @@ enum DJMixingService {
             beatIntervalB: biB,
             downbeatTimesA: dbA,
             downbeatTimesB: dbB,
-            useMidScoop: djFilters.useMidScoop,
+            useMidScoop: effectiveMidScoop,
             useHighShelfCut: djFilters.useHighShelfCut,
             isOutroInstrumental: outroInstrumental,
             isIntroInstrumental: introInstrumental,
@@ -1978,7 +2059,12 @@ enum DJMixingService {
         /// True when A has a non-empty beat grid that the executor can anchor to.
         /// Without this, Stutter Cut would chop blindly relative to wall-clock and
         /// land off-grid — sounding like a glitch rather than a DJ chop.
-        hasBeatGridA: Bool = false
+        hasBeatGridA: Bool = false,
+        /// audit v8 sesion 4: contexto chill detectado en seccion 8e. Suprime
+        /// dynamicQ / notchSweep / bassKill / stutterCut (todos los efectos que
+        /// se MUEVEN — sweeps, automatizaciones, gates ritmicos). Los presets
+        /// estaticos de filtro (lowshelf, highpass fijo) siguen vivos.
+        isChillContext: Bool = false
     ) -> DJEffectsResult {
         var useBassKill = false
         var useDynamicQ = false
@@ -2126,6 +2212,20 @@ enum DJMixingService {
             useNotchSweep = false
             useStutterCut = false
             reasons.append("⚠️ energyA<0.15: soft (no dynQ/notch/stutter)")
+        }
+
+        // ── Chill context override (audit v8 sesion 4) ──
+        // Mata TODO efecto que se mueva: bassKill (gate instantaneo en
+        // bassSwapTime), dynamicQ (Q sweep en hpA), notchSweep (notch barriendo
+        // en B band 2), stutterCut (gate ritmico en A). En chill ninguno de
+        // estos efectos suma; al contrario, se perciben como "trucos" donde
+        // no se pidio drama. DJ humano: "lo que mato es todo lo que se mueva".
+        if isChillContext && (useBassKill || useDynamicQ || useNotchSweep || useStutterCut) {
+            useBassKill = false
+            useDynamicQ = false
+            useNotchSweep = false
+            useStutterCut = false
+            reasons.append("🌙 chill: kill all dynamic FX")
         }
 
         let reason = reasons.isEmpty
@@ -2873,17 +2973,27 @@ enum DJMixingService {
 
     /// Snap `entry` to a clean musical landmark when the transition is CUT-family
     /// and `next.chorusStartTime` is reachable. Without this, CUT can land in a
-    /// "dead zone" — typically 0.5–1.5s before the chorus drop — which sounds
+    /// "dead zone" — typically 0.1–2.5s before the chorus drop — which sounds
     /// like the cut fired half a beat early ("sosa", per the user's listening on
-    /// Stir Fry → Vamp Anthem).
+    /// Stir Fry → Vamp Anthem; "qué ha sido eso?" en Paint the Town Red →
+    /// Midnight Tokyo donde entry=46.9s y chorusStart=47.1s).
     ///
-    /// Strategy: candidates are `chorusStart`, `chorusStart - 1 bar`, and
-    /// `chorusStart - 2 bars`. Pick the candidate CLOSEST to the original entry
-    /// — minimises the shift while still leaving the dead zone. Each candidate
-    /// must be ≥ entry + 0.5s (avoid trivial sub-perceptual snaps), ≥ 0 and
-    /// within reach of B's playable window. If `downbeatTimes` are available
-    /// and one sits within 0.3s of the chosen candidate, snap to the actual
-    /// downbeat (real grid > theoretical bar).
+    /// Strategy:
+    ///   - **Inside dead zone** (entry ∈ (chorusStart − 2.5s, chorusStart − 0.05s)):
+    ///     default to BACKWARD (−1 bar). Land AT chorus only when keys are
+    ///     compatible (`harmonicClashLevel < 0.3`) AND backward shift ≥ 2.0s.
+    ///     DJ humano: "0.1s ya es audible como 'llegué tarde'; un cut seco con
+    ///     keys que chocan es el peor escenario — más seguro respirar 1-2 bars".
+    ///   - **Outside dead zone** (entry ≤ chorusStart − 2.5s): minimal-shift
+    ///     forward, picking among (chorus, −1 bar, −2 bars) the one closest to
+    ///     entry that's at least entry + 0.5s away.
+    ///
+    /// `harmonicClashLevel` ∈ [0, 1] from `profile.harmonic.compatibility`
+    /// (compatible=0.0, acceptable=0.3, tense=0.6, clash=1.0). Reusable param
+    /// shared with the v8 B→A flag #4 — same conversion in caller.
+    ///
+    /// Snap to actual downbeat if `downbeatTimes` are available within 0.3s of
+    /// the chosen candidate (real grid > theoretical bar).
     ///
     /// No-op for non-cut transitions, missing analysis, original entry already
     /// at/past chorus, or original entry more than 2 bars before chorus (the
@@ -2894,7 +3004,8 @@ enum DJMixingService {
         transitionType: TransitionType,
         next: SongAnalysis?,
         bufferBDuration: Double,
-        fadeDuration: Double
+        fadeDuration: Double,
+        harmonicClashLevel: Double = 0.0
     ) -> (entry: Double, snapped: Bool, info: String) {
         guard transitionType == .cut || transitionType == .cutAFadeInB else {
             return (entry, false, "")
@@ -2903,9 +3014,10 @@ enum DJMixingService {
         guard next.chorusStartTime > 0.5 else { return (entry, false, "") }
 
         let chorusStart = next.chorusStartTime
-        // Already at/past the chorus — don't move (the rare case where the entry
-        // calc already targeted past the chorus, e.g. for repeat-chorus tracks).
-        if entry >= chorusStart - 0.3 { return (entry, false, "") }
+        // Already AT/past chorus (essentially landed on it): don't move.
+        // 0.05s threshold (was 0.3s pre-v8.6) — anything between 0.05 and 2.5s
+        // before chorus is now treated as "dead zone" and gets snapped.
+        if entry >= chorusStart - 0.05 { return (entry, false, "") }
 
         let beatInterval = next.beatInterval > 0 ? next.beatInterval : 0.5
         let bar = beatInterval * 4
@@ -2920,33 +3032,75 @@ enum DJMixingService {
 
         let maxEntry = max(0, bufferBDuration - fadeDuration - 0.5)
 
-        // Candidates: AT chorusStart (drop), 1 bar before, 2 bars before. Pick
-        // the one CLOSEST to the original entry — minimises the shift while
-        // still leaving the dead zone. This means a CUT whose entry was already
-        // far before the chorus stays mostly there (just snapped to a clean bar
-        // boundary), while a CUT whose entry was in the dead zone gets pushed
-        // to either chorusStart itself or the bar before (whichever is closer).
-        // Each candidate must be ≥ entry + 0.5s (avoid trivial snaps), ≥ 0 and
-        // ≤ maxEntry.
-        let candidates: [Double] = [chorusStart, chorusStart - bar, chorusStart - 2 * bar]
-            .filter { $0 >= 0 && $0 <= maxEntry && $0 >= entry + 0.5 }
+        // Dead zone (audit v8 sesion 4, 2026-05-05): entries en
+        // (chorusStart − 2.5s, chorusStart − 0.05s) son problematicas — A
+        // muere mientras chorus de B arranca sin espacio para procesar el
+        // cambio. DJ humano: "0.1s ya es audible como 'llegué tarde'".
+        let inDeadZone = entry > chorusStart - 2.5
 
-        guard let target = candidates.min(by: { abs($0 - entry) < abs($1 - entry) })
-        else { return (entry, false, "") }
+        // AT-chorus permitido SOLO con tonalidades compatibles puras (clash
+        // < 0.3). Tense (0.6) o clash (1.0) → cut seco ON the punch sona
+        // peor que esperar 1 bar.
+        let allowAtChorus = harmonicClashLevel < 0.3
+
+        // Build candidates with explicit labels for tie-breaking and logging.
+        let rawCandidates: [(value: Double, label: String)] = [
+            (chorusStart - bar,      "−1 bar"),
+            (chorusStart - 2 * bar,  "−2 bars"),
+            (chorusStart,            "AT chorus")
+        ]
+        let candidates = rawCandidates.filter { $0.value >= 0 && $0.value <= maxEntry }
+
+        let target: (value: Double, label: String)
+        if inDeadZone {
+            // DJ humano explicitamente: "dentro de esa zona, la decision por
+            // defecto deberia ser irse atras al compas anterior, no hacia
+            // delante". Default = −1 bar (mas cercano al entry); −2 bars como
+            // fallback si −1 quedara fuera de rango (raro). AT chorus solo
+            // cuando backward fisicamente no existe (back1, back2 < 0 — entry
+            // muy cerca del inicio de B) Y keys compatibles. La intuicion del
+            // usuario en log 2026-05-05 (Best Part → Rich Baby Daddy) tambien
+            // apunta a "podria haber llegado mucho antes del punch" — backward
+            // alinea con preferencia del usuario incluso con keys compatibles.
+            let back1 = candidates.first(where: { $0.label == "−1 bar"  })
+            let back2 = candidates.first(where: { $0.label == "−2 bars" })
+            let atCh  = candidates.first(where: { $0.label == "AT chorus" })
+
+            if let back = back1 ?? back2 {
+                target = back
+            } else if let fwd = atCh, allowAtChorus {
+                // Backward physically unavailable (negative) — fall back to AT
+                // chorus only with compatible keys. With clash this is unsafe.
+                target = fwd
+            } else {
+                return (entry, false, "")
+            }
+        } else {
+            // Outside dead zone: minimum-shift forward (original behavior),
+            // respecting "≥ entry + 0.5" floor to avoid trivial snaps. AT
+            // chorus excluido si keys chocan (mismo principio que dead zone).
+            let viable = candidates
+                .filter { $0.value >= entry + 0.5 }
+                .filter { allowAtChorus || $0.label != "AT chorus" }
+            guard let best = viable.min(by: {
+                abs($0.value - entry) < abs($1.value - entry)
+            }) else { return (entry, false, "") }
+            target = best
+        }
 
         // Snap to actual downbeat if available within 0.3s.
         let snapped: Double
         if !next.downbeatTimes.isEmpty,
-           let nearest = next.downbeatTimes.min(by: { abs($0 - target) < abs($1 - target) }),
-           abs(nearest - target) < 0.3 {
+           let nearest = next.downbeatTimes.min(by: { abs($0 - target.value) < abs($1 - target.value) }),
+           abs(nearest - target.value) < 0.3 {
             snapped = nearest
         } else {
-            snapped = target
+            snapped = target.value
         }
 
-        let label = snapped >= chorusStart - 0.2 ? "AT chorus" :
-                    snapped >= chorusStart - bar - 0.2 ? "−1 bar" : "−2 bars"
-        let info = "CUT snap \(String(format: "%.1f", entry))s → \(String(format: "%.1f", snapped))s (\(label) of chorus@\(String(format: "%.1f", chorusStart))s)"
+        let zoneTag = inDeadZone ? " [dead-zone]" : ""
+        let clashTag = (!allowAtChorus && target.label != "AT chorus") ? " [clash:no-AT]" : ""
+        let info = "CUT snap \(String(format: "%.1f", entry))s → \(String(format: "%.1f", snapped))s (\(target.label) of chorus@\(String(format: "%.1f", chorusStart))s)\(zoneTag)\(clashTag)"
         return (snapped, true, info)
     }
 
