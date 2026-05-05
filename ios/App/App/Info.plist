@@ -56,6 +56,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Audiorr necesita acceso a la red local para conectarse a tu servidor de música Navidrome y al backend de Audiorr.</string>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

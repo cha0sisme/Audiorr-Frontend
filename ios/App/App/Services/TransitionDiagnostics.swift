@@ -23,6 +23,21 @@ final class TransitionDiagnostics {
     nonisolated(unsafe) static var debugModeEnabled = false
     #endif
 
+    /// v12 (audit 2026-05-05) — espejo cacheado de `BackendState.shared.isAvailable`.
+    /// Permite que los guards `nonisolated` en publishDecision/publishCompletion/
+    /// publishTick chequeen disponibilidad de backend sin cruzar al main actor.
+    /// Se actualiza desde `AudiorrApp` observando BackendState. Si el backend pasa
+    /// a no-disponible mientras la app esta abierta, los publishers dejan de
+    /// recoger datos inmediatamente — no hay "datos zombies" colandose.
+    nonisolated(unsafe) static var backendAvailable = false
+
+    /// Helper: solo recogemos diagnosticos cuando AMBAS condiciones son true.
+    /// El usuario es explicito: "esa seccion no se activa ni recoge ningun dato
+    /// si no hay acceso al backend".
+    nonisolated static var collectingEnabled: Bool {
+        debugModeEnabled && backendAvailable
+    }
+
     static let shared = TransitionDiagnostics()
 
     // MARK: - Transition decision
@@ -122,8 +137,8 @@ final class TransitionDiagnostics {
 
     // MARK: - History (last N transitions, in-memory for UI)
 
-    struct TransitionRecord: Identifiable {
-        let id = UUID()
+    struct TransitionRecord: Identifiable, Codable {
+        var id = UUID()
         let date: Date
         let fromTitle: String
         let toTitle: String
@@ -164,6 +179,14 @@ final class TransitionDiagnostics {
         // ReplayGain
         let replayGainA: Float
         let replayGainB: Float
+        // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
+        // Persistida en Documents/transition_diagnostics_history.json.
+        // userRating: 0-10 (en pasos de 1, equivalente a 5 estrellas con halves).
+        // userComment: texto libre para notas del usuario.
+        // ratedAt: timestamp del rating (para distinguir vs. nunca rated).
+        var userRating: Int? = nil
+        var userComment: String? = nil
+        var ratedAt: Date? = nil
     }
 
     var history: [TransitionRecord] = []
@@ -201,6 +224,20 @@ final class TransitionDiagnostics {
         return docs.appendingPathComponent("transition_diagnostics.log")
     }()
 
+    /// v12 (audit 2026-05-05) — JSON persistente con la history completa
+    /// (transiciones + opiniones del usuario). El .log de texto sigue activo
+    /// para legibilidad humana, pero el JSON es el source of truth para
+    /// reconstruir history al arrancar y para hacer export estructurado.
+    private let historyFileURL: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("transition_diagnostics_history.json")
+    }()
+
+    /// Limit de records persistidos. Los mas antiguos se descartan FIFO cuando
+    /// se supera. 200 cubre ~3 sesiones largas de coche (50-70 transiciones
+    /// cada una) sin saturar el archivo ni perder contexto reciente.
+    private let historyLimit = 200
+
     /// Ticks collected during active crossfade, flushed on completion.
     private var pendingTicks: [String] = []
 
@@ -211,6 +248,135 @@ final class TransitionDiagnostics {
         if !FileManager.default.fileExists(atPath: logFileURL.path) {
             let header = "# Audiorr Transition Diagnostics Log\n# Format: human-readable, one block per transition\n# Generated automatically by TransitionDiagnostics\n\n"
             try? header.write(to: logFileURL, atomically: true, encoding: .utf8)
+        }
+        loadHistory()
+    }
+
+    // MARK: - History persistence (v12)
+
+    /// Carga history desde JSON al arrancar. Si el archivo no existe o esta
+    /// corrupto, history queda vacia (no es error fatal — solo perdimos sesiones
+    /// previas). Aplica el limite FIFO por si el archivo viene de una version
+    /// anterior con limite distinto.
+    private func loadHistory() {
+        guard FileManager.default.fileExists(atPath: historyFileURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: historyFileURL)
+            let decoded = try JSONDecoder().decode([TransitionRecord].self, from: data)
+            self.history = Array(decoded.prefix(historyLimit))
+        } catch {
+            print("[TransitionDiagnostics] ⚠️ Failed to load history JSON: \(error.localizedDescription)")
+        }
+    }
+
+    /// Persiste history a JSON. Llamar tras cada cambio (nuevo record, rating
+    /// update, comment edit). FIFO al limite. Errores se loguean pero no
+    /// propagan — perder un guardado puntual no debe romper el flujo de la app.
+    private func saveHistory() {
+        if history.count > historyLimit {
+            history = Array(history.prefix(historyLimit))
+        }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(history)
+            try data.write(to: historyFileURL, options: [.atomic])
+        } catch {
+            print("[TransitionDiagnostics] ⚠️ Failed to save history JSON: \(error.localizedDescription)")
+        }
+    }
+
+    /// Actualiza rating y/o comment de una transicion del history. Persiste
+    /// inmediatamente. Llamado desde TransitionDetailView al cambiar la opinion.
+    func updateOpinion(recordId: UUID, rating: Int?, comment: String?) {
+        guard let idx = history.firstIndex(where: { $0.id == recordId }) else { return }
+        var record = history[idx]
+        record.userRating = rating
+        record.userComment = comment?.isEmpty == true ? nil : comment
+        record.ratedAt = (rating != nil || (comment?.isEmpty == false)) ? Date() : nil
+        history[idx] = record
+        saveHistory()
+    }
+
+    /// Cuando el backend pasa a no-disponible: deshabilita captura, persiste
+    /// history actual (por si quedaba algun cambio sin guardar) y NO borra los
+    /// datos existentes (el usuario debe poder exportar lo que ya tenia incluso
+    /// si pierde conexion temporalmente). Llamado desde SettingsView observando
+    /// BackendState.isAvailable.
+    func handleBackendUnavailable() {
+        Self.debugModeEnabled = false
+        UserDefaults.standard.set(false, forKey: "audiorr_diagnostics_enabled")
+        saveHistory()
+    }
+
+    // MARK: - Export Session (v12)
+
+    /// Genera un archivo combinado con la sesion completa: header (device, app
+    /// version, fecha, stats), un bloque por transicion con sus AUTOMATION TICKS
+    /// + post-reset audits + seccion OPINION (rating + comment), y footer con
+    /// agregados (promedio, distribucion, conteo de Tier 4 / DJ effects).
+    /// Diseñado para que un agente externo (Claude) pueda leer todo el set de
+    /// una vez sin necesitar dos archivos separados.
+    nonisolated func exportSessionFile() -> URL? {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+        let stamp = formatter.string(from: Date())
+        let url = docs.appendingPathComponent("audiorr_session_\(stamp).txt")
+
+        var content = "# Audiorr Session Export — \(stamp)\n"
+        content += "# Combina diagnosticos tecnicos + opiniones del usuario.\n\n"
+
+        // Append the existing transition log (if any).
+        let logURL = docs.appendingPathComponent("transition_diagnostics.log")
+        if let logText = try? String(contentsOf: logURL, encoding: .utf8) {
+            content += "## TECHNICAL LOG\n\n"
+            content += logText
+            content += "\n\n"
+        }
+
+        // Append per-transition opinions and final stats from history.
+        let snapshot: [TransitionRecord] = MainActor.assumeIsolated { Self.shared.history }
+        if !snapshot.isEmpty {
+            content += "## USER OPINIONS\n\n"
+            let dateFmt = ISO8601DateFormatter()
+            for record in snapshot.reversed() {
+                let rating = record.userRating.map { "\($0)/10" } ?? "—"
+                let comment = record.userComment ?? ""
+                content += "[\(dateFmt.string(from: record.date))] \(record.type)\n"
+                content += "  FROM: \(record.fromTitle)\n"
+                content += "  TO:   \(record.toTitle)\n"
+                content += "  RATING: \(rating)\n"
+                if !comment.isEmpty {
+                    content += "  COMMENT: \(comment)\n"
+                }
+                content += "\n"
+            }
+
+            // Aggregates.
+            let rated = snapshot.compactMap { $0.userRating }
+            if !rated.isEmpty {
+                let avg = Double(rated.reduce(0, +)) / Double(rated.count)
+                content += "## AGGREGATES\n\n"
+                content += "  Total transitions: \(snapshot.count)\n"
+                content += "  Rated: \(rated.count)\n"
+                content += "  Average rating: \(String(format: "%.2f", avg))/10\n"
+                let tier4Count = snapshot.filter { $0.tier4Active }.count
+                let bassKillCount = snapshot.filter { $0.useBassKill }.count
+                let stutterCount = snapshot.filter { $0.useStutterCut }.count
+                content += "  Tier4 fires: \(tier4Count)/\(snapshot.count)\n"
+                content += "  bassKill: \(bassKillCount)/\(snapshot.count)\n"
+                content += "  stutterCut: \(stutterCount)/\(snapshot.count)\n"
+            }
+        }
+
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            print("[TransitionDiagnostics] ⚠️ Failed to export session: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -285,7 +451,7 @@ final class TransitionDiagnostics {
         replayGainA: Float,
         replayGainB: Float
     ) {
-        guard Self.debugModeEnabled else { return }
+        guard Self.collectingEnabled else { return }
         Task { @MainActor in
             self.isActive = true
             self.transitionType = transitionType
@@ -352,7 +518,7 @@ final class TransitionDiagnostics {
         panB: Float,
         currentRateA: Float
     ) {
-        guard Self.debugModeEnabled else { return }
+        guard Self.collectingEnabled else { return }
         Task { @MainActor in
             self.elapsed = elapsed
             self.volumeA = volumeA
@@ -389,7 +555,7 @@ final class TransitionDiagnostics {
 
     /// Called when crossfade completes. Archives into history and writes to log file.
     nonisolated func publishCompletion() {
-        guard Self.debugModeEnabled else { return }
+        guard Self.collectingEnabled else { return }
         Task { @MainActor in
             // Save to in-memory history
             let record = TransitionRecord(
@@ -429,7 +595,11 @@ final class TransitionDiagnostics {
                 replayGainB: self.replayGainB
             )
             self.history.insert(record, at: 0)
-            if self.history.count > 50 { self.history.removeLast() }
+            if self.history.count > self.historyLimit { self.history.removeLast() }
+            // v12: persistir cada nueva transicion al JSON inmediatamente.
+            // Asi, si el usuario fuerza-cierra la app despues del crossfade, no
+            // pierde el record (era el bug que reportaba: "se borra al cerrar").
+            self.saveHistory()
             self.isActive = false
             self.networkSnapshotEnd = Self.captureNetworkSnapshot()
 

@@ -53,6 +53,15 @@ struct TransitionDiagnosticsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    // v12: export combinado log + opiniones — primera accion
+                    // (mas prominente). Alternativa "Copy log" sigue disponible
+                    // para quien quiera solo el txt tecnico.
+                    Button {
+                        exportSession()
+                    } label: {
+                        Label("Export Session…", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    Divider()
                     Button {
                         diag.copyLogToClipboard()
                         copiedFeedback = true
@@ -79,6 +88,11 @@ struct TransitionDiagnosticsView: View {
                 copiedToast
             }
         }
+        .sheet(isPresented: $showExportSheet) {
+            if let url = exportURL {
+                ShareSheet(activityItems: [url])
+            }
+        }
         .task {
             let url = NavidromeService.shared.backendURL() ?? "N/A"
             diag.updateBackendStatus(
@@ -89,6 +103,49 @@ struct TransitionDiagnosticsView: View {
     }
 
     @State private var copiedFeedback = false
+
+    // v12: sort + export sheet state
+    enum HistorySort: String, CaseIterable, Identifiable {
+        case recent = "Recent"
+        case bestRated = "Best rated"
+        case worstRated = "Worst rated"
+        case unrated = "Unrated"
+        var id: String { rawValue }
+        var systemImage: String {
+            switch self {
+            case .recent: return "clock"
+            case .bestRated: return "star.fill"
+            case .worstRated: return "star.slash"
+            case .unrated: return "circle.dashed"
+            }
+        }
+    }
+    @State private var historySort: HistorySort = .recent
+    @State private var exportURL: URL?
+    @State private var showExportSheet = false
+
+    private var sortedHistory: [TransitionDiagnostics.TransitionRecord] {
+        switch historySort {
+        case .recent:
+            return diag.history
+        case .bestRated:
+            return diag.history.sorted {
+                ($0.userRating ?? -1) > ($1.userRating ?? -1)
+            }
+        case .worstRated:
+            return diag.history
+                .filter { $0.userRating != nil }
+                .sorted { ($0.userRating ?? 0) < ($1.userRating ?? 0) }
+        case .unrated:
+            return diag.history.filter { $0.userRating == nil }
+        }
+    }
+
+    private func exportSession() {
+        guard let url = diag.exportSessionFile() else { return }
+        exportURL = url
+        showExportSheet = true
+    }
 
     private var copiedToast: some View {
         Text("Log copied to clipboard")
@@ -374,13 +431,13 @@ struct TransitionDiagnosticsView: View {
     // MARK: - History
 
     private var historySection: some View {
-        Section("History (last \(diag.history.count))") {
-            ForEach(diag.history) { record in
+        Section {
+            ForEach(sortedHistory) { record in
                 NavigationLink {
                     TransitionDetailView(record: record)
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
-                        // Row 1: Type + timestamp
+                        // Row 1: Type + fade + rating badge + timestamp
                         HStack(alignment: .firstTextBaseline) {
                             Text(record.type)
                                 .font(.caption2.weight(.semibold))
@@ -388,6 +445,9 @@ struct TransitionDiagnosticsView: View {
                             Text(String(format: "%.1fs", record.fadeDuration))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.tertiary)
+                            if let rating = record.userRating {
+                                RatingBadge(rating: rating, hasComment: record.userComment?.isEmpty == false)
+                            }
                             Spacer()
                             Text(record.date, format: .dateTime.hour().minute().second())
                                 .font(.caption2.monospacedDigit())
@@ -405,6 +465,7 @@ struct TransitionDiagnosticsView: View {
                             historyToken(record.filterPreset, color: presetColor(record.filterPreset))
                             if record.beatSynced   { historyToken("beat", color: .cyan) }
                             if record.timeStretched { historyToken("stretch", color: .purple) }
+                            if record.tier4Active   { historyToken("tier4", color: .indigo) }
                             if record.useBassKill   { historyToken("kill", color: .red) }
                             if record.useDynamicQ   { historyToken("dynQ", color: .teal) }
                             if record.useNotchSweep { historyToken("notch", color: .purple) }
@@ -412,6 +473,27 @@ struct TransitionDiagnosticsView: View {
                         }
                     }
                     .padding(.vertical, 2)
+                }
+            }
+        } header: {
+            HStack {
+                Text("History (last \(diag.history.count))")
+                Spacer()
+                Menu {
+                    ForEach(HistorySort.allCases) { option in
+                        Button {
+                            historySort = option
+                        } label: {
+                            Label(option.rawValue, systemImage: option.systemImage)
+                            if historySort == option {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                } label: {
+                    Label(historySort.rawValue, systemImage: historySort.systemImage)
+                        .font(.caption.weight(.medium))
+                        .textCase(nil)
                 }
             }
         }
@@ -547,8 +629,33 @@ private struct ShareSheet: UIViewControllerRepresentable {
 struct TransitionDetailView: View {
     let record: TransitionDiagnostics.TransitionRecord
 
+    @State private var rating: Int
+    @State private var comment: String
+
+    init(record: TransitionDiagnostics.TransitionRecord) {
+        self.record = record
+        self._rating = State(initialValue: record.userRating ?? 0)
+        self._comment = State(initialValue: record.userComment ?? "")
+    }
+
     var body: some View {
         List {
+            // ── My Opinion (v12) ──
+            // Card Apple-styled arriba del detalle: rating estrellas + comment.
+            // Auto-save via TransitionDiagnostics.updateOpinion → JSON persistente.
+            OpinionCard(
+                recordId: record.id,
+                rating: $rating,
+                comment: $comment,
+                onCommit: { newRating, newComment in
+                    TransitionDiagnostics.shared.updateOpinion(
+                        recordId: record.id,
+                        rating: newRating == 0 ? nil : newRating,
+                        comment: newComment.isEmpty ? nil : newComment
+                    )
+                }
+            )
+
             // ── Decision ──
             Section("Decision") {
                 row("Type", value: record.type, color: typeColor(record.type))

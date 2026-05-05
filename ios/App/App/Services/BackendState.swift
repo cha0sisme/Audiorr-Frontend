@@ -17,6 +17,23 @@ final class BackendState {
     private var checkTask: Task<Void, Never>?
     private var networkDebounceTask: Task<Void, Never>?
 
+    /// v12 (audit 2026-05-05) — punto unico de mutacion de `isAvailable`.
+    /// Mantiene en sync el espejo `TransitionDiagnostics.backendAvailable`
+    /// (consultado por publishers nonisolated). Cuando el backend pasa a
+    /// no-disponible, tambien fuerza apagar la captura de diagnosticos para
+    /// que no haya "datos zombies" colandose hasta que el usuario abra Settings.
+    private func setAvailable(_ value: Bool) {
+        self.isAvailable = value
+        TransitionDiagnostics.backendAvailable = value
+        if !value {
+            // Backend caido → cortar captura inmediatamente. La history existente
+            // se conserva (el usuario debe poder exportar lo que ya tenia).
+            Task { @MainActor in
+                TransitionDiagnostics.shared.handleBackendUnavailable()
+            }
+        }
+    }
+
     private init() {
         // Re-check whenever the network comes back online
         withObservationTracking {
@@ -27,7 +44,7 @@ final class BackendState {
                 if NetworkMonitor.shared.isConnected {
                     self.debouncedCheck()
                 } else {
-                    self.isAvailable = false
+                    self.setAvailable(false)
                 }
             }
         }
@@ -54,17 +71,17 @@ final class BackendState {
             // Bail early if cancelled (invalidateAndRecheck started a new task)
             guard !Task.isCancelled else { return }
             if result {
-                self.isAvailable = true
+                self.setAvailable(true)
             } else {
                 // Show unavailable immediately so UI doesn't wait for retry
-                self.isAvailable = false
+                self.setAvailable(false)
                 // Retry once after 3s — handles transient timeouts on slow networks
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 guard !Task.isCancelled else { return }
                 NavidromeService.shared.invalidateBackendAvailableCache()
                 let retry = await NavidromeService.shared.checkBackendAvailable()
                 guard !Task.isCancelled else { return }
-                self.isAvailable = retry
+                self.setAvailable(retry)
             }
             // On transition unavailable→available, re-pull cover hashes. Without
             // this, any PlaylistCoverView that rendered during the offline window
@@ -96,7 +113,7 @@ final class BackendState {
     func reset() {
         checkTask?.cancel()
         checkTask = nil
-        isAvailable = false
+        setAvailable(false)
         isChecking = false
     }
 
@@ -116,7 +133,7 @@ final class BackendState {
                         self.invalidateAndRecheck()
                     }
                 } else {
-                    self.isAvailable = false
+                    self.setAvailable(false)
                     self.observeNetwork()
                 }
             }
