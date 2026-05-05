@@ -64,14 +64,6 @@ enum DJMixingService {
 
     // MARK: - Feature flags (audit v10 2026-05-05)
 
-    /// bRapidFadeIn: cuando true, activa la curva "B silenciosa 55% + curvas
-    /// espejo de A" en transiciones blendy con outroInstrumentalConfident +
-    /// bImmediateImpact. Tras coche-test del v9.5, esta curva genero 4
-    /// regresiones a 0/10 ("valle de energia + clash brutal" segun DJ). El fix
-    /// correcto es Tier 4 (entry adelantado), no curva-spejo. Flag false
-    /// hasta que Tier 4 demuestre que el contexto cambia, o se elimine la rama.
-    private static let kEnableRapidFadeIn = false
-
     /// Tier 4 (audit v10 2026-05-05): adelanta entryPoint de B al primer kick
     /// de su intro instrumental, ANTES del chorus, cuando el setup es claro
     /// (A en outro instrumental + B con intro instrumental real + BPMs
@@ -1099,48 +1091,14 @@ enum DJMixingService {
         //     curvas con caracter propio que NO debe sustituirse.
         //   - !chillContext: en chill el flujo es invisible, sin cambios bruscos.
         //
-        // v9.5 (2026-05-05) — defensa Tier 3 contra falso-positivo de
-        // outroInstrumental: el detector base puede inferir "instrumental" de
-        // speechSegments o flags backend cuando no hay hasVocalEndData fiable
-        // (riesgo: "se le come el final del track"). Exigimos:
-        //   - hasVocalEndData == true (señal directa: backend conoce el fin de
-        //     la voz exactamente, no inferido de heuristicas).
-        //   - margen >= 2s entre lastVocalTime y el inicio del crossfade (si la
-        //     voz acaba en el limite, el "outro instrumental" es solo el filtro
-        //     de salida del fade — no una cola real para meter B sin chocar).
-        let outroInstrumentalConfident: Bool = {
-            guard outroInstrumental, let cur = safeCurrent, cur.hasError != true else { return false }
-            guard cur.hasVocalEndData else { return false }
-            let crossfadeStartA = bufferADuration - effectiveFadeDuration
-            return (crossfadeStartA - cur.lastVocalTime) >= 2.0
-        }()
-        // v10 (2026-05-05) — bRapidFadeIn DESACTIVADO via feature flag tras
-        // coche-test del v9.5 reportar 4 regresiones a 0/10 (Jesus Lord→Awful
-        // Things, Awful Things→Institutionalized, STORM II→BOTL, FUSC→Good
-        // Drank). Patron comun: A en outro instrumental + curvas espejo + B
-        // silencio 55% → "valle de energia, B irrumpe sobre hueco, clash brutal"
-        // (DJ profesional). El fix correcto NO es la curva sino adelantar el
-        // entryPoint (Tier 4) — pendiente commit aparte. Mantenemos el codigo
-        // de las ramas en CrossfadeExecutor como codigo muerto preservado para
-        // re-activacion futura si Tier 4 cambia el contexto.
-        let bRapidFadeIn: Bool = {
-            guard Self.kEnableRapidFadeIn else { return false }
-            guard outroInstrumentalConfident else { return false }
-            guard bImmediateImpactForA else { return false }
-            guard !isChillContext else { return false }
-            switch transition.type {
-            case .crossfade, .eqMix, .beatMatchBlend, .cut:
-                return true
-            case .cutAFadeInB, .fadeOutACutB, .naturalBlend, .cleanHandoff,
-                 .stemMix, .dropMix, .vinylStop:
-                return false
-            }
-        }()
-        if bRapidFadeIn {
-            print("[DJMixingService] ⚡ bRapidFadeIn ON (outroInstrumental confident + B impact, type=\(transition.type))")
-        } else if Self.kEnableRapidFadeIn && outroInstrumental && bImmediateImpactForA && !outroInstrumentalConfident {
-            print("[DJMixingService] ⚠️ bRapidFadeIn skipped — outroInstrumental no confiable (sin hasVocalEndData o margen<2s)")
-        }
+        // v11 (2026-05-05) — bRapidFadeIn ELIMINADO. El flag, las ramas en
+        // CrossfadeExecutor y el computo se quitaron tras decidir que la
+        // solucion correcta es Tier 4 (entry adelantado), no curva-spejo. El
+        // field `bRapidFadeIn` en Config y CrossfadeResult se conserva como
+        // stub `false` para no romper la API, pero ningun codigo lo lee ya.
+        // outroInstrumentalConfident (defensa Tier 3.g) se recomputa dentro de
+        // computeTier4Entry — ya no necesita scope mayor.
+        let bRapidFadeIn = false
 
         return CrossfadeResult(
             entryPoint: finalEntry,
@@ -2332,11 +2290,15 @@ enum DJMixingService {
         // moment is within beatInterval/4 of an actual beat. If not, the gate is
         // bypassed (graceful degradation — the CUT still happens, just no chop).
         let stutterCompatibleType = (transitionType == .cut || transitionType == .cutAFadeInB)
+        // v11 (audit 2026-05-05): dance > 0.55 → > 0.50 — el threshold 0.55
+        // mataba R&B/hip-hop lento (Frank Ocean, SZA en 0.45-0.55). En log v4
+        // stutter disparo 0/74 con 0.55. 0.50 abre el efecto a R&B con beat
+        // claro pero suave manteniendo fuera ambient/jazz puro.
         if stutterCompatibleType
             && profile.bpmTrusted
             && profile.bpmA >= 80
             && profile.bpmA <= 180
-            && profile.avgDanceability > 0.55
+            && profile.avgDanceability > 0.50
             && fadeDuration >= 1.5
             && hasBeatGridA {
             useStutterCut = true
@@ -3044,9 +3006,7 @@ enum DJMixingService {
     ) -> (entry: Double, reason: String)? {
         guard kEnableTier4 else { return nil }
 
-        // ── Gate: tipo de transicion compatible ──
-        // Tier 4 solo para blendy types — CUT/cleanHandoff tienen caracter propio
-        // (caida exp, sin solape) que no encaja con "B entra antes con beat".
+        // ── Gate 1: tipo blendy compatible ──
         switch transitionType {
         case .crossfade, .eqMix, .beatMatchBlend:
             break
@@ -3054,29 +3014,28 @@ enum DJMixingService {
             return nil
         }
 
-        // ── Gate: A confiable + outro real (replicamos outroInstrumentalConfident) ──
+        // ── Gate 2: fade ≥ 4s (necesita espacio para que B acompane a A) ──
+        guard fadeDuration >= 4.0 else { return nil }
+
+        // ── Gate 3: A confiable + outro instrumental (outroInstrumentalConfident) ──
         guard let cur = safeCurrent, cur.hasError != true else { return nil }
         guard cur.hasVocalEndData else { return nil }
         let crossfadeStartA = bufferADuration - fadeDuration
         guard (crossfadeStartA - cur.lastVocalTime) >= 2.0 else { return nil }
 
-        // ── Gate: B confiable ──
+        // ── Gate 4: B confiable ──
         guard let next = safeNext, next.hasError != true else { return nil }
 
-        // ── Gate: BPMs trusted + ambos fuera de franja toxica 140-180 ──
-        // (backend validator: half-time bug afecta esa franja, bpmDiff<6%
-        // no protege si A y B caen ambos en la franja con el mismo error)
+        // ── Gate 5: BPMs trusted + ambos fuera de franja toxica 140-180 ──
+        // (backend validator: half-time bug afecta esa franja silenciosamente)
         guard profile.bpmTrusted else { return nil }
         let bpmAToxic = profile.bpmA >= 140 && profile.bpmA <= 180
         let bpmBToxic = profile.bpmB >= 140 && profile.bpmB <= 180
         guard !bpmAToxic, !bpmBToxic else { return nil }
 
-        // ── Gate: downbeats suficientes ──
+        // ── Compute barDur from downbeat deltas (mediana, robusto a no-4/4) ──
         let downbeats = next.downbeatTimes
-        guard downbeats.count >= 4 else { return nil }
-
-        // ── Compute barDur from downbeat deltas (mediana, robusto a half-time
-        //    y metricas no-4/4) ──
+        guard downbeats.count >= 2 else { return nil }
         var deltas: [Double] = []
         for i in 1..<min(downbeats.count, 8) {
             deltas.append(downbeats[i] - downbeats[i-1])
@@ -3086,73 +3045,47 @@ enum DJMixingService {
         guard medianDelta >= 1.0, medianDelta <= 4.0 else { return nil }
         let barDur = medianDelta
 
-        // ── Gate: structure no roto, intro real ──
+        // ── Gate 6: structure intacta — chorusStart>5 (defensa "0.1s literal") ──
+        let chorusStart = next.chorusStartTime
+        let chorusValid = chorusStart > 5.0
+
+        // ── Gate 7: vocalStart>0 (descarta nil/literal t=0) ──
+        guard let vocalStart = next.vocalStartTime, vocalStart > 0 else { return nil }
+
+        // ── Gate 8: vocalStart > introEnd + 4 compases (intro real >=4 bars) ──
         let introEnd = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
         guard introEnd > 0 else { return nil }
-
-        // vocalStart: descarta nil y literal 0 (track abre cantando)
-        guard let vocalStart = next.vocalStartTime, vocalStart > 0 else { return nil }
-        let chorusStart = next.chorusStartTime
-        // chorusStart < 5s tipicamente es missing o ruido (memoria backend
-        // 2026-05-05: A Escondidas con chorusStart=0.1s literal)
-        let chorusValid = chorusStart > 5.0
+        guard vocalStart > introEnd + 4 * barDur else { return nil }
 
         let firstEventB = min(vocalStart, chorusValid ? chorusStart : .infinity)
         guard firstEventB.isFinite else { return nil }
-        // Sanity structure: si introEnd > firstEventB - 12 compases, la estructura
-        // es incoherente (37.5% de tracks v8 tenian chorusStart < introEnd) → fallback
+        // ── Gate 9: structure no rota — introEnd + 12bar < firstEventB ──
+        // (defensa contra 37.5% de tracks v8 con chorusStart < introEnd)
         guard introEnd + 12 * barDur < firstEventB else { return nil }
 
-        // ── Gate: B sin voz en intro ──
-        guard !next.hasIntroVocals else { return nil }
-        guard vocalStart > introEnd + 4 * barDur else { return nil }
-        if !next.speechSegments.isEmpty {
-            let speechInIntro = next.speechSegments.contains { seg in
-                seg.start < firstEventB - barDur
-            }
-            guard !speechInIntro else { return nil }
-        }
+        // ── Gate 10: clash armonico < 0.7 (sin choque tonal duro) ──
+        guard profile.harmonic.compatibility != .clash else { return nil }
 
-        // ── Gate: energy ratio (defensa contra energy=0 espurio) ──
-        let energyA = profile.energyA
-        let energyB = profile.energyB
-        guard energyA > 0.05, energyB > 0.05 else { return nil }
-        guard energyB <= 1.3 * energyA else { return nil }
-
-        // ── Gate: bufferB suficiente para reproducir desde el entry adelantado ──
-        guard bufferBDuration > firstEventB + 30 else { return nil }
-
-        // ── Compute target — escalado por BPM (DJ recommendation) ──
+        // ── Compute target con barsAhead = 6 default (DJ v11) ──
         let bpmB = profile.bpmB
-        let barsAhead: Double
-        if bpmB < 90 {
-            barsAhead = 6
-        } else if bpmB > 130 {
-            barsAhead = 10
-        } else {
-            barsAhead = 8
-        }
+        let barsAhead: Double = bpmB < 90 ? 6 : (bpmB > 130 ? 8 : 6)
         let target = firstEventB - barsAhead * barDur
-        let lowerBound = max(introEnd + 4 * barDur, firstEventB - 12 * barDur)
+        let lowerBound = max(introEnd + 4 * barDur, firstEventB - 10 * barDur)
         let upperBound = firstEventB - 4 * barDur
         guard target >= lowerBound, target <= upperBound else { return nil }
 
-        // ── Snap al downbeat mas cercano a target en compas par anclado al
-        //    evento musical (firstEventB - 8 bars, 10 bars, 12 bars... son
-        //    compases pares relativos al evento, robustos a downbeats[0] tardio) ──
+        // ── Snap a downbeat mas cercano a target, paridad anclada al evento musical ──
         let candidates = downbeats.filter { db in
             guard db >= lowerBound, db <= upperBound else { return false }
             let barsFromFirstEvent = (firstEventB - db) / barDur
             let nearestBars = barsFromFirstEvent.rounded()
             guard Int(nearestBars) % 2 == 0 else { return false }
-            // Tolerancia 0.25 compases respecto al boundary perfecto
             return abs(barsFromFirstEvent - nearestBars) < 0.25
         }
         guard !candidates.isEmpty else { return nil }
         let bestCandidate = candidates.min { abs($0 - target) < abs($1 - target) }!
 
         // Sanity: nuevo entry debe ser estrictamente menor que el original
-        // (si snap acaba cayendo cerca del entry original, no aporta nada)
         guard bestCandidate < originalEntry - 1.0 else { return nil }
 
         let reason = "Tier4: BPM=\(Int(bpmB)) bars=\(Int(barsAhead)) entry: \(String(format: "%.1f", originalEntry))→\(String(format: "%.1f", bestCandidate))s"

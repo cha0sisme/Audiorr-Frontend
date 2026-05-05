@@ -231,8 +231,14 @@ class CrossfadeExecutor {
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -6, endGain: -14),
         lowshelfB: .init(frequency: 200, startGain: -8, midGain: -4, endGain: 0),
         lowpassA: nil,
-        midScoopA: .init(frequency: 1500, bandwidth: 1.2, startGain: 0, endGain: -12),
-        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -8)
+        // v11 (audit 2026-05-05): midScoop endGain -12→-14dB para que sea
+        // audible (DJ confirmo que -12 nunca se oia). hiShelfCut frecuencia
+        // 8→7kHz + endGain -8→-10dB (8kHz era "aire" inaudible en mezclas
+        // modernas; 7kHz muerde sibilantes y crashes). midScoop frecuencia
+        // 1.5kHz se mantiene — DJ original pidio 2.2kHz pero penaliza voces
+        // graves de hip-hop/R&B masculino (formante F2 2-3kHz).
+        midScoopA: .init(frequency: 1500, bandwidth: 1.2, startGain: 0, endGain: -14),
+        highShelfA: .init(frequency: 7000, startGain: 0, endGain: -10)
     )
 
     static let presetAggressive = FilterPreset(
@@ -241,8 +247,11 @@ class CrossfadeExecutor {
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -10, endGain: -18),
         lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
         lowpassA: nil,
-        midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -16),
-        highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
+        // v11 (audit 2026-05-05): subido proporcional con Normal para mantener
+        // gap de 3dB. -17dB en vez de -18 — el reviewer arquitectonico aviso
+        // que -18 puede perder pegada en mids de mezclas comprimidas.
+        midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -17),
+        highShelfA: .init(frequency: 7000, startGain: 0, endGain: -12)
     )
 
     static let presetAnticipation = FilterPreset(
@@ -607,7 +616,11 @@ class CrossfadeExecutor {
                 abs($0 - cutFileTimeA) < abs($1 - cutFileTimeA)
             }) {
                 let beatOffset = abs(nearestBeat - cutFileTimeA)
-                let snapTolerance = beatInterval / 4.0  // ±25% of a beat = ±125ms at 120 BPM
+                // v11 (audit 2026-05-05): /4 → /3 — el log v4 mostro 0/74 disparos
+                // con tolerancia /4 (±125ms a 120 BPM). /3 ≈ ±167ms a 120 BPM, sigue
+                // dentro del "groove pocket" humano (1/12 nota). Reviewer arq aviso
+                // que /2 elimina el gate efectivamente; /3 mantiene el efecto on-grid.
+                let snapTolerance = beatInterval / 3.0
 
                 if beatOffset <= snapTolerance {
                     // Convert anchor's file-time back to wall-clock.
@@ -1311,52 +1324,47 @@ class CrossfadeExecutor {
             return maxVolumeA * powf(0.0001 / maxVolumeA, cutP)
 
         case .eqMix, .beatMatchBlend:
-            // earlyBlend curve (audit v10 2026-05-05) — Tier 4: cuando entryPoint
-            // YA viene adelantado al primer kick de la intro instrumental de B,
-            // A debe acompanar a B con su outro instrumental durante los primeros
-            // ~50% del fade (los 8-10 compases que B necesita para sentirse
-            // "rodando"). Despues A cae acelerada en los ultimos 25% para
-            // dejarle el chorus a B sin choque.
-            //   - progress 0.00-0.50: A = 1.0 (full hold, A respira con B kick por debajo)
-            //   - progress 0.50-0.75: A cae cos² 1.0 → 0.30 (transicion gradual)
-            //   - progress 0.75-1.00: A cae acelerada exp 0.30 → 0 (vacia el track)
-            // DJ profesional: "A es una rampa concava (mantiene y cae al final)".
+            // earlyBlend curve (audit v10/v11 2026-05-05) — Tier 4: cuando
+            // entryPoint YA viene adelantado al primer kick de la intro
+            // instrumental de B, A debe acompanar a B con su outro instrumental
+            // durante los primeros ~50% del fade. Despues A cae acelerada en
+            // los ultimos 25% para dejarle el chorus a B.
+            //   - progress 0.00-holdEnd: A = 1.0 (full hold)
+            //   - progress holdEnd-dropMid: A cae cos² 1.0 → 0.30
+            //   - progress dropMid-1.00: A cae exp 0.30 → 0
+            //
+            // v11 — flag-aware adjustments (DJ + reviewer):
+            //   - bHarmonicClashLevel: si hay clash (>=0.5), comprimir holdEnd
+            //     a 0.40, y si es severo (>=0.7) a 0.35. A se aparta antes para
+            //     reducir zona de superposicion disonante.
+            //   - bImmediateImpact: si B golpea pronto, comprimir dropMid a 0.65
+            //     (A cede antes para no chocar con el primer impacto vocal de B).
             if config.tier4Active {
-                if progress < 0.50 {
+                let holdEndT4: Double
+                if config.bHarmonicClashLevel >= 0.7 {
+                    holdEndT4 = 0.35
+                } else if config.bHarmonicClashLevel >= 0.5 {
+                    holdEndT4 = 0.40
+                } else {
+                    holdEndT4 = 0.50
+                }
+                let dropMidT4: Double = config.bImmediateImpact ? 0.65 : 0.75
+                if progress < holdEndT4 {
                     return maxVolumeA
                 }
-                if progress < 0.75 {
-                    let dropP = Float((progress - 0.50) / 0.25)
+                if progress < dropMidT4 {
+                    let dropP = Float((progress - holdEndT4) / (dropMidT4 - holdEndT4))
                     let angle = dropP * .pi / 2.0
                     let cosSq = cosf(angle) * cosf(angle)
-                    // 1.0 → 0.30
                     return maxVolumeA * (0.30 + 0.70 * cosSq)
                 }
-                let tailP = Float((progress - 0.75) / 0.25)
+                let tailP = Float((progress - dropMidT4) / (1.0 - dropMidT4))
                 let tailFloor: Float = 0.30
                 return maxVolumeA * tailFloor * powf(0.0001 / tailFloor, tailP)
             }
-            // Mirror curves path (audit v9.5 2026-05-05): cuando bRapidFadeIn ON,
-            // B se queda en 0 hasta progress=0.55 y luego sube ease firme. La
-            // curva clasica de A (holdLevel=0.65, dropEnd=0.85) baja MIENTRAS B
-            // esta callado → dip perceptual de ~12 dB en progress 0.55-0.70 que
-            // el DJ describio como "valle donde el set pierde energia". Solucion:
-            // A se mantiene plena (1.0) hasta progress=0.55 (espejo del hold de
-            // B) y luego cos² drop sobre los ultimos 0.45 — espejo de la rampa
-            // de B. floor=0.10 conservado para que A no muera abrupta antes del
-            // swap (manteniendo continuidad con la curva clasica).
-            // (Codigo muerto desde v10.A: kEnableRapidFadeIn=false en DJMixingService.)
-            if config.bRapidFadeIn && !config.needsAnticipation {
-                let holdEndMirror = 0.55
-                let floor: Float = 0.10
-                if progress < holdEndMirror {
-                    return maxVolumeA  // A plena, dueña del momento
-                }
-                let dropP = Float((progress - holdEndMirror) / (1.0 - holdEndMirror))
-                let angle = dropP * .pi / 2.0
-                let cosSq = cosf(angle) * cosf(angle)
-                return maxVolumeA * (floor + (1.0 - floor) * cosSq)
-            }
+            // (Mirror curves path bRapidFadeIn eliminado en v11 — el flag
+            // estaba desactivado desde v10.A. La rama se reemplazo por earlyBlend
+            // de Tier 4 arriba, que cubre el mismo caso musical de forma correcta.)
             // Gradual descent: A eases down to 65% by midpoint, then cos² drop to a
             // floor of 0.15 by progress=0.85, then exponential tail to ~0.
             // Floor + tail keep A audible during the late-fade window where the v6
@@ -1484,33 +1492,29 @@ class CrossfadeExecutor {
         case .crossfade:
             // earlyBlend (Tier 4) — ver comentario detallado en .eqMix arriba.
             if config.tier4Active {
-                if progress < 0.50 {
+                let holdEndT4: Double
+                if config.bHarmonicClashLevel >= 0.7 {
+                    holdEndT4 = 0.35
+                } else if config.bHarmonicClashLevel >= 0.5 {
+                    holdEndT4 = 0.40
+                } else {
+                    holdEndT4 = 0.50
+                }
+                let dropMidT4: Double = config.bImmediateImpact ? 0.65 : 0.75
+                if progress < holdEndT4 {
                     return maxVolumeA
                 }
-                if progress < 0.75 {
-                    let dropP = Float((progress - 0.50) / 0.25)
+                if progress < dropMidT4 {
+                    let dropP = Float((progress - holdEndT4) / (dropMidT4 - holdEndT4))
                     let angle = dropP * .pi / 2.0
                     let cosSq = cosf(angle) * cosf(angle)
                     return maxVolumeA * (0.30 + 0.70 * cosSq)
                 }
-                let tailP = Float((progress - 0.75) / 0.25)
+                let tailP = Float((progress - dropMidT4) / (1.0 - dropMidT4))
                 let tailFloor: Float = 0.30
                 return maxVolumeA * tailFloor * powf(0.0001 / tailFloor, tailP)
             }
-            // Mirror curves path (audit v9.5 2026-05-05): mismo shortcut que
-            // eqMix/beatMatchBlend cuando bRapidFadeIn ON. Ver comentario alli.
-            // (Codigo muerto desde v10.A: kEnableRapidFadeIn=false.)
-            if config.bRapidFadeIn && !config.needsAnticipation {
-                let holdEndMirror = 0.55
-                let floorMirror: Float = 0.10
-                if progress < holdEndMirror {
-                    return maxVolumeA
-                }
-                let dropP = Float((progress - holdEndMirror) / (1.0 - holdEndMirror))
-                let angle = dropP * .pi / 2.0
-                let cosSq = cosf(angle) * cosf(angle)
-                return maxVolumeA * (floorMirror + (1.0 - floorMirror) * cosSq)
-            }
+            // (Mirror curves path bRapidFadeIn eliminado en v11.)
             // Standard crossfade with floor + tail (same shape as eqMix/beatMatchBlend
             // but with a higher hold and a slightly earlier drop). Keeps A audible
             // through the late fade so the combined power stays close to constant.
@@ -1574,11 +1578,7 @@ class CrossfadeExecutor {
             // "lavado". Saltamos el tease/creep y dejamos B en 0 durante todo
             // el hold; el ramp final (gestionado por la curva del transitionType
             // abajo) hace el resto. Solo skipea el preludio — la curva post-hold
-            // sigue intacta. La curva CUT abajo lee bRapidFadeIn y arranca desde
-            // 0 (no desde 0.45) para no introducir un escalón al cruzar.
-            if config.bRapidFadeIn {
-                return 0
-            }
+            // sigue intacta. (Anti-tease bRapidFadeIn eliminado en v11.)
             if t < timings.anticipationStartTime {
                 return 0
             } else if t < timings.filterStartTime {
@@ -1613,13 +1613,8 @@ class CrossfadeExecutor {
             let cutCap: Double = config.danceability < 0.5 ? 4.0 : 3.0
             let cutZone = min(cutCap, fadeInDuration)
             let bRampStart = timings.fadeInEndTime - cutZone
-            // bRapidFadeIn (audit v9 2026-05-05) anula tease/creep — B en 0 durante
-            // hold y arranca el ramp final desde 0 (no desde 0.45) para evitar
-            // escalon perceptible. startLevel salta de 0.45 a 0 cuando el flag esta
-            // on, asumiendo que A se va limpio por su lado.
-            let useRapidIn = config.bRapidFadeIn && config.needsAnticipation
             if t < bRampStart {
-                if config.needsAnticipation && !useRapidIn {
+                if config.needsAnticipation {
                     // Don't freeze B at a flat level for long fades.
                     // Gradually creep from 0.35 → 0.45 over max 4s, then hold at 0.45.
                     let holdStart = timings.fadeInStartTime
@@ -1634,7 +1629,7 @@ class CrossfadeExecutor {
                 }
                 return 0
             }
-            let startLevel: Float = (config.needsAnticipation && !useRapidIn) ? 0.45 : 0.0
+            let startLevel: Float = config.needsAnticipation ? 0.45 : 0.0
             let rampP = Float(min(1.0, (t - bRampStart) / 1.5))
             return maxVolumeB * (startLevel + (1.0 - startLevel) * rampP)
 
@@ -1676,23 +1671,7 @@ class CrossfadeExecutor {
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeB * (0.85 + 0.15 * eased)
             }
-            // Rapid-in path (audit v9 2026-05-05): cuando A sale limpio + B abre
-            // con punch en los primeros segundos, el ramp gradual completo se
-            // percibe como "lavado". DJMixingService activa bRapidFadeIn solo en
-            // ese contexto. Curva: B en 0 hasta 55%, luego ease firme 0→100% en
-            // 45% restante. needsAnticipation tiene baseLevel=0.35 (B ya teasing
-            // filtrado), no aplica este shortcut — su curva multi-stage es
-            // intencional y no se debe sustituir.
-            // (Codigo muerto desde v10.A: kEnableRapidFadeIn=false en DJMixingService.)
-            if config.bRapidFadeIn && !config.needsAnticipation {
-                let holdEnd = 0.55
-                if progress < holdEnd {
-                    return 0
-                }
-                let rampP = Float((progress - holdEnd) / (1.0 - holdEnd))
-                let eased = rampP * rampP * (3.0 - 2.0 * rampP)
-                return maxVolumeB * eased
-            }
+            // (Rapid-in path bRapidFadeIn eliminado en v11.)
             // Complementary to A's gradual descent (holdEnd=0.50). rampStart pulled
             // earlier (0.45 → 0.35) so B reaches its 50% midpoint before A starts
             // dropping — addresses the v6 log finding that combined power dipped
@@ -1784,18 +1763,7 @@ class CrossfadeExecutor {
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeB * (0.85 + 0.15 * eased)
             }
-            // Rapid-in path (audit v9 2026-05-05): mismo shortcut que eqMix/
-            // beatMatchBlend cuando A sale limpio + B punch inicial.
-            // (Codigo muerto desde v10.A: kEnableRapidFadeIn=false.)
-            if config.bRapidFadeIn && !config.needsAnticipation {
-                let holdEnd = 0.55
-                if progress < holdEnd {
-                    return 0
-                }
-                let rampP = Float((progress - holdEnd) / (1.0 - holdEnd))
-                let eased = rampP * rampP * (3.0 - 2.0 * rampP)
-                return maxVolumeB * eased
-            }
+            // (Rapid-in path bRapidFadeIn eliminado en v11.)
             // Complementary to A's gradual descent (holdEnd=0.45). rampStart pulled
             // earlier (0.40 → 0.30) and midpoint target raised (0.45 → 0.50) so B
             // is established by the time A enters its drop phase. Same rationale
@@ -2055,25 +2023,32 @@ class CrossfadeExecutor {
         let effectiveBassSwapTime = max(bassSwapTime, rampStart)
 
         // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
+        // v11 (audit 2026-05-05): linearizado expInterp → linInterp en band 0.
+        // expInterp acelera al final del sweep — el oyente percibia "filtros
+        // limpios todo el fade y de pronto se nubla" en transiciones blendy.
+        // linInterp distribuye la subida uniformemente; el sweep se siente
+        // como "una nube que entra desde lejos" en vez de "velo que cae al
+        // final". DJ profesional. La bell de Q (qProgress temporal) es
+        // ortogonal — sigue centrada en 0.55 con sus propias dimensiones.
         var freqA: Float
         let band0A: BiquadCoefficients
         if useLowpassA, let lpA = preset.lowpassA {
             let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
             if t < pivotTime {
                 let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = expInterp(lpA.startFreq, midFreq, min(1, p))
+                freqA = linInterp(lpA.startFreq, midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = expInterp(midFreq, lpA.endFreq, min(1, p))
+                freqA = linInterp(midFreq, lpA.endFreq, min(1, p))
             }
             band0A = BiquadCoefficientCalculator.lowpass(frequency: freqA, sampleRate: sampleRate, Q: lpA.q)
         } else {
             if t < pivotTime {
                 let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
+                freqA = linInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
+                freqA = linInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
             // Dynamic Q Resonance: bell-shaped Q curve that peaks mid-crossfade.
             // Creates the classic DJ "sweeping filter" resonance at the cutoff frequency.
