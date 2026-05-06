@@ -1693,9 +1693,20 @@ class CrossfadeExecutor {
             // already near zero.
             let rampStart = 0.35
             if progress < rampStart {
-                // v13.H — A decae natural: B entra firme al target sin rampa
+                // v13.H + mitigation (audit 2026-05-06): salto literal 0→0.50
+                // en t=0 producia thump audible (combined power A=1.0 + B=0.50).
+                // Easing en primeros 10% del fade desde baseLevel a target,
+                // luego mantiene firme. ~0.8s en fade 8s — suficiente para
+                // matar el escalon sin perder la intencion (B firme rapido).
                 if aNaturalDecay {
-                    return maxVolumeB * 0.50
+                    let liftEnd = 0.10
+                    let target: Float = 0.50
+                    if progress < liftEnd {
+                        let p = Float(progress / liftEnd)
+                        let eased = p * p * (3.0 - 2.0 * p)
+                        return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+                    }
+                    return maxVolumeB * target
                 }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.50
@@ -1747,9 +1758,16 @@ class CrossfadeExecutor {
             // Ease to 40% while A holds, then ramp to 100% as filters open and A drops.
             let rampStart = 0.50
             if progress < rampStart {
-                // v13.H — A decae natural: B entra firme al target sin rampa
+                // v13.H + mitigation: easing 10% para evitar thump en t=0
                 if aNaturalDecay {
-                    return maxVolumeB * 0.40
+                    let liftEnd = 0.10
+                    let target: Float = 0.40
+                    if progress < liftEnd {
+                        let p = Float(progress / liftEnd)
+                        let eased = p * p * (3.0 - 2.0 * p)
+                        return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+                    }
+                    return maxVolumeB * target
                 }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.40
@@ -1765,11 +1783,20 @@ class CrossfadeExecutor {
             // Complements A's aggressive exit — minimal overlap at high volumes.
             let rampEnd = 0.60
             if progress < rampEnd {
-                // v13.H — A decae natural: B entra al 60% firme y luego rampa final
+                // v13.H + mitigation: easing 10% al target firme (0.60), luego
+                // continua subiendo a 1.0 durante el resto del rampEnd. Evita
+                // thump en t=0 manteniendo la intencion de "B firme rapido".
                 if aNaturalDecay {
-                    let p = Float(progress / rampEnd)
-                    let eased = p * p * (3.0 - 2.0 * p)
-                    return maxVolumeB * (0.60 + 0.40 * eased)
+                    let liftEnd = 0.10
+                    let target: Float = 0.60
+                    if progress < liftEnd {
+                        let p = Float(progress / liftEnd)
+                        let eased = p * p * (3.0 - 2.0 * p)
+                        return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+                    }
+                    let tailP = Float((progress - liftEnd) / (rampEnd - liftEnd))
+                    let easedTail = tailP * tailP * (3.0 - 2.0 * tailP)
+                    return maxVolumeB * (target + (1.0 - target) * easedTail)
                 }
                 let p = Float(progress / rampEnd)
                 let eased = p * p * (3.0 - 2.0 * p)
@@ -1798,9 +1825,16 @@ class CrossfadeExecutor {
             // as eqMix/beatMatchBlend.
             let rampStart = 0.30
             if progress < rampStart {
-                // v13.H — A decae natural: B entra firme al target sin rampa
+                // v13.H + mitigation: easing 10% para evitar thump en t=0
                 if aNaturalDecay {
-                    return maxVolumeB * 0.50
+                    let liftEnd = 0.10
+                    let target: Float = 0.50
+                    if progress < liftEnd {
+                        let p = Float(progress / liftEnd)
+                        let eased = p * p * (3.0 - 2.0 * p)
+                        return maxVolumeB * (baseLevel + (target - baseLevel) * eased)
+                    }
+                    return maxVolumeB * target
                 }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.50
