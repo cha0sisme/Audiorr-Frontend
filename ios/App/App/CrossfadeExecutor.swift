@@ -1603,6 +1603,20 @@ class CrossfadeExecutor {
         // Anticipation base: if B was already playing at ~35%, continue from there
         let baseLevel: Float = config.needsAnticipation ? 0.35 : 0.0
 
+        // v13.H (audit 2026-05-06) — "A decae natural, B no necesita fade-in".
+        // Queja dominante en log de 87 transiciones (10 casos): "PlayerA crea
+        // una rampa perfecta para PlayerB pero PlayerB no la aprovecha — entra
+        // con fade que no necesita". Cuando A acaba con outro instrumental
+        // (decay natural ya hecho por la cancion), B salta la rampa inicial
+        // 0→target y entra firme al target desde t=0 — solo en blendy types
+        // (eqMix/beatMatchBlend/crossfade/stemMix/dropMix). Tier 4 ya tiene
+        // su propia curva escalon firme, asi que solo aplica si !tier4Active.
+        // Anticipation tambien lo desactiva (B ya viene tease-pre-jugado).
+        // Conservador: NO toca naturalBlend (mean 7.50 ya es oro).
+        let aNaturalDecay = config.isOutroInstrumental
+            && !config.tier4Active
+            && !config.needsAnticipation
+
         switch config.transitionType {
         case .cut:
             // Cut: B enters during the last 3s (4s en BPMs lentos) — matching A's
@@ -1679,6 +1693,10 @@ class CrossfadeExecutor {
             // already near zero.
             let rampStart = 0.35
             if progress < rampStart {
+                // v13.H — A decae natural: B entra firme al target sin rampa
+                if aNaturalDecay {
+                    return maxVolumeB * 0.50
+                }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.50
                 let eased = p * p * (3.0 - 2.0 * p)
@@ -1729,6 +1747,10 @@ class CrossfadeExecutor {
             // Ease to 40% while A holds, then ramp to 100% as filters open and A drops.
             let rampStart = 0.50
             if progress < rampStart {
+                // v13.H — A decae natural: B entra firme al target sin rampa
+                if aNaturalDecay {
+                    return maxVolumeB * 0.40
+                }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.40
                 let eased = p * p * (3.0 - 2.0 * p)
@@ -1743,6 +1765,12 @@ class CrossfadeExecutor {
             // Complements A's aggressive exit — minimal overlap at high volumes.
             let rampEnd = 0.60
             if progress < rampEnd {
+                // v13.H — A decae natural: B entra al 60% firme y luego rampa final
+                if aNaturalDecay {
+                    let p = Float(progress / rampEnd)
+                    let eased = p * p * (3.0 - 2.0 * p)
+                    return maxVolumeB * (0.60 + 0.40 * eased)
+                }
                 let p = Float(progress / rampEnd)
                 let eased = p * p * (3.0 - 2.0 * p)
                 return maxVolumeB * (baseLevel + (1.0 - baseLevel) * eased)
@@ -1770,6 +1798,10 @@ class CrossfadeExecutor {
             // as eqMix/beatMatchBlend.
             let rampStart = 0.30
             if progress < rampStart {
+                // v13.H — A decae natural: B entra firme al target sin rampa
+                if aNaturalDecay {
+                    return maxVolumeB * 0.50
+                }
                 let p = Float(progress / rampStart)
                 let target: Float = 0.50
                 let eased = p * p * (3.0 - 2.0 * p)

@@ -195,6 +195,18 @@ enum DJMixingService {
         var modelUsed: Bool = false       // true when ML overrode intro/outro values
         var introEndTimeHeuristic: Double? // heuristic value (before ML override)
         var outroStartTimeHeuristic: Double? // heuristic value (before ML override)
+        // v13.G (audit 2026-05-06): perceptual decay data del backend.
+        // Hasta ahora estos campos llegaban en el JSON pero nunca se mapeaban.
+        // Habilitan v13.D/E (Tier 4-lite perceptual + "Transparent A") con
+        // datos reales en lugar de heuristicas. nil = backend no proveyo.
+        /// Pendiente de la curva de energia en el outro (>0 sube, <0 baja).
+        /// Negativo significativo = A decae natural — habilita ramp-aware.
+        var outroSlope: Double? = nil
+        /// Pendiente de la curva de energia en el intro (>0 sube, <0 baja).
+        var introSlope: Double? = nil
+        /// Curva RMS de la cola (normalizada 0-1, ventanas 5s) para detectar
+        /// decay perceptual fino aunque outroSlope no sea concluyente.
+        var rmsTailCurve: [Double]? = nil
     }
 
     // MARK: - Transition Profile (A↔B Relationship)
@@ -3033,6 +3045,14 @@ enum DJMixingService {
         let bpmBToxic = profile.bpmB >= 140 && profile.bpmB <= 180
         guard !bpmAToxic, !bpmBToxic else { return nil }
 
+        // ── Gate 5.5 (v13.A): energyB minimo ──
+        // Caso Too Young→FML (rateado 1/10 "Horrible") fue Tier 4 con energyB=0.14
+        // y dance=0.85 → intro atmosferico/piano sin masa ritmica. La curva
+        // earlyBlend escalon firme (B al 75% desde t=0) sobre intro vacio crea
+        // trainwreck atmosferico cuando A todavia tiene cuerpo. DJ-agent: vetar
+        // si energyB < 0.30 — Tier 4 esta pensado para B con groove ya armado.
+        guard profile.energyB >= 0.30 else { return nil }
+
         // ── Compute barDur from downbeat deltas (mediana, robusto a no-4/4) ──
         let downbeats = next.downbeatTimes
         guard downbeats.count >= 2 else { return nil }
@@ -3066,14 +3086,19 @@ enum DJMixingService {
         // ── Gate 10: clash armonico < 0.7 (sin choque tonal duro) ──
         guard profile.harmonic.compatibility != .clash else { return nil }
 
-        // ── Compute target con barsAhead = 6 fijo (DJ v11) ──
-        // v11.1 (audit 2026-05-05): barsAhead ahora constante 6 (antes
-        // 6/6/8 escalado por BPM era no-monotonico, bug). El plan v11 dijo
-        // "default 6". 6 compases tipicos a 120 BPM = 12s, 90 BPM = 16s,
-        // 140 BPM = 10s — rangos razonables para que B acompane a A.
+        // ── Compute target con barsAhead escalado por ventana (v13.A) ──
+        // v11.1: constante 6 (BPM-monotonico). v13.A (audit 2026-05-06):
+        // cuando fadeDuration es grande (>8s), ventana audible de B antes
+        // del punch puede pasar de 12s. Con barsAhead=6 fijo, el clamp puede
+        // dejar a B sonando en zona pre-bar-(-6) que no es la intro real.
+        // Escalar a 8 cuando fade>8s para que el target caiga mas cerca del
+        // primer kick. Caso Too Young→FML fade=8.5s + anticipation=7s eran
+        // 15.5s de ventana — barsAhead=6 dejaba ~8s en zona "pre-intro".
+        // Ademas relajamos lowerBound de -10*barDur a -12*barDur para que
+        // intros largas (>20s) no perdiesen Tier 4 silenciosamente.
         let bpmB = profile.bpmB
-        let barsAhead: Double = 6
-        let lowerBound = max(introEnd + 4 * barDur, firstEventB - 10 * barDur)
+        let barsAhead: Double = fadeDuration > 8.0 ? 8 : 6
+        let lowerBound = max(introEnd + 4 * barDur, firstEventB - 12 * barDur)
         let upperBound = firstEventB - 4 * barDur
         // Sanity: rango valido. Si la intro es muy corta o esta mal detectada,
         // lowerBound puede igualar/superar upperBound — sin rango no hay snap.

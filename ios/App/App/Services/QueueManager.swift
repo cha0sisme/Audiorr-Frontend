@@ -821,7 +821,11 @@ final class QueueManager: AudioEngineDelegate {
                         currentSongAnalysis.hasEnergyProfile = true
                         currentSongAnalysis.hasIntroVocals = ep.introVocals ?? false
                         currentSongAnalysis.hasOutroVocals = ep.outroVocals ?? false
+                        // v13.G — perceptual decay data (datos hasta ahora ignorados)
+                        currentSongAnalysis.outroSlope = ep.outroSlope
+                        currentSongAnalysis.introSlope = ep.introSlope
                     }
+                    currentSongAnalysis.rmsTailCurve = curAn.rmsTailCurve
                     // Backend fade durations
                     if let fi = curAn.fadeInDuration, fi > 0 { currentSongAnalysis.backendFadeInDuration = fi }
                     if let fo = curAn.fadeOutDuration, fo > 0 { currentSongAnalysis.backendFadeOutDuration = fo }
@@ -873,7 +877,11 @@ final class QueueManager: AudioEngineDelegate {
                         nextSongAnalysis.hasEnergyProfile = true
                         nextSongAnalysis.hasIntroVocals = ep.introVocals ?? false
                         nextSongAnalysis.hasOutroVocals = ep.outroVocals ?? false
+                        // v13.G — perceptual decay data
+                        nextSongAnalysis.outroSlope = ep.outroSlope
+                        nextSongAnalysis.introSlope = ep.introSlope
                     }
+                    nextSongAnalysis.rmsTailCurve = nxtAn.rmsTailCurve
                     // Backend fade durations for next song
                     if let fi = nxtAn.fadeInDuration, fi > 0 { nextSongAnalysis.backendFadeInDuration = fi }
                     if let fo = nxtAn.fadeOutDuration, fo > 0 { nextSongAnalysis.backendFadeOutDuration = fo }
