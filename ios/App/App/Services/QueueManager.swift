@@ -826,6 +826,16 @@ final class QueueManager: AudioEngineDelegate {
                         currentSongAnalysis.introSlope = ep.introSlope
                     }
                     currentSongAnalysis.rmsTailCurve = curAn.rmsTailCurve
+                    currentSongAnalysis.rmsCurve = curAn.rmsCurve
+                    // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
+                    // no las provee. Revive tambien SmartMixManager:323/375/466 dead code.
+                    // Ventana 4 windows (20s) coherente con la ventana del gate 5.5.
+                    if currentSongAnalysis.introSlope == nil {
+                        currentSongAnalysis.introSlope = DJMixingService.deriveSlope(from: curAn.rmsCurve, headWindows: 4)
+                    }
+                    if currentSongAnalysis.outroSlope == nil {
+                        currentSongAnalysis.outroSlope = DJMixingService.deriveSlope(from: curAn.rmsTailCurve, tailWindows: 4)
+                    }
                     // Backend fade durations
                     if let fi = curAn.fadeInDuration, fi > 0 { currentSongAnalysis.backendFadeInDuration = fi }
                     if let fo = curAn.fadeOutDuration, fo > 0 { currentSongAnalysis.backendFadeOutDuration = fo }
@@ -882,6 +892,15 @@ final class QueueManager: AudioEngineDelegate {
                         nextSongAnalysis.introSlope = ep.introSlope
                     }
                     nextSongAnalysis.rmsTailCurve = nxtAn.rmsTailCurve
+                    nextSongAnalysis.rmsCurve = nxtAn.rmsCurve
+                    // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
+                    // no las provee. Misma logica que current (mismo paragrafo arriba).
+                    if nextSongAnalysis.introSlope == nil {
+                        nextSongAnalysis.introSlope = DJMixingService.deriveSlope(from: nxtAn.rmsCurve, headWindows: 4)
+                    }
+                    if nextSongAnalysis.outroSlope == nil {
+                        nextSongAnalysis.outroSlope = DJMixingService.deriveSlope(from: nxtAn.rmsTailCurve, tailWindows: 4)
+                    }
                     // Backend fade durations for next song
                     if let fi = nxtAn.fadeInDuration, fi > 0 { nextSongAnalysis.backendFadeInDuration = fi }
                     if let fo = nxtAn.fadeOutDuration, fo > 0 { nextSongAnalysis.backendFadeOutDuration = fo }

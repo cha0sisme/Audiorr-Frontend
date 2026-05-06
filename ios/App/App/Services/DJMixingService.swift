@@ -207,6 +207,10 @@ enum DJMixingService {
         /// Curva RMS de la cola (normalizada 0-1, ventanas 5s) para detectar
         /// decay perceptual fino aunque outroSlope no sea concluyente.
         var rmsTailCurve: [Double]? = nil
+        /// Curva RMS de la cabeza (normalizada 0-1, ventanas 5s sobre primeros 90s).
+        /// Backend la emite top-level. v13.D la usa para derivar `introSlope`
+        /// localmente cuando el backend no provee EnergyProfile.introSlope.
+        var rmsCurve: [Double]? = nil
     }
 
     // MARK: - Transition Profile (A↔B Relationship)
@@ -3000,6 +3004,57 @@ enum DJMixingService {
         }
     }
 
+    // MARK: - v13.D: Derivacion frontend de pendientes perceptuales
+
+    /// v13.D (audit 2026-05-06): umbrales tentativos del DJ-engineer para Tier 4-lite.
+    /// Calibrar contra log post-coche-test antes de ajustar. Vienen del analisis
+    /// musical: +0.015/seg ≈ +0.30 sobre 20s de intro (build perceptible no exagerado);
+    /// 0.45 dbs/bar ≈ 1.8 downbeats por compas 4/4 (percu marcando con consistencia).
+    private static let kIntroSlopeMinPerSecond: Double = 0.015
+    private static let kDownbeatDensityMinPerBar: Double = 0.45
+
+    /// Calcula la pendiente (regresion lineal) de los primeros `headWindows` o
+    /// ultimos `tailWindows` elementos de una curva RMS normalizada 0-1.
+    /// Las curvas del backend usan ventanas de 5s, por lo que el resultado se
+    /// devuelve en unidades por segundo (slope-por-window dividido por 5).
+    /// Retorna nil si la curva es nil o tiene menos elementos que la ventana pedida.
+    /// Publico (no private) para que QueueManager pueda derivar slopes cuando
+    /// el backend no provee EnergyProfile.introSlope/outroSlope.
+    static func deriveSlope(from curve: [Double]?, headWindows: Int? = nil, tailWindows: Int? = nil) -> Double? {
+        guard let curve = curve else { return nil }
+        let windows: ArraySlice<Double>
+        if let n = headWindows {
+            guard curve.count >= n, n >= 2 else { return nil }
+            windows = curve.prefix(n)
+        } else if let n = tailWindows {
+            guard curve.count >= n, n >= 2 else { return nil }
+            windows = curve.suffix(n)
+        } else {
+            return nil
+        }
+        let n = Double(windows.count)
+        let xs = (0..<windows.count).map { Double($0) }
+        let ys = Array(windows)
+        let sumX = xs.reduce(0, +)
+        let sumY = ys.reduce(0, +)
+        let sumXY = zip(xs, ys).map { $0 * $1 }.reduce(0, +)
+        let sumX2 = xs.map { $0 * $0 }.reduce(0, +)
+        let denom = n * sumX2 - sumX * sumX
+        guard denom != 0 else { return nil }
+        let slopePerWindow = (n * sumXY - sumX * sumY) / denom
+        return slopePerWindow / 5.0  // 5s por window → unidades/segundo
+    }
+
+    /// Densidad de downbeats por compas en la ventana [0, hasta) de B.
+    /// Devuelve nil si no hay suficientes downbeats o barDur invalido.
+    private static func downbeatDensity(downbeats: [Double], barDur: Double, hasta: Double) -> Double? {
+        guard barDur > 0, hasta > 0 else { return nil }
+        let inWindow = downbeats.filter { $0 >= 0 && $0 < hasta }.count
+        let bars = hasta / barDur
+        guard bars > 0 else { return nil }
+        return Double(inWindow) / bars
+    }
+
     // MARK: - Tier 4: Adelantar entryPoint al primer kick de la intro de B
 
     /// Computa un entryPoint adelantado cuando el setup es claro: A en outro
@@ -3050,15 +3105,8 @@ enum DJMixingService {
         let bpmBToxic = profile.bpmB >= 140 && profile.bpmB <= 180
         guard !bpmAToxic, !bpmBToxic else { return nil }
 
-        // ── Gate 5.5 (v13.A): energyB minimo ──
-        // Caso Too Young→FML (rateado 1/10 "Horrible") fue Tier 4 con energyB=0.14
-        // y dance=0.85 → intro atmosferico/piano sin masa ritmica. La curva
-        // earlyBlend escalon firme (B al 75% desde t=0) sobre intro vacio crea
-        // trainwreck atmosferico cuando A todavia tiene cuerpo. DJ-agent: vetar
-        // si energyB < 0.30 — Tier 4 esta pensado para B con groove ya armado.
-        guard profile.energyB >= 0.30 else { return nil }
-
         // ── Compute barDur from downbeat deltas (mediana, robusto a no-4/4) ──
+        // (Movido antes del gate 5.5 por v13.D: el camino B necesita barDur.)
         let downbeats = next.downbeatTimes
         guard downbeats.count >= 2 else { return nil }
         var deltas: [Double] = []
@@ -3069,6 +3117,25 @@ enum DJMixingService {
         let medianDelta = sortedDeltas[sortedDeltas.count / 2]
         guard medianDelta >= 1.0, medianDelta <= 4.0 else { return nil }
         let barDur = medianDelta
+
+        // ── Gate 5.5 (v13.D, audit 2026-05-06): perceptual energy gate ──
+        // Reemplaza el guard unico `energyB >= 0.30` (v13.A) por OR-de-3-caminos.
+        // Causa raiz: `energy` viene promediado track-wide, mata hip-hop con intro
+        // instrumental real (Tier 4 = 0/51 fires en log v13.H.1 sobre 51 transiciones).
+        //   A: introSlope >= +0.015/seg → build perceptual claro.
+        //   B: introSlope >= 0 + density downbeats >= 0.45/bar → loop estable.
+        //   C: legacy energyB >= 0.30 → fallback para pistas sin curvas pobladas.
+        // Caso Too Young→FML preservado: introSlope ≈ 0 + density baja + energy 0.14
+        // → 3 caminos fallan, Tier 4 NO activa (mismo guard que pre-v13.D).
+        // Densidad: contar downbeats en [0, 20s) — intro hip-hop tipica ≈ 4-5 bars.
+        let pathA = (next.introSlope ?? -.infinity) >= kIntroSlopeMinPerSecond
+        let pathB: Bool = {
+            guard (next.introSlope ?? -.infinity) >= 0 else { return false }
+            guard let dens = downbeatDensity(downbeats: downbeats, barDur: barDur, hasta: 20.0) else { return false }
+            return dens >= kDownbeatDensityMinPerBar
+        }()
+        let pathC = profile.energyB >= 0.30
+        guard pathA || pathB || pathC else { return nil }
 
         // ── Gate 6: structure intacta — chorusStart>5 (defensa "0.1s literal") ──
         let chorusStart = next.chorusStartTime
