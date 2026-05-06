@@ -1249,11 +1249,16 @@ enum DJMixingService {
             entryPoint = max(0, min(entryPoint, bufferDuration - 1))
 
             // Vocal landmark alignment: if B enters after a clear vocal moment
-            // (chorusStart), shift entry back so B becomes audible (~3s fade lead
+            // (chorusStart), shift entry back so B becomes audible (~2s fade lead
             // time) right as the vocal hits. Creates a natural "reveal" — the
             // incoming track's vocal is the moment the listener notices the new song.
+            // v13.F (audit 2026-05-06): margen unificado a 2s. Antes era -3.0
+            // aqui mientras el resto de sites (calculatePunchEntry, dramatic,
+            // minimal, PRE_PUNCH) usaban -2.0 — ese 1s extra desplazaba B
+            // demasiado pronto en .smooth, contribuyendo a las quejas
+            // "demasiado antes del punch" del log v12.
             if next.chorusStartTime > 5 && entryPoint > next.chorusStartTime {
-                let vocalAlignedEntry = max(0, next.chorusStartTime - 3.0)
+                let vocalAlignedEntry = max(0, next.chorusStartTime - 2.0)
                 print("[DJMixingService] 🎯 Smooth vocal alignment: entry \(String(format: "%.1f", entryPoint))s → \(String(format: "%.1f", vocalAlignedEntry))s (chorus at \(String(format: "%.1f", next.chorusStartTime))s)")
                 entryPoint = vocalAlignedEntry
             }
