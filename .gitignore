@@ -40,6 +40,7 @@ build_log*.txt
 
 # Claude Code
 .claude/
+CLAUDE.md
 
 # iOS signing & provisioning
 *.p12
