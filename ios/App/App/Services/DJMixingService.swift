@@ -49,6 +49,67 @@
 
 import Foundation
 
+// MARK: - v13.K telemetry types (audit 2026-05-07)
+
+/// Path por el que el calculador de entryPoint decidió la posición de B.
+/// Persistido en TransitionRecord para análisis post-coche-test (qué rama
+/// del entry decisor está produciendo aciertos vs fallos).
+enum EntryPointSource: String, Codable {
+    case smooth                // .smooth case (inline)
+    case smoothChorusFallback  // .smooth con chorusStartTime fallback
+    case smoothVocalAligned    // .smooth con shift atrás por chorus alignment
+    case dramaticChorus        // calculateDramaticEntry: entry al chorus
+    case dramaticVocal         // calculateDramaticEntry: entry vía vocalEntryTarget
+    case dramaticReference     // calculateDramaticEntry: entryReference
+    case dramaticFallback      // calculateDramaticEntry: bufferDuration fallback
+    case punchVocalAvoidance   // calculatePunchEntry: vocalOverlapRisk == .both
+    case punchChorusPromotion  // calculatePunchEntry: chorus promotion (línea 1509)
+    case punchVocalTarget      // calculatePunchEntry: vocalEntryTarget
+    case punchEntryReference   // calculatePunchEntry: entryReference
+    case punchChorusFallback   // calculatePunchEntry: chorusStart-2 dentro de styleAffinity
+    case punchBufferFallback   // calculatePunchEntry: bufferDuration fallback
+    case punchEnergyBoost      // calculatePunchEntry: energyUp boost reasigna entry
+    case minimal               // .minimal case (cuando exista)
+    case unknown               // sin asignar (no debería ocurrir si todo el switch está cableado)
+}
+
+/// Cuando Tier 4 no dispara, etiqueta del primer gate que cortó. Permite
+/// calibrar contra distribución real (vs adivinar umbrales a ciegas).
+/// `nil` cuando Tier 4 dispara con éxito.
+enum Tier4FailedGate: String, Codable {
+    case disabled              // kEnableTier4 == false
+    case typeIncompat          // gate 1: tipo no blendy (no crossfade/eqMix/BMB)
+    case fadeShort             // gate 2: fadeDuration < 4s
+    case aMissing              // gate 3a: safeCurrent nil/error
+    case noVocalEndData        // gate 3b: cur.hasVocalEndData == false
+    case outroVocal            // gate 3c: outro vocal a < 2s del crossfade start
+    case bMissing              // gate 4: safeNext nil/error
+    case bpmUntrusted          // gate 5a: bpmTrusted == false
+    case bpmToxic              // gate 5b: BPM A o B en franja 140-180
+    case noDownbeats           // gate 5c: <2 downbeats en B
+    case invalidBarDur         // gate 5d: medianDelta fuera de [1, 4]s
+    case perceptual            // gate 5.5: pathA/B/C todos false (intro plana)
+    case vocalStart            // gate 7: vocalStart nil o ≤ 0
+    case noIntroEnd            // gate 8a: introEnd ≤ 0
+    case introBarsShort        // gate 8b: vocalStart ≤ introEnd + 4*barDur
+    case noFirstEvent          // gate 9a: firstEventB no finite
+    case structureCollision    // gate 9b: introEnd + 12*barDur ≥ firstEventB
+    case clash                 // gate 10: harmonic compatibility .clash
+    case rangeInvalid          // gate 11: lowerBound ≥ upperBound
+    case noCandidates          // gate 12: ningún downbeat en rango con paridad correcta
+    case notImproving          // gate 13: bestCandidate no mejora ≥1s sobre originalEntry
+}
+
+/// Telemetría persistida del intento de Tier 4. Se llena progresivamente
+/// dentro de `computeTier4Entry`: las pendientes/densidades se calculan
+/// aunque gates posteriores corten — así podemos analizar qué rangos reales
+/// produce el repertorio del usuario sin necesidad de re-instrumentar.
+struct Tier4Telemetry {
+    var introSlopeB: Double? = nil
+    var downbeatDensityB20s: Double? = nil
+    var failedGate: Tier4FailedGate? = nil
+}
+
 /// DJMixingService v4.0 "Relational Mix" — pure crossfade intelligence calculations.
 /// No side effects, no audio playback — just math.
 enum DJMixingService {
@@ -355,6 +416,16 @@ enum DJMixingService {
         // mantiene 100% los primeros 50% del fade, A cae acelerada en los
         // ultimos 25%, B sube 75→100% en el downbeat del chorus.
         let tier4Active: Bool
+        // v13.K (audit 2026-05-07): telemetría perceptual. NO modifican
+        // comportamiento — solo persistencia para análisis post-coche-test.
+        // Permiten ver qué path del entry decisor se eligió, qué gate de
+        // Tier 4 cortó (cuando no disparó), y los valores reales de pendiente
+        // intro / densidad downbeats de B sin reinstrumentar.
+        let entryPointSource: EntryPointSource
+        let tier4FailedGate: Tier4FailedGate?
+        let introSlopeB: Double?
+        let downbeatDensityB20s: Double?
+        let chillRecipeApplied: Bool
     }
 
     // MARK: - Build Transition Profile
@@ -627,7 +698,11 @@ enum DJMixingService {
                 usedFallback: entry.usedFallback,
                 // Drop beat-sync claim — the original sync was tied to the
                 // pre-cap downbeat; a 6s cap puts us nowhere near it.
-                isBeatSynced: false
+                isBeatSynced: false,
+                // Preserva la etiqueta del path original — el cap es modificación
+                // posterior, el "source" sigue siendo el path que decidió el
+                // entry pre-cap.
+                entrySource: entry.entrySource
             )
         }
 
@@ -723,6 +798,7 @@ enum DJMixingService {
         // se activa via tier4Active. Si gates fallan, fallback al snapEntry.
         // IMPORTANTE: corre ANTES de los flags B→A (8d) para que
         // bImmediateImpact se recalcule con el entry adelantado.
+        var tier4Telemetry = Tier4Telemetry()
         let tier4Result = Self.computeTier4Entry(
             safeCurrent: safeCurrent,
             safeNext: safeNext,
@@ -731,7 +807,8 @@ enum DJMixingService {
             bufferBDuration: bufferBDuration,
             fadeDuration: fade.duration,
             originalEntry: snapEntry,
-            transitionType: transition.type
+            transitionType: transition.type,
+            telemetry: &tier4Telemetry
         )
         let finalEntry: Double
         let tier4Active: Bool
@@ -1152,7 +1229,12 @@ enum DJMixingService {
             bImmediateImpact: bImmediateImpactForA,
             bHarmonicClashLevel: bHarmonicClashLevelForA,
             bRapidFadeIn: bRapidFadeIn,
-            tier4Active: tier4Active
+            tier4Active: tier4Active,
+            entryPointSource: entry.entrySource,
+            tier4FailedGate: tier4Telemetry.failedGate,
+            introSlopeB: tier4Telemetry.introSlopeB,
+            downbeatDensityB20s: tier4Telemetry.downbeatDensityB20s,
+            chillRecipeApplied: isChillContext
         )
     }
 
@@ -1163,6 +1245,11 @@ enum DJMixingService {
         let beatSyncInfo: String
         let usedFallback: Bool
         let isBeatSynced: Bool
+        /// v13.K (audit 2026-05-07): path por el que se decidió este entryPoint.
+        /// Default `.unknown` por compatibilidad — todos los call sites internos
+        /// asignan valor concreto, pero un constructor externo sin arg queda
+        /// trazable como tal.
+        var entrySource: EntryPointSource = .unknown
     }
 
     /// Calculate where B starts playing. Driven by the A↔B relationship profile.
@@ -1180,10 +1267,11 @@ enum DJMixingService {
         var beatSyncInfo = ""
         var usedFallback = false
         var isBeatSynced = false
+        var entrySource: EntryPointSource = .unknown
 
         guard let rawNext = nextAnalysis, !rawNext.hasError else {
             entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
-            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "", usedFallback: true, isBeatSynced: false)
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "", usedFallback: true, isBeatSynced: false, entrySource: .unknown)
         }
 
         let next = sanitize(rawNext, duration: bufferDuration)
@@ -1219,11 +1307,11 @@ enum DJMixingService {
             if let pick = candidates.min(by: { $0.0 < $1.0 }) {
                 entryPoint = max(0, min(pick.0, bufferDuration - 1))
                 print("[DJMixingService] 🌙 Minimal+\(pick.1): entry=\(String(format: "%.1f", entryPoint))s (low energy + structural target)")
-                return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (\(pick.1))", usedFallback: false, isBeatSynced: false)
+                return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (\(pick.1))", usedFallback: false, isBeatSynced: false, entrySource: .minimal)
             }
             entryPoint = max(0, earlyEntry)
             print("[DJMixingService] 🌙 Minimal: entry=\(String(format: "%.1f", entryPoint))s (both low energy, gentle handoff)")
-            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (low energy)", usedFallback: false, isBeatSynced: false)
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Minimal (low energy)", usedFallback: false, isBeatSynced: false, entrySource: .minimal)
 
         case .smooth:
             // Incompatible BPMs or low style affinity — no punch targeting.
@@ -1244,11 +1332,14 @@ enum DJMixingService {
             }()
             if entryRef > baseEntry + 3 {
                 entryPoint = entryRef
+                entrySource = .smooth
             } else if next.chorusStartTime > baseEntry + 3 && next.chorusStartTime < bufferDuration * 0.25 {
                 // Chorus as fallback — capped at 25% of song to avoid entering too deep
                 entryPoint = next.chorusStartTime
+                entrySource = .smoothChorusFallback
             } else {
                 entryPoint = baseEntry
+                entrySource = .smooth
             }
             entryPoint = max(0, min(entryPoint, bufferDuration - 1))
 
@@ -1265,18 +1356,23 @@ enum DJMixingService {
                 let vocalAlignedEntry = max(0, next.chorusStartTime - 2.0)
                 print("[DJMixingService] 🎯 Smooth vocal alignment: entry \(String(format: "%.1f", entryPoint))s → \(String(format: "%.1f", vocalAlignedEntry))s (chorus at \(String(format: "%.1f", next.chorusStartTime))s)")
                 entryPoint = vocalAlignedEntry
+                entrySource = .smoothVocalAligned
             }
 
             print("[DJMixingService] 🌊 Smooth: entry=\(String(format: "%.1f", entryPoint))s (introEnd=\(String(format: "%.1f", next.introEndTime))s, affinity=\(String(format: "%.2f", profile.styleAffinity)))")
-            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Smooth blend", usedFallback: false, isBeatSynced: false)
+            return EntryPointResult(entryPoint: entryPoint, beatSyncInfo: "Smooth blend", usedFallback: false, isBeatSynced: false, entrySource: entrySource)
 
         case .dramatic:
             // Big energy change or harmonic clash — entry strategy depends on direction.
-            entryPoint = calculateDramaticEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+            let dramaticResult = calculateDramaticEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+            entryPoint = dramaticResult.entry
+            entrySource = dramaticResult.source
 
         case .punch:
             // Compatible BPMs, good style affinity — target a structural moment.
-            entryPoint = calculatePunchEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+            let punchResult = calculatePunchEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
+            entryPoint = punchResult.entry
+            entrySource = punchResult.source
         }
 
         // ── Phrase snapping (punch + dramatic only, not smooth/minimal) ──
@@ -1312,17 +1408,19 @@ enum DJMixingService {
             entryPoint: entryPoint,
             beatSyncInfo: beatSyncInfo,
             usedFallback: usedFallback,
-            isBeatSynced: isBeatSynced
+            isBeatSynced: isBeatSynced,
+            entrySource: entrySource
         )
     }
 
     /// Entry for `.dramatic` character — big energy changes or harmonic clash.
+    /// v13.K: retorna tuple con `EntryPointSource` etiquetando el path elegido.
     private static func calculateDramaticEntry(
         next: SongAnalysis,
         profile: TransitionProfile,
         bufferDuration: Double,
         config: MixModeConfig
-    ) -> Double {
+    ) -> (entry: Double, source: EntryPointSource) {
         let vocalStart = next.vocalStartTime ?? 0
         let chorusStart = next.chorusStartTime
 
@@ -1352,14 +1450,14 @@ enum DJMixingService {
                 // que la anacrusa / build-in entre dentro del fade.
                 let chorusEntryTarget = max(2, chorusStart - 2)
                 print("[DJMixingService] 🔥 Dramatic UP: chorus entry at \(String(format: "%.1f", chorusEntryTarget))s (chorus at \(String(format: "%.1f", chorusStart))s -2s margin)")
-                return chorusEntryTarget
+                return (chorusEntryTarget, .dramaticChorus)
             } else if vocalStart > 3 {
                 print("[DJMixingService] 🔥 Dramatic UP: vocal entry at \(String(format: "%.1f", vocalEntryTarget))s (vocal at \(String(format: "%.1f", vocalStart))s -2s margin)")
-                return vocalEntryTarget
+                return (vocalEntryTarget, .dramaticVocal)
             } else if entryRef > 3 {
-                return entryRef
+                return (entryRef, .dramaticReference)
             } else {
-                return min(config.fallbackMaxSeconds, bufferDuration * 0.03)
+                return (min(config.fallbackMaxSeconds, bufferDuration * 0.03), .dramaticFallback)
             }
 
         case .energyDown:
@@ -1367,27 +1465,28 @@ enum DJMixingService {
             // Don't punch — B needs space to breathe as A's energy fades.
             let earlyEntry = min(4.0, bufferDuration * 0.02)
             print("[DJMixingService] 🌅 Dramatic DOWN: early entry at \(String(format: "%.1f", earlyEntry))s (energy dropping)")
-            return earlyEntry
+            return (earlyEntry, .dramaticFallback)
 
         case .steady:
             // Harmonic clash with steady energy: moderate entry, avoid extending overlap.
             if vocalStart > 3 {
-                return vocalEntryTarget
+                return (vocalEntryTarget, .dramaticVocal)
             } else if entryRef > 3 {
-                return entryRef
+                return (entryRef, .dramaticReference)
             } else {
-                return min(config.fallbackMaxSeconds, bufferDuration * 0.02)
+                return (min(config.fallbackMaxSeconds, bufferDuration * 0.02), .dramaticFallback)
             }
         }
     }
 
     /// Entry for `.punch` character — compatible BPMs, targeting a structural moment in B.
+    /// v13.K: retorna tuple con `EntryPointSource` etiquetando el path elegido.
     private static func calculatePunchEntry(
         next: SongAnalysis,
         profile: TransitionProfile,
         bufferDuration: Double,
         config: MixModeConfig
-    ) -> Double {
+    ) -> (entry: Double, source: EntryPointSource) {
         let introEnd = next.introEndTime
         // vocalStart unwrap: nil → 0 (treat as "no usable target"). The
         // distinction nil/0 doesn't matter for entry computation here —
@@ -1443,6 +1542,7 @@ enum DJMixingService {
         }
 
         var entry: Double
+        var source: EntryPointSource = .punchBufferFallback  // se sobrescribe en cada rama
 
         // ── Vocal-aware entry reference: when B's "real content" starts ──
         // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
@@ -1476,7 +1576,7 @@ enum DJMixingService {
             let safeEntry = max(0, vocalStart - 6)
             if safeEntry > 2 {
                 print("[DJMixingService] 🎤 Punch w/ vocal avoidance: entry=\(String(format: "%.1f", safeEntry))s (vocals at \(String(format: "%.1f", vocalStart))s)")
-                return safeEntry
+                return (safeEntry, .punchVocalAvoidance)
             }
         }
 
@@ -1515,7 +1615,7 @@ enum DJMixingService {
             // 2s antes deja respirar la subida del chorus dentro del fade.
             let chorusEntryTarget = max(2, chorusStart - 2)
             print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus at \(String(format: "%.1f", chorusStart))s -2s margin, ref \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
-            return chorusEntryTarget
+            return (chorusEntryTarget, .punchChorusPromotion)
         }
 
         // ── Style affinity modulates how aggressively we target ──
@@ -1541,30 +1641,41 @@ enum DJMixingService {
             // Same "world" — go for the most impactful entry
             if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalEntryTarget
+                source = .punchVocalTarget
             } else if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
+                source = .punchEntryReference
             } else if chorusStart > 4 {
                 // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
                 entry = max(2, chorusStart - 2)
+                source = .punchChorusFallback
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalEntryTarget
+                source = .punchVocalTarget
             } else if entryReference > 3 {
                 entry = entryReference
+                source = .punchEntryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+                source = .punchBufferFallback
             }
         } else {
             // Moderate affinity — less aggressive
             if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
+                source = .punchEntryReference
             } else if vocalStartReliable && vocalStart > 3 && !introVocalDiverge {
                 entry = vocalEntryTarget
+                source = .punchVocalTarget
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalEntryTarget
+                source = .punchVocalTarget
             } else if entryReference > 3 {
                 entry = entryReference
+                source = .punchEntryReference
             } else {
                 entry = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
+                source = .punchBufferFallback
             }
         }
 
@@ -1573,10 +1684,11 @@ enum DJMixingService {
             if chorusStart > entry && chorusStart < entry + 30 {
                 // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
                 entry = max(2, chorusStart - 2)
+                source = .punchEnergyBoost
             }
         }
 
-        return entry
+        return (entry, source)
     }
 
     // MARK: - Sanitize
@@ -3074,49 +3186,57 @@ enum DJMixingService {
         bufferBDuration: Double,
         fadeDuration: Double,
         originalEntry: Double,
-        transitionType: TransitionType
+        transitionType: TransitionType,
+        telemetry: inout Tier4Telemetry
     ) -> (entry: Double, reason: String)? {
-        guard kEnableTier4 else { return nil }
+        guard kEnableTier4 else { telemetry.failedGate = .disabled; return nil }
 
         // ── Gate 1: tipo blendy compatible ──
         switch transitionType {
         case .crossfade, .eqMix, .beatMatchBlend:
             break
         default:
+            telemetry.failedGate = .typeIncompat
             return nil
         }
 
         // ── Gate 2: fade ≥ 4s (necesita espacio para que B acompane a A) ──
-        guard fadeDuration >= 4.0 else { return nil }
+        guard fadeDuration >= 4.0 else { telemetry.failedGate = .fadeShort; return nil }
 
         // ── Gate 3: A confiable + outro instrumental (outroInstrumentalConfident) ──
-        guard let cur = safeCurrent, cur.hasError != true else { return nil }
-        guard cur.hasVocalEndData else { return nil }
+        guard let cur = safeCurrent, cur.hasError != true else { telemetry.failedGate = .aMissing; return nil }
+        guard cur.hasVocalEndData else { telemetry.failedGate = .noVocalEndData; return nil }
         let crossfadeStartA = bufferADuration - fadeDuration
-        guard (crossfadeStartA - cur.lastVocalTime) >= 2.0 else { return nil }
+        guard (crossfadeStartA - cur.lastVocalTime) >= 2.0 else { telemetry.failedGate = .outroVocal; return nil }
 
         // ── Gate 4: B confiable ──
-        guard let next = safeNext, next.hasError != true else { return nil }
+        guard let next = safeNext, next.hasError != true else { telemetry.failedGate = .bMissing; return nil }
 
         // ── Gate 5: BPMs trusted + ambos fuera de franja toxica 140-180 ──
         // (backend validator: half-time bug afecta esa franja silenciosamente)
-        guard profile.bpmTrusted else { return nil }
+        guard profile.bpmTrusted else { telemetry.failedGate = .bpmUntrusted; return nil }
         let bpmAToxic = profile.bpmA >= 140 && profile.bpmA <= 180
         let bpmBToxic = profile.bpmB >= 140 && profile.bpmB <= 180
-        guard !bpmAToxic, !bpmBToxic else { return nil }
+        guard !bpmAToxic, !bpmBToxic else { telemetry.failedGate = .bpmToxic; return nil }
 
         // ── Compute barDur from downbeat deltas (mediana, robusto a no-4/4) ──
         // (Movido antes del gate 5.5 por v13.D: el camino B necesita barDur.)
         let downbeats = next.downbeatTimes
-        guard downbeats.count >= 2 else { return nil }
+        guard downbeats.count >= 2 else { telemetry.failedGate = .noDownbeats; return nil }
         var deltas: [Double] = []
         for i in 1..<min(downbeats.count, 8) {
             deltas.append(downbeats[i] - downbeats[i-1])
         }
         let sortedDeltas = deltas.sorted()
         let medianDelta = sortedDeltas[sortedDeltas.count / 2]
-        guard medianDelta >= 1.0, medianDelta <= 4.0 else { return nil }
+        guard medianDelta >= 1.0, medianDelta <= 4.0 else { telemetry.failedGate = .invalidBarDur; return nil }
         let barDur = medianDelta
+
+        // v13.K (audit 2026-05-07): persistir telemetría perceptual incluso si
+        // los gates posteriores cortan. Permite ver la distribución real de
+        // introSlope y downbeatDensity en pistas del usuario sin reinstrumentar.
+        telemetry.introSlopeB = next.introSlope
+        telemetry.downbeatDensityB20s = downbeatDensity(downbeats: downbeats, barDur: barDur, hasta: 20.0)
 
         // ── Gate 5.5 (v13.D, audit 2026-05-06): perceptual energy gate ──
         // Reemplaza el guard unico `energyB >= 0.30` (v13.A) por OR-de-3-caminos.
@@ -3131,32 +3251,32 @@ enum DJMixingService {
         let pathA = (next.introSlope ?? -.infinity) >= kIntroSlopeMinPerSecond
         let pathB: Bool = {
             guard (next.introSlope ?? -.infinity) >= 0 else { return false }
-            guard let dens = downbeatDensity(downbeats: downbeats, barDur: barDur, hasta: 20.0) else { return false }
+            guard let dens = telemetry.downbeatDensityB20s else { return false }
             return dens >= kDownbeatDensityMinPerBar
         }()
         let pathC = profile.energyB >= 0.30
-        guard pathA || pathB || pathC else { return nil }
+        guard pathA || pathB || pathC else { telemetry.failedGate = .perceptual; return nil }
 
         // ── Gate 6: structure intacta — chorusStart>5 (defensa "0.1s literal") ──
         let chorusStart = next.chorusStartTime
         let chorusValid = chorusStart > 5.0
 
         // ── Gate 7: vocalStart>0 (descarta nil/literal t=0) ──
-        guard let vocalStart = next.vocalStartTime, vocalStart > 0 else { return nil }
+        guard let vocalStart = next.vocalStartTime, vocalStart > 0 else { telemetry.failedGate = .vocalStart; return nil }
 
         // ── Gate 8: vocalStart > introEnd + 4 compases (intro real >=4 bars) ──
         let introEnd = next.introEndTimeHeuristic ?? (next.hasIntroData ? next.introEndTime : 0)
-        guard introEnd > 0 else { return nil }
-        guard vocalStart > introEnd + 4 * barDur else { return nil }
+        guard introEnd > 0 else { telemetry.failedGate = .noIntroEnd; return nil }
+        guard vocalStart > introEnd + 4 * barDur else { telemetry.failedGate = .introBarsShort; return nil }
 
         let firstEventB = min(vocalStart, chorusValid ? chorusStart : .infinity)
-        guard firstEventB.isFinite else { return nil }
+        guard firstEventB.isFinite else { telemetry.failedGate = .noFirstEvent; return nil }
         // ── Gate 9: structure no rota — introEnd + 12bar < firstEventB ──
         // (defensa contra 37.5% de tracks v8 con chorusStart < introEnd)
-        guard introEnd + 12 * barDur < firstEventB else { return nil }
+        guard introEnd + 12 * barDur < firstEventB else { telemetry.failedGate = .structureCollision; return nil }
 
         // ── Gate 10: clash armonico < 0.7 (sin choque tonal duro) ──
-        guard profile.harmonic.compatibility != .clash else { return nil }
+        guard profile.harmonic.compatibility != .clash else { telemetry.failedGate = .clash; return nil }
 
         // ── Compute target con barsAhead escalado por ventana (v13.A) ──
         // v11.1: constante 6 (BPM-monotonico). v13.A (audit 2026-05-06):
@@ -3174,7 +3294,7 @@ enum DJMixingService {
         let upperBound = firstEventB - 4 * barDur
         // Sanity: rango valido. Si la intro es muy corta o esta mal detectada,
         // lowerBound puede igualar/superar upperBound — sin rango no hay snap.
-        guard lowerBound < upperBound else { return nil }
+        guard lowerBound < upperBound else { telemetry.failedGate = .rangeInvalid; return nil }
         // Target ideal = barsAhead bars antes del firstEventB. Clamp al rango
         // para evitar fallo silencioso cuando intros largas empujan target
         // antes de lowerBound (bug v11.0: ~30% de candidatos se perdian asi).
@@ -3189,11 +3309,11 @@ enum DJMixingService {
             guard Int(nearestBars) % 2 == 0 else { return false }
             return abs(barsFromFirstEvent - nearestBars) < 0.25
         }
-        guard !candidates.isEmpty else { return nil }
+        guard !candidates.isEmpty else { telemetry.failedGate = .noCandidates; return nil }
         let bestCandidate = candidates.min { abs($0 - target) < abs($1 - target) }!
 
         // Sanity: nuevo entry debe ser estrictamente menor que el original
-        guard bestCandidate < originalEntry - 1.0 else { return nil }
+        guard bestCandidate < originalEntry - 1.0 else { telemetry.failedGate = .notImproving; return nil }
 
         let reason = "Tier4: BPM=\(Int(bpmB)) bars=\(Int(barsAhead)) entry: \(String(format: "%.1f", originalEntry))→\(String(format: "%.1f", bestCandidate))s"
         return (entry: bestCandidate, reason: reason)

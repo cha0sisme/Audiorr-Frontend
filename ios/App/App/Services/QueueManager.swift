@@ -984,7 +984,12 @@ final class QueueManager: AudioEngineDelegate {
                     bImmediateImpact: crossfadeResult.bImmediateImpact,
                     bHarmonicClashLevel: crossfadeResult.bHarmonicClashLevel,
                     bRapidFadeIn: crossfadeResult.bRapidFadeIn,
-                    tier4Active: crossfadeResult.tier4Active
+                    tier4Active: crossfadeResult.tier4Active,
+                    entryPointSource: crossfadeResult.entryPointSource,
+                    tier4FailedGate: crossfadeResult.tier4FailedGate,
+                    introSlopeB: crossfadeResult.introSlopeB,
+                    downbeatDensityB20s: crossfadeResult.downbeatDensityB20s,
+                    chillRecipeApplied: crossfadeResult.chillRecipeApplied
                 )
 
                 // Publish transition reason to diagnostics
@@ -1046,7 +1051,12 @@ final class QueueManager: AudioEngineDelegate {
                         bImmediateImpact: config.bImmediateImpact,
                         bHarmonicClashLevel: config.bHarmonicClashLevel,
                         bRapidFadeIn: config.bRapidFadeIn,
-                        tier4Active: config.tier4Active
+                        tier4Active: config.tier4Active,
+                        entryPointSource: config.entryPointSource,
+                        tier4FailedGate: config.tier4FailedGate,
+                        introSlopeB: config.introSlopeB,
+                        downbeatDensityB20s: config.downbeatDensityB20s,
+                        chillRecipeApplied: config.chillRecipeApplied
                     )
                 } else {
                     finalConfig = config

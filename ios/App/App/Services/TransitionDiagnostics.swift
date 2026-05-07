@@ -82,6 +82,24 @@ final class TransitionDiagnostics {
     /// curva `earlyBlend` en CrossfadeExecutor.
     var tier4Active = false
 
+    // v13.K (audit 2026-05-07) — telemetría perceptual para análisis post-coche.
+    // NO modifica comportamiento (read-only diagnostics).
+    /// Path por el que `calculateSmartEntryPoint` decidió el entryPoint
+    /// (chorus_promotion / vocal_target / entryReference / etc.).
+    var entryPointSource: String = "unknown"
+    /// Cuando Tier 4 NO disparó, etiqueta del primer gate que cortó.
+    /// `nil` cuando Tier 4 disparó con éxito o `kEnableTier4` está off.
+    var tier4FailedGate: String? = nil
+    /// Pendiente de RMS en los primeros windows de B (slope/segundo).
+    /// Computada y persistida aunque Tier 4 falle en gates posteriores.
+    var introSlopeB: Double? = nil
+    /// Densidad de downbeats por compás en los primeros 20s de B.
+    var downbeatDensityB20s: Double? = nil
+    /// Cinturón quíntuple chill: true cuando el contexto era chill (energías
+    /// bajas + danceability < 0.55 + sin impacto inmediato + espacio vocal/
+    /// chorus suficiente). Independiente de si terminó forzando skipBFilters.
+    var chillRecipeApplied: Bool = false
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -179,6 +197,14 @@ final class TransitionDiagnostics {
         // ReplayGain
         let replayGainA: Float
         let replayGainB: Float
+        // v13.K (audit 2026-05-07) — telemetría perceptual.
+        // Optional / con default para compatibilidad con records persistidos
+        // antes de v13.K (decoder JSON los rellena con nil/false).
+        var entryPointSource: String? = nil
+        var tier4FailedGate: String? = nil
+        var introSlopeB: Double? = nil
+        var downbeatDensityB20s: Double? = nil
+        var chillRecipeApplied: Bool? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en Documents/transition_diagnostics_history.json.
         // userRating: 0-10 (en pasos de 1, equivalente a 5 estrellas con halves).
@@ -449,7 +475,12 @@ final class TransitionDiagnostics {
         rateA: Float,
         rateB: Float,
         replayGainA: Float,
-        replayGainB: Float
+        replayGainB: Float,
+        entryPointSource: String = "unknown",
+        tier4FailedGate: String? = nil,
+        introSlopeB: Double? = nil,
+        downbeatDensityB20s: Double? = nil,
+        chillRecipeApplied: Bool = false
     ) {
         guard Self.collectingEnabled else { return }
         Task { @MainActor in
@@ -488,6 +519,11 @@ final class TransitionDiagnostics {
             self.rateB = rateB
             self.replayGainA = replayGainA
             self.replayGainB = replayGainB
+            self.entryPointSource = entryPointSource
+            self.tier4FailedGate = tier4FailedGate
+            self.introSlopeB = introSlopeB
+            self.downbeatDensityB20s = downbeatDensityB20s
+            self.chillRecipeApplied = chillRecipeApplied
             self.elapsed = 0
             self.volumeA = replayGainA
             self.volumeB = 0
@@ -592,7 +628,12 @@ final class TransitionDiagnostics {
                 isOutroInstrumental: self.isOutroInstrumental,
                 isIntroInstrumental: self.isIntroInstrumental,
                 replayGainA: self.replayGainA,
-                replayGainB: self.replayGainB
+                replayGainB: self.replayGainB,
+                entryPointSource: self.entryPointSource,
+                tier4FailedGate: self.tier4FailedGate,
+                introSlopeB: self.introSlopeB,
+                downbeatDensityB20s: self.downbeatDensityB20s,
+                chillRecipeApplied: self.chillRecipeApplied
             )
             self.history.insert(record, at: 0)
             if self.history.count > self.historyLimit { self.history.removeLast() }

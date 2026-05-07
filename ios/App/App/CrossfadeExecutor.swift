@@ -140,6 +140,15 @@ class CrossfadeExecutor {
         /// sube 75→100% en el downbeat del chorus. EQ de B con low-shelf -3dB
         /// los primeros 4 compases para no chocar con sub residual de A.
         let tier4Active: Bool
+        // v13.K (audit 2026-05-07): telemetría perceptual. Solo persistencia
+        // (NO modifica comportamiento del crossfade). Pasada hasta
+        // publishDecision para que TransitionRecord pueda exponer qué path
+        // del entry decisor se eligió y por qué Tier 4 no disparó.
+        let entryPointSource: EntryPointSource
+        let tier4FailedGate: Tier4FailedGate?
+        let introSlopeB: Double?
+        let downbeatDensityB20s: Double?
+        let chillRecipeApplied: Bool
 
         init(entryPoint: Double, fadeDuration: Double, transitionType: TransitionType,
              useFilters: Bool, useAggressiveFilters: Bool, needsAnticipation: Bool,
@@ -157,7 +166,12 @@ class CrossfadeExecutor {
              bIntroBars: Int = 0, bImmediateImpact: Bool = false,
              bHarmonicClashLevel: Double = 0,
              bRapidFadeIn: Bool = false,
-             tier4Active: Bool = false) {
+             tier4Active: Bool = false,
+             entryPointSource: EntryPointSource = .unknown,
+             tier4FailedGate: Tier4FailedGate? = nil,
+             introSlopeB: Double? = nil,
+             downbeatDensityB20s: Double? = nil,
+             chillRecipeApplied: Bool = false) {
             self.entryPoint = entryPoint
             self.fadeDuration = fadeDuration
             self.transitionType = transitionType
@@ -189,6 +203,11 @@ class CrossfadeExecutor {
             self.bHarmonicClashLevel = bHarmonicClashLevel
             self.bRapidFadeIn = bRapidFadeIn
             self.tier4Active = tier4Active
+            self.entryPointSource = entryPointSource
+            self.tier4FailedGate = tier4FailedGate
+            self.introSlopeB = introSlopeB
+            self.downbeatDensityB20s = downbeatDensityB20s
+            self.chillRecipeApplied = chillRecipeApplied
         }
     }
 
@@ -731,7 +750,12 @@ class CrossfadeExecutor {
             rateA: config.rateA,
             rateB: config.rateB,
             replayGainA: maxVolumeA,
-            replayGainB: maxVolumeB
+            replayGainB: maxVolumeB,
+            entryPointSource: config.entryPointSource.rawValue,
+            tier4FailedGate: config.tier4FailedGate?.rawValue,
+            introSlopeB: config.introSlopeB,
+            downbeatDensityB20s: config.downbeatDensityB20s,
+            chillRecipeApplied: config.chillRecipeApplied
         )
     }
 
