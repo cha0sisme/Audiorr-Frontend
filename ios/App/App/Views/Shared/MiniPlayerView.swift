@@ -3,8 +3,14 @@ import SwiftUI
 /// Mini player nativo para `.tabViewBottomAccessory`.
 /// Replica el layout del mini-player UIKit anterior (artwork 42×42, 3 botones, progress bar).
 /// El styling Liquid Glass lo aplica automáticamente el TabView accessory.
+///
+/// Comportamiento Apple Music (2026-05-09):
+///   - `.expanded` placement (vista normal, no contraída) → 3 controles (prev/play/next).
+///   - `.inline` placement (contraído tras scroll) → solo play/pausa centrado.
+/// SwiftUI propaga `tabViewBottomAccessoryPlacement` automáticamente en iOS 18+.
 struct MiniPlayerView: View {
     private var state = NowPlayingState.shared
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 
     var body: some View {
         if state.isVisible {
@@ -13,6 +19,11 @@ struct MiniPlayerView: View {
             idlePlaceholder
         }
     }
+
+    /// `.inline` cuando el TabView lo colapsa (scroll context). En cualquier otro
+    /// placement (incluido `.expanded`) o nil (no presentado en accessory) tratamos
+    /// como expandido — el set completo de controles es el comportamiento por defecto.
+    private var isCollapsed: Bool { placement == .inline }
 
     // MARK: - Active Player
 
@@ -76,15 +87,45 @@ struct MiniPlayerView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Solo play/pause (estilo Apple Music). prev/next siguen
-                // accesibles desde NowPlayingViewer y MPRemoteCommandCenter.
-                controlButton(
-                    state.isPlaying ? "pause.fill" : "play.fill",
-                    size: 23,
-                    accessibilityLabel: state.isPlaying ? L.pause : L.play
-                ) {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    PlayerService.shared.togglePlayPause()
+                // Controles: layout Apple-Music-style por placement.
+                //   .inline (colapsado tras scroll) → solo play/pausa centrado.
+                //   .expanded / default            → 3 controles (prev/play/next).
+                if isCollapsed {
+                    controlButton(
+                        state.isPlaying ? "pause.fill" : "play.fill",
+                        size: 23,
+                        accessibilityLabel: state.isPlaying ? L.pause : L.play
+                    ) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        PlayerService.shared.togglePlayPause()
+                    }
+                } else {
+                    HStack(spacing: 2) {
+                        controlButton(
+                            "backward.fill",
+                            size: 20,
+                            accessibilityLabel: L.previous
+                        ) {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            PlayerService.shared.previous()
+                        }
+                        controlButton(
+                            state.isPlaying ? "pause.fill" : "play.fill",
+                            size: 23,
+                            accessibilityLabel: state.isPlaying ? L.pause : L.play
+                        ) {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            PlayerService.shared.togglePlayPause()
+                        }
+                        controlButton(
+                            "forward.fill",
+                            size: 20,
+                            accessibilityLabel: L.next
+                        ) {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            PlayerService.shared.next()
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 14)
