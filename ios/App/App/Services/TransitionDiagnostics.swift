@@ -205,6 +205,14 @@ final class TransitionDiagnostics {
         var introSlopeB: Double? = nil
         var downbeatDensityB20s: Double? = nil
         var chillRecipeApplied: Bool? = nil
+        // v13.L (round 2026-05-09-v13-LMN) — telemetría gates de género.
+        // genreCapApplied: true cuando v13.N cap=50 chorus_promotion fue aplicado
+        //                  (B fuera de la lista exempt drop-driven).
+        // bGenres: lista completa de géneros de B leída de NavidromeSong.genres
+        //          en el momento del cálculo. Permite al log-analyst auditar
+        //          qué géneros vio el algoritmo y validar gates post-deploy.
+        var genreCapApplied: Bool? = nil
+        var bGenres: [String]? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en Documents/transition_diagnostics_history.json.
         // userRating: 0-10 (en pasos de 1, equivalente a 5 estrellas con halves).
