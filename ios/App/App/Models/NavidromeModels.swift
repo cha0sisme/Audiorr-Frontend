@@ -22,6 +22,12 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     let track: Int?
     let year: Int?
     let genre: String?
+    /// Multi-genre array from Navidrome `search3`/`getSong` (`genres: [{name,id}]`).
+    /// Falls back to `[genre]` when the array is empty/absent. Used by DJMixingService
+    /// gates (v13.M/N) to evaluate cross-genre transitions correctly — a track tagged
+    /// "Pop+Hip-Hop+R&B" must match Hip-Hop rules even if `genre` singular returned
+    /// "Pop" (Navidrome serializes only the primary tag in the singular field).
+    let genres: [String]
     let explicitStatus: String?
     let replayGainTrackGain: Double?
     let replayGainTrackPeak: Double?
@@ -48,9 +54,16 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
         let albumPeak: Double?
     }
 
+    /// Subsonic / Navidrome `genres` entry: `{ "name": "Hip-Hop", "id": "..." }`.
+    /// Some legacy responses may emit a plain string array — both shapes are
+    /// handled in the custom decoder below.
+    private struct GenreEntry: Decodable {
+        let name: String?
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, title, artist, artistId, album, albumId, coverArt
-        case duration, track, year, genre, explicitStatus
+        case duration, track, year, genre, genres, explicitStatus
         case replayGain
     }
 
@@ -67,6 +80,20 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
         track = try c.decodeIfPresent(Int.self, forKey: .track)
         year = try c.decodeIfPresent(Int.self, forKey: .year)
         genre = try c.decodeIfPresent(String.self, forKey: .genre)
+        // Plural `genres` array. Navidrome emits `[{name, id}, ...]` in newer
+        // versions; some forks emit `[String]`. Try the dict shape first, fall
+        // back to plain strings, and finally fall back to the singular `genre`
+        // so the field is never nil for downstream consumers.
+        var parsedGenres: [String] = []
+        if let dicts = try? c.decodeIfPresent([GenreEntry].self, forKey: .genres) {
+            parsedGenres = dicts.compactMap { $0.name }.filter { !$0.isEmpty }
+        } else if let plain = try? c.decodeIfPresent([String].self, forKey: .genres) {
+            parsedGenres = plain.filter { !$0.isEmpty }
+        }
+        if parsedGenres.isEmpty, let g = genre, !g.isEmpty {
+            parsedGenres = [g]
+        }
+        genres = parsedGenres
         explicitStatus = try c.decodeIfPresent(String.self, forKey: .explicitStatus)
         let rg = try c.decodeIfPresent(ReplayGainData.self, forKey: .replayGain)
         replayGainTrackGain = rg?.trackGain
@@ -78,12 +105,20 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     init(id: String, title: String, artist: String, artistId: String?,
          album: String, albumId: String?, coverArt: String?,
          duration: Double?, track: Int?, year: Int?, genre: String?,
+         genres: [String] = [],
          explicitStatus: String?,
          replayGainTrackGain: Double?, replayGainTrackPeak: Double?,
          replayGainAlbumGain: Double?, replayGainAlbumPeak: Double?) {
         self.id = id; self.title = title; self.artist = artist; self.artistId = artistId
         self.album = album; self.albumId = albumId; self.coverArt = coverArt
         self.duration = duration; self.track = track; self.year = year; self.genre = genre
+        // Mirror the decoder fallback: empty `genres` parameter falls back to
+        // `[genre]` so call-sites never have to remember the rule.
+        if genres.isEmpty, let g = genre, !g.isEmpty {
+            self.genres = [g]
+        } else {
+            self.genres = genres
+        }
         self.explicitStatus = explicitStatus
         self.replayGainTrackGain = replayGainTrackGain; self.replayGainTrackPeak = replayGainTrackPeak
         self.replayGainAlbumGain = replayGainAlbumGain; self.replayGainAlbumPeak = replayGainAlbumPeak
@@ -103,6 +138,7 @@ extension NavidromeSong {
         if let v = track      { d["track"] = v }
         if let v = year       { d["year"] = v }
         if let v = genre      { d["genre"] = v }
+        if !genres.isEmpty    { d["genres"] = genres }
         return d
     }
 
@@ -121,6 +157,7 @@ extension NavidromeSong {
             track: d["track"] as? Int,
             year: d["year"] as? Int,
             genre: d["genre"] as? String,
+            genres: d["genres"] as? [String] ?? [],
             explicitStatus: d["explicitStatus"] as? String,
             replayGainTrackGain: d["replayGainTrackGain"] as? Double,
             replayGainTrackPeak: d["replayGainTrackPeak"] as? Double,
