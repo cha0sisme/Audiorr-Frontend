@@ -99,6 +99,15 @@ final class TransitionDiagnostics {
     /// bajas + danceability < 0.55 + sin impacto inmediato + espacio vocal/
     /// chorus suficiente). Independiente de si terminó forzando skipBFilters.
     var chillRecipeApplied: Bool = false
+    // v13.L/M/N (round 2026-05-09-v13-LMN) — telemetría gates de género.
+    /// true cuando v13.N cap=50 chorus_promotion fue aplicado a B (B fuera de
+    /// la lista exempt drop-driven). Poblado por v13.N. nil = no aplica
+    /// (entryPointSource ≠ chorus_promotion o algoritmo no llegó al gate).
+    var genreCapApplied: Bool? = nil
+    /// Lista plural de géneros de B vista por el algoritmo en el momento del
+    /// cálculo. Poblada siempre que el path se ejecute (vía SongAnalysis.genres
+    /// que copia de NavidromeSong.genres).
+    var bGenres: [String] = []
 
     // Analysis
     var energyA: Double = 0
@@ -641,7 +650,9 @@ final class TransitionDiagnostics {
                 tier4FailedGate: self.tier4FailedGate,
                 introSlopeB: self.introSlopeB,
                 downbeatDensityB20s: self.downbeatDensityB20s,
-                chillRecipeApplied: self.chillRecipeApplied
+                chillRecipeApplied: self.chillRecipeApplied,
+                genreCapApplied: self.genreCapApplied,
+                bGenres: self.bGenres.isEmpty ? nil : self.bGenres
             )
             self.history.insert(record, at: 0)
             if self.history.count > self.historyLimit { self.history.removeLast() }

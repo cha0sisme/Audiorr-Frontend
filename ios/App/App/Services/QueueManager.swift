@@ -792,6 +792,13 @@ final class QueueManager: AudioEngineDelegate {
                 var currentSongAnalysis = DJMixingService.SongAnalysis()
                 var nextSongAnalysis = DJMixingService.SongAnalysis()
 
+                // Genre lists travel with the queue (PersistableSong.genres mirror
+                // NavidromeSong.genres). Always copy regardless of backend
+                // analysis availability — gates v13.M/N must work even when
+                // the backend hasn't analyzed the track yet.
+                currentSongAnalysis.genres = current.genres
+                nextSongAnalysis.genres = nextSong.genres
+
                 // Mark as "no data" when backend analysis is unavailable
                 // so DJMixingService uses userFadeDuration instead of structural calculation
                 if curAn == nil { currentSongAnalysis.hasError = true }
@@ -1029,6 +1036,8 @@ final class QueueManager: AudioEngineDelegate {
                     TransitionDiagnostics.shared.vocalStartB = nextSongAnalysis.vocalStartTime ?? -1
                     TransitionDiagnostics.shared.chorusStartB = nextSongAnalysis.chorusStartTime
                     TransitionDiagnostics.shared.hasIntroVocalsB = nextSongAnalysis.hasIntroVocals
+                    // v13.L — multi-genre list of B (sirve para auditar gates v13.M/N).
+                    TransitionDiagnostics.shared.bGenres = nextSongAnalysis.genres
                 }
 
                 // ── Trailing silence on A ──

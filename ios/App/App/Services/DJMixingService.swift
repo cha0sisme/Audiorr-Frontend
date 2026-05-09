@@ -272,6 +272,11 @@ enum DJMixingService {
         /// Backend la emite top-level. v13.D la usa para derivar `introSlope`
         /// localmente cuando el backend no provee EnergyProfile.introSlope.
         var rmsCurve: [Double]? = nil
+        /// Lista plural de géneros (de NavidromeSong.genres). v13.M/N usan `any()`
+        /// sobre esta lista para evaluar gates correctamente en pistas multi-género
+        /// (ej. Hip-Hop+Pop+R&B). El populator (QueueManager) la copia de
+        /// nextSong.genres antes de invocar calculateCrossfadeConfig.
+        var genres: [String] = []
     }
 
     // MARK: - Transition Profile (A↔B Relationship)
@@ -895,6 +900,12 @@ enum DJMixingService {
             guard let next = safeNext, next.hasError != true else { return 0 }
             return next.vocalStartTime ?? 0
         }()
+        let bpmAForAnticipation = (safeCurrent?.hasError != true)
+            ? (safeCurrent?.bpm ?? 0)
+            : 0
+        let bGenresForAnticipation: [String] = (safeNext?.hasError != true)
+            ? (safeNext?.genres ?? [])
+            : []
         let anticipation = decideAnticipation(
             fadeDuration: effectiveFadeDuration,
             entryPoint: finalEntry,
@@ -902,7 +913,9 @@ enum DJMixingService {
             noRealOutro: noRealOutro,
             transitionReason: transition.reason,
             bIntroSpace: bIntroSpaceForAnticipation,
-            vocalStartB: vocalStartBForAnticipation
+            vocalStartB: vocalStartBForAnticipation,
+            bpmA: bpmAForAnticipation,
+            bGenres: bGenresForAnticipation
         )
 
         // ── 8. Time-stretch ──
@@ -2475,7 +2488,7 @@ enum DJMixingService {
         }
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0, vocalStartB: Double = 0) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0, vocalStartB: Double = 0, bpmA: Double = 0, bGenres: [String] = []) -> AnticipationResult {
         // No-real-outro guard: A is in full groove until the very end, so
         // anticipation (which pre-mutes A for 2-4s before the fade starts)
         // would cut material the listener is still expecting. This is one of
@@ -2582,13 +2595,36 @@ enum DJMixingService {
             }
         }
 
-        let needs = fadeDuration < 8 && hasEnoughIntro
+        // ── A2 widening (round 2026-05-09-v13-LMN) ──
+        // El rango original "fade < 8 → anticipación" se extiende a "fade < 11"
+        // para dar tease también a fades intermedios (validado por bench v13K
+        // como GO unánime).
+        //
+        // Gate skip: cuando A es alto BPM (≥125, eurodance/dance-pop kick
+        // four-on-the-floor) Y B es drop-driven (trap/drill/hip-hop/industrial,
+        // sub 808), el widening generaba sub-conflict. Caso edge documentado:
+        // Barbie (Aqua, 129 BPM) → Quevedo Bzrp (Latin Trap). Mantenemos el
+        // comportamiento previo (fade < 8) en ese par.
+        //
+        // Default conservador (CEO 2026-05-09): si bpmA inválido o bGenres
+        // vacío → NO skip (aplica A2 widening). Mainline está validado por
+        // bench, el gate es la excepción defensiva.
+        let bpmAValid = bpmA.isFinite && bpmA > 0
+        let shouldSkipA2Widening = bpmAValid
+            && bpmA >= 125.0
+            && Self.isBDropDrivenBass(bGenres)
+        let widenThreshold: Double = shouldSkipA2Widening ? 8.0 : 11.0
+
+        let needs = fadeDuration < widenThreshold && hasEnoughIntro
         if needs {
             let maxAnticipation = min(4, entryPoint * 0.3)
             let time = min(maxAnticipation, max(2, 10 - fadeDuration))
+            let detail = shouldSkipA2Widening
+                ? "fade corto, A2 gate skip (bpmA=\(String(format: "%.1f", bpmA)) drop-driven B)"
+                : "fade corto"
             return AnticipationResult(needsAnticipation: true, anticipationTime: time,
-                                      reason: "Anticipacion: +\(String(format: "%.1f", time))s (fade corto)")
-        } else if fadeDuration >= 8 {
+                                      reason: "Anticipacion: +\(String(format: "%.1f", time))s (\(detail))")
+        } else if fadeDuration >= widenThreshold {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: fade largo")
         } else {
@@ -3592,6 +3628,59 @@ enum DJMixingService {
         }
 
         return HarmonicPenalty(distance: totalDistance, compatibility: compatibility)
+    }
+
+    // MARK: - Genre gates (v13.M / v13.N)
+    //
+    // SHARED CONSTANT — sync con `D:\Audiorr-shared\testing\scripts\bench_a2_genre_bpm_gate.py`
+    // y `bench_a1_genre_gate.py`. Si añades/quitas un género aquí, actualízalo
+    // también en los dos benchs. dj-engineer mantiene esta lista.
+    //
+    // Match es substring case-insensitive (igual que el bench Python):
+    //   "trap" ∈ "Latin Trap" → true (cubre fusion subgenres correctamente)
+
+    /// Géneros con sub-bass / 808 que pueden chocar contra eurodance/dance kick
+    /// alto BPM. Usado por v13.M (A2 anticipation skip) — caso edge Barbie→Quevedo.
+    static let dropDrivenBassGenres: [String] = [
+        "trap", "drill", "hip-hop", "hip hop", "industrial",
+    ]
+
+    /// Géneros donde el chorus tardío es legítimamente la canción (no error de
+    /// detección). Usado por v13.N (A1 cap=50 chorus_promotion exempt) — el cap
+    /// rompería el flow de drop-driven.
+    /// Incluye KPop moderno (Stray Kids, Aespa, NewJeans) que usa estructura
+    /// drop-driven con 808s — añadido 2026-05-09 a sugerencia del CEO.
+    static let dropDrivenChorusGenres: [String] = [
+        "hip-hop", "hip hop", "trap", "drill", "industrial",
+        "contemporary r&b", "r&b", "reggaeton", "afro", "phonk",
+        "k-pop", "kpop",
+    ]
+
+    /// Match substring case-insensitive: cualquier `g` ∈ `genres` que contenga
+    /// cualquiera de los `patterns` cuenta. Si `genres` está vacío → false.
+    private static func anyGenreMatches(_ genres: [String], in patterns: [String]) -> Bool {
+        guard !genres.isEmpty else { return false }
+        for g in genres {
+            let lower = g.lowercased()
+            for pat in patterns where lower.contains(pat) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// True si B tiene al menos un género en `dropDrivenBassGenres`.
+    static func isBDropDrivenBass(_ genres: [String]) -> Bool {
+        anyGenreMatches(genres, in: dropDrivenBassGenres)
+    }
+
+    /// True si B tiene al menos un género en `dropDrivenChorusGenres`.
+    /// **Conservador**: si `genres.isEmpty` devuelve false → el cap NO se aplica.
+    /// Decisión director 2026-05-09: pistas sin tags ID3 limpios deben preservarse,
+    /// un falso negativo (pop-mainstream sin cap) pesa menos que un falso positivo
+    /// que rompa una transición Hip-Hop sin tags.
+    static func isBDropDrivenChorus(_ genres: [String]) -> Bool {
+        anyGenreMatches(genres, in: dropDrivenChorusGenres)
     }
 
 }

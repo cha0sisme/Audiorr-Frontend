@@ -148,17 +148,24 @@ struct PersistableSong: Codable, Identifiable {
     let duration: Double
     let replayGainMultiplier: Float
     let explicitStatus: String?
+    /// Multi-genre list mirrored from NavidromeSong.genres. Default empty for
+    /// retrocompat con records persistidos antes de v13.M (Codable rellena con
+    /// `[]` cuando la clave no está en el JSON viejo). DJMixingService los lee
+    /// vía SongAnalysis.genres para gates de género.
+    var genres: [String] = []
 
     var isExplicit: Bool { explicitStatus == "explicit" }
 
     init(id: String, title: String, artist: String, album: String,
          albumId: String, artistId: String, coverArt: String, duration: Double,
-         replayGainMultiplier: Float = 1.0, explicitStatus: String? = nil) {
+         replayGainMultiplier: Float = 1.0, explicitStatus: String? = nil,
+         genres: [String] = []) {
         self.id = id; self.title = title; self.artist = artist
         self.album = album; self.albumId = albumId; self.artistId = artistId
         self.coverArt = coverArt; self.duration = duration
         self.replayGainMultiplier = replayGainMultiplier
         self.explicitStatus = explicitStatus
+        self.genres = genres
     }
 
     init(from queue: QueueSong) {
@@ -172,6 +179,7 @@ struct PersistableSong: Codable, Identifiable {
         duration = queue.duration
         replayGainMultiplier = 1.0
         explicitStatus = nil
+        genres = []
     }
 
     init(from song: NavidromeSong) {
@@ -185,6 +193,7 @@ struct PersistableSong: Codable, Identifiable {
         duration = song.duration ?? 0
         replayGainMultiplier = song.replayGainMultiplier
         explicitStatus = song.explicitStatus
+        genres = song.genres
     }
 
     func toQueueSong() -> QueueSong {
