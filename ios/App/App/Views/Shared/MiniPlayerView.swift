@@ -75,20 +75,15 @@ struct MiniPlayerView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Controls
-                HStack(spacing: 2) {
-                    controlButton("backward.fill", size: 20) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        PlayerService.shared.previous()
-                    }
-                    controlButton(state.isPlaying ? "pause.fill" : "play.fill", size: 23) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        PlayerService.shared.togglePlayPause()
-                    }
-                    controlButton("forward.fill", size: 20) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        PlayerService.shared.next()
-                    }
+                // Solo play/pause (estilo Apple Music). prev/next siguen
+                // accesibles desde NowPlayingViewer y MPRemoteCommandCenter.
+                controlButton(
+                    state.isPlaying ? "pause.fill" : "play.fill",
+                    size: 23,
+                    accessibilityLabel: state.isPlaying ? L.pause : L.play
+                ) {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    PlayerService.shared.togglePlayPause()
                 }
             }
             .padding(.horizontal, 14)
@@ -135,7 +130,12 @@ struct MiniPlayerView: View {
         MiniPlayerArtwork(coverArt: state.coverArt, artworkUrl: state.artworkUrl)
     }
 
-    private func controlButton(_ symbol: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+    private func controlButton(
+        _ symbol: String,
+        size: CGFloat,
+        accessibilityLabel: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size))
@@ -144,6 +144,7 @@ struct MiniPlayerView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel ?? "")
     }
 }
 
