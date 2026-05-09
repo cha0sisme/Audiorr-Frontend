@@ -272,6 +272,13 @@ enum DJMixingService {
         /// Backend la emite top-level. v13.D la usa para derivar `introSlope`
         /// localmente cuando el backend no provee EnergyProfile.introSlope.
         var rmsCurve: [Double]? = nil
+        /// Curva percusiva (HPSS percussive stem) normalizada 0-1, ventanas 5s
+        /// sobre primeros 90s. Backend la emite top-level (`percussiveCurve`).
+        /// v13.O usa el ratio `mean[3..5]/mean[0..1]` para detectar build drop-driven
+        /// agnóstico al género (Navidrome es generalista — Bruno Mars balada y The
+        /// Weeknd trap-soul ambos "Contemporary R&B" en tags). El stem percusivo
+        /// aísla el ritmo del intro armónico, separando balada de drop-driven.
+        var percussiveCurve: [Double]? = nil
         /// Lista plural de géneros (de NavidromeSong.genres). v13.M/N usan `any()`
         /// sobre esta lista para evaluar gates correctamente en pistas multi-género
         /// (ej. Hip-Hop+Pop+R&B). El populator (QueueManager) la copia de
@@ -431,6 +438,12 @@ enum DJMixingService {
         let introSlopeB: Double?
         let downbeatDensityB20s: Double?
         let chillRecipeApplied: Bool
+        /// v13.O round 2026-05-10: cap chorus aplicado por gate percussive.
+        /// Origen: `calculatePunchEntry` (solo paths chorusPromotion + chorusFallback).
+        /// nil = path no evaluó cap. true = entry capado a 50. false = evaluado pero
+        /// chorus≤50 o exempt drop-driven (promotion). Setter MainActor en
+        /// `QueueManager.swift:1041` lo escribe en `TransitionDiagnostics.shared`.
+        let genreCapApplied: Bool?
     }
 
     // MARK: - Build Transition Profile
@@ -707,7 +720,11 @@ enum DJMixingService {
                 // Preserva la etiqueta del path original — el cap es modificación
                 // posterior, el "source" sigue siendo el path que decidió el
                 // entry pre-cap.
-                entrySource: entry.entrySource
+                entrySource: entry.entrySource,
+                // Preserva el flag chorus-cap del path original. Si chorus se
+                // capó a 50 y luego noRealOutro lo capa a 8, el gate chorus se
+                // evaluó (`true` legítimo) aunque entry final no esté en 50.
+                genreCapApplied: entry.genreCapApplied
             )
         }
 
@@ -1247,7 +1264,8 @@ enum DJMixingService {
             tier4FailedGate: tier4Telemetry.failedGate,
             introSlopeB: tier4Telemetry.introSlopeB,
             downbeatDensityB20s: tier4Telemetry.downbeatDensityB20s,
-            chillRecipeApplied: isChillContext
+            chillRecipeApplied: isChillContext,
+            genreCapApplied: entry.genreCapApplied
         )
     }
 
@@ -1263,6 +1281,11 @@ enum DJMixingService {
         /// asignan valor concreto, pero un constructor externo sin arg queda
         /// trazable como tal.
         var entrySource: EntryPointSource = .unknown
+        /// v13.O round 2026-05-10: cap chorus aplicado (true=capado, false=evaluado
+        /// pero no capado, nil=path no evaluó cap). Solo lo escriben paths
+        /// `punchChorusPromotion` y `punchChorusFallback`. Propagado a
+        /// `CrossfadeResult.genreCapApplied` y de ahí a `TransitionDiagnostics`.
+        var genreCapApplied: Bool? = nil
     }
 
     /// Calculate where B starts playing. Driven by the A↔B relationship profile.
@@ -1281,6 +1304,9 @@ enum DJMixingService {
         var usedFallback = false
         var isBeatSynced = false
         var entrySource: EntryPointSource = .unknown
+        // v13.O round 2026-05-10 — propaga el flag desde calculatePunchEntry.
+        // Solo lo escribe el case .punch; el resto deja nil.
+        var genreCapApplied: Bool? = nil
 
         guard let rawNext = nextAnalysis, !rawNext.hasError else {
             entryPoint = min(config.fallbackMaxSeconds, bufferDuration * config.fallbackPercent)
@@ -1386,6 +1412,7 @@ enum DJMixingService {
             let punchResult = calculatePunchEntry(next: next, profile: profile, bufferDuration: bufferDuration, config: config)
             entryPoint = punchResult.entry
             entrySource = punchResult.source
+            genreCapApplied = punchResult.genreCapApplied
         }
 
         // ── Phrase snapping (punch + dramatic only, not smooth/minimal) ──
@@ -1422,7 +1449,8 @@ enum DJMixingService {
             beatSyncInfo: beatSyncInfo,
             usedFallback: usedFallback,
             isBeatSynced: isBeatSynced,
-            entrySource: entrySource
+            entrySource: entrySource,
+            genreCapApplied: genreCapApplied
         )
     }
 
@@ -1494,12 +1522,25 @@ enum DJMixingService {
 
     /// Entry for `.punch` character — compatible BPMs, targeting a structural moment in B.
     /// v13.K: retorna tuple con `EntryPointSource` etiquetando el path elegido.
+    /// Output de `calculatePunchEntry`. Antes era tuple `(Double, EntryPointSource)`.
+    /// Ampliado en v13.O round 2026-05-10 para llevar `genreCapApplied`:
+    ///   - nil  → el path no evaluó cap (vocal avoidance, vocalTarget, energyBoost que sobrescribió).
+    ///   - false → cap evaluado pero NO aplicado (chorus≤50, B drop-driven exempt).
+    ///   - true → cap aplicado (entry capado a 50 en promotion no-drop o fallback defensivo).
+    /// Permite propagar el flag al `CrossfadeResult` y de ahí a `TransitionDiagnostics`
+    /// sin cruzar non-MainActor → @MainActor inline (devils-advocate review 2026-05-10).
+    private struct PunchEntryResult {
+        let entry: Double
+        let source: EntryPointSource
+        let genreCapApplied: Bool?
+    }
+
     private static func calculatePunchEntry(
         next: SongAnalysis,
         profile: TransitionProfile,
         bufferDuration: Double,
         config: MixModeConfig
-    ) -> (entry: Double, source: EntryPointSource) {
+    ) -> PunchEntryResult {
         let introEnd = next.introEndTime
         // vocalStart unwrap: nil → 0 (treat as "no usable target"). The
         // distinction nil/0 doesn't matter for entry computation here —
@@ -1556,6 +1597,9 @@ enum DJMixingService {
 
         var entry: Double
         var source: EntryPointSource = .punchBufferFallback  // se sobrescribe en cada rama
+        // v13.O round 2026-05-10 — flag mutable propagado al final del return.
+        // Solo lo escriben los paths que evalúan cap chorus (promotion + fallback).
+        var genreCapApplied: Bool? = nil
 
         // ── Vocal-aware entry reference: when B's "real content" starts ──
         // Chain: vocalStart → heuristic introEnd → speechSegments → ML introEnd
@@ -1589,7 +1633,7 @@ enum DJMixingService {
             let safeEntry = max(0, vocalStart - 6)
             if safeEntry > 2 {
                 print("[DJMixingService] 🎤 Punch w/ vocal avoidance: entry=\(String(format: "%.1f", safeEntry))s (vocals at \(String(format: "%.1f", vocalStart))s)")
-                return (safeEntry, .punchVocalAvoidance)
+                return PunchEntryResult(entry: safeEntry, source: .punchVocalAvoidance, genreCapApplied: nil)
             }
         }
 
@@ -1622,13 +1666,46 @@ enum DJMixingService {
         if isDanceable && bufferLongEnough && chorusDeepEnough
             && chorusFarFromReference && chorusInUsableHalf
             && !chorusLikelyMislabeled {
+            // v13.O round 2026-05-10 — cap chorus_promotion con gate percussive.
+            //
+            // Director descubrió 2026-05-10 que Navidrome es generalista
+            // (Bruno Mars balada y The Weeknd trap-soul ambos "Contemporary R&B"
+            // → el gate por etiqueta de género no podía distinguir balada de
+            // drop-driven). Backend-guardian propuso `percussiveCurve` (HPSS
+            // percussive stem, 18 ventanas 5s sobre 90s, 100% backfilled) cuyo
+            // ratio main/intro discrimina audio drop-driven de balada agnóstico
+            // al género. Validación bench v13O v2 sobre log v13.LMN:
+            //   - Cry → Talking to the Moon  ratio=1.87 (BAL) → cap aplica ✓
+            //   - Best Part → Summers       ratio=1.01 (BAL) → cap aplica ✓
+            //   - American Wedding → Indecision ratio=2.23 (DROP) → exempt ✓
+            // Mean predicho 6.16 → 6.37, cola izquierda 22% → 17%, 0 regresiones rated≥7.
+            //
+            // Default conservador: si percussiveCurve falta o tiene <6 muestras
+            // → asumimos NO drop (cap aplica). Cobertura backfill 100% hace
+            // este caso muy infrecuente; preferimos fallar al lado del cap
+            // defensivo (Bruno Mars indebidamente cappeado pesa menos que
+            // Bruno Mars indebidamente exempt).
+            let kChorusCap: Double = 50.0
+            let (isDrop, ratioForLog) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+            let needsCap = chorusStart > kChorusCap && !isDrop
             // Margen 2s antes del chorus (P1.1, audit v8 2026-05-04): simetria
-            // con vocalEntryTarget. Quejas Rich Baby Daddy->Lucid, Anxiety->
-            // Location, B Pero, BRINCANDO eran "B tarde al punch" — entrar
-            // 2s antes deja respirar la subida del chorus dentro del fade.
-            let chorusEntryTarget = max(2, chorusStart - 2)
-            print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus at \(String(format: "%.1f", chorusStart))s -2s margin, ref \(String(format: "%.1f", referenceForGap))s, dance=\(String(format: "%.2f", profile.avgDanceability)))")
-            return (chorusEntryTarget, .punchChorusPromotion)
+            // con vocalEntryTarget. Cuando se aplica el cap, el target literal
+            // es 50s — sin margen porque NO estamos entrando al chorus, sino
+            // truncando defensivamente.
+            let chorusEntryTarget: Double = needsCap ? kChorusCap : max(2, chorusStart - 2)
+            let ratioStr = ratioForLog.map { String(format: "%.2f", $0) } ?? "n/a"
+            if needsCap {
+                print("[DJMixingService] 🎯 Punch chorus promotion (CAPPED): entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus=\(String(format: "%.1f", chorusStart))s capado a \(kChorusCap)s, ratio=\(ratioStr) BAL, dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            } else if isDrop {
+                print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus=\(String(format: "%.1f", chorusStart))s -2s, ratio=\(ratioStr) DROP exempt, dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            } else {
+                print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus=\(String(format: "%.1f", chorusStart))s -2s, chorus≤cap, dance=\(String(format: "%.2f", profile.avgDanceability)))")
+            }
+            return PunchEntryResult(
+                entry: chorusEntryTarget,
+                source: .punchChorusPromotion,
+                genreCapApplied: chorusStart > kChorusCap ? needsCap : false
+            )
         }
 
         // ── Style affinity modulates how aggressively we target ──
@@ -1658,10 +1735,25 @@ enum DJMixingService {
             } else if entryReference > 3 && !introVocalDiverge {
                 entry = entryReference
                 source = .punchEntryReference
-            } else if chorusStart > 4 {
+            } else if chorusStart > 6 {
+                // v13.O round 2026-05-10 — cap defensivo SIN gate exempt
+                // (decisión director). Floor subido 4→6 (chorus<6 = ad-lib/ruido,
+                // mejor caer a bufferFallback que castigar con cap). El fallback
+                // se activa cuando vocalStartReliable y entryReference fallaron
+                // → escenario degradado, sin landmarks confiables. Caso real:
+                // The Time → Como Camarón, chorusStart=141s ("ha empezado al
+                // final WTF" rating 1) → entry capado a 50.
+                let kChorusCap: Double = 50.0
+                let cappedChorus = min(chorusStart, kChorusCap)
                 // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
-                entry = max(2, chorusStart - 2)
+                entry = max(2, cappedChorus - 2)
                 source = .punchChorusFallback
+                if chorusStart > kChorusCap {
+                    genreCapApplied = true
+                    print("[DJMixingService] ⚠️ Punch chorus fallback (CAPPED): entry=\(String(format: "%.1f", entry))s (chorusStart=\(String(format: "%.1f", chorusStart))s capado a \(kChorusCap)s, defensivo)")
+                } else {
+                    genreCapApplied = false
+                }
             } else if vocalStartReliable && vocalStart > 2 {
                 entry = vocalEntryTarget
                 source = .punchVocalTarget
@@ -1698,10 +1790,15 @@ enum DJMixingService {
                 // Margen 2s antes del chorus (P1.1 audit v8) — simetria con vocal.
                 entry = max(2, chorusStart - 2)
                 source = .punchEnergyBoost
+                // v13.O round 2026-05-10 — si el fallback aplicó cap antes y el
+                // energy boost lo sobrescribe (entry pasa de 50 a chorusStart-2),
+                // resetear genreCapApplied para no mentir en telemetría.
+                // El cap dejó de aplicarse efectivamente cuando entry cambió.
+                genreCapApplied = false
             }
         }
 
-        return (entry, source)
+        return PunchEntryResult(entry: entry, source: source, genreCapApplied: genreCapApplied)
     }
 
     // MARK: - Sanitize
@@ -3645,17 +3742,6 @@ enum DJMixingService {
         "trap", "drill", "hip-hop", "hip hop", "industrial",
     ]
 
-    /// Géneros donde el chorus tardío es legítimamente la canción (no error de
-    /// detección). Usado por v13.N (A1 cap=50 chorus_promotion exempt) — el cap
-    /// rompería el flow de drop-driven.
-    /// Incluye KPop moderno (Stray Kids, Aespa, NewJeans) que usa estructura
-    /// drop-driven con 808s — añadido 2026-05-09 a sugerencia del CEO.
-    static let dropDrivenChorusGenres: [String] = [
-        "hip-hop", "hip hop", "trap", "drill", "industrial",
-        "contemporary r&b", "r&b", "reggaeton", "afro", "phonk",
-        "k-pop", "kpop",
-    ]
-
     /// Match substring case-insensitive: cualquier `g` ∈ `genres` que contenga
     /// cualquiera de los `patterns` cuenta. Si `genres` está vacío → false.
     private static func anyGenreMatches(_ genres: [String], in patterns: [String]) -> Bool {
@@ -3674,13 +3760,35 @@ enum DJMixingService {
         anyGenreMatches(genres, in: dropDrivenBassGenres)
     }
 
-    /// True si B tiene al menos un género en `dropDrivenChorusGenres`.
-    /// **Conservador**: si `genres.isEmpty` devuelve false → el cap NO se aplica.
-    /// Decisión director 2026-05-09: pistas sin tags ID3 limpios deben preservarse,
-    /// un falso negativo (pop-mainstream sin cap) pesa menos que un falso positivo
-    /// que rompa una transición Hip-Hop sin tags.
-    static func isBDropDrivenChorus(_ genres: [String]) -> Bool {
-        anyGenreMatches(genres, in: dropDrivenChorusGenres)
+    /// Detecta build drop-driven a partir del `percussiveCurve` (HPSS percussive
+    /// stem, 18 ventanas 5s sobre primeros 90s). Reemplaza al gate por género
+    /// (eliminado en v13.O round 2026-05-10) que no podía distinguir balada de
+    /// drop-driven dentro de etiquetas Navidrome generalistas como
+    /// "Contemporary R&B" (Bruno Mars vs The Weeknd ambos en la misma etiqueta).
+    ///
+    /// Lógica: ratio entre la energía percusiva del intro (primeros 10s) y la
+    /// del cuerpo temprano (15-30s). Un build dramatic tipo drop tiene ratio
+    /// ≥ 2.0 (la percusión sube significativamente); una balada estable se
+    /// queda en ratio cercano a 1.0.
+    ///
+    /// Default conservador: si la curva no está disponible o tiene <6 muestras,
+    /// devolvemos `(false, nil)` — asumimos NO drop, el cap aplicará. El backfill
+    /// rmsCurve/percussiveCurve está al 100% (verificado 2026-05-10), este caso
+    /// será raro; preferimos cappear de más a cappear de menos.
+    ///
+    /// Devuelve: `(esDrop, ratio?)` para poder loguear el ratio cuando exista.
+    /// Validación empírica (8 pistas, backend-guardian 2026-05-10):
+    ///   - Kanye ALL THE LOVE  ratio=3.46 → DROP ✓
+    ///   - Kendrick Money Trees ratio=3.81 → DROP ✓
+    ///   - Bruno Mars Talking to the Moon ratio=1.87 → BAL ✓
+    ///   - Drake In My Feelings ratio=0.90 → BAL ✓
+    static func isBDropDrivenByPercussive(_ percussiveCurve: [Double]?) -> (Bool, Double?) {
+        guard let pc = percussiveCurve, pc.count >= 6 else { return (false, nil) }
+        let intro = (pc[0] + pc[1]) / 2.0           // primeros 10s
+        let main = (pc[3] + pc[4] + pc[5]) / 3.0    // 15-30s
+        let denom = max(intro, 0.01)
+        let ratio = main / denom
+        return (ratio >= 2.0, ratio)
     }
 
 }

@@ -864,6 +864,9 @@ final class QueueManager: AudioEngineDelegate {
                     }
                     currentSongAnalysis.rmsTailCurve = curAn.rmsTailCurve
                     currentSongAnalysis.rmsCurve = curAn.rmsCurve
+                    // v13.O round 2026-05-10 — percussiveCurve para gate
+                    // drop-driven en calculatePunchEntry (chorus_promotion cap).
+                    currentSongAnalysis.percussiveCurve = curAn.percussiveCurve
                     // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
                     // no las provee. Revive tambien SmartMixManager:323/375/466 dead code.
                     // Ventana 4 windows (20s) coherente con la ventana del gate 5.5.
@@ -930,6 +933,9 @@ final class QueueManager: AudioEngineDelegate {
                     }
                     nextSongAnalysis.rmsTailCurve = nxtAn.rmsTailCurve
                     nextSongAnalysis.rmsCurve = nxtAn.rmsCurve
+                    // v13.O round 2026-05-10 — percussiveCurve para gate
+                    // drop-driven en calculatePunchEntry (chorus_promotion cap).
+                    nextSongAnalysis.percussiveCurve = nxtAn.percussiveCurve
                     // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
                     // no las provee. Misma logica que current (mismo paragrafo arriba).
                     if nextSongAnalysis.introSlope == nil {
@@ -1039,6 +1045,11 @@ final class QueueManager: AudioEngineDelegate {
                     TransitionDiagnostics.shared.hasIntroVocalsB = nextSongAnalysis.hasIntroVocals
                     // v13.L — multi-genre list of B (sirve para auditar gates v13.M/N).
                     TransitionDiagnostics.shared.bGenres = nextSongAnalysis.genres
+                    // v13.O round 2026-05-10 — flag de cap chorus aplicado (gate
+                    // percussive). El campo lo lee `publishCompletion` para
+                    // persistir en TransitionRecord. Setter aquí en MainActor
+                    // para evitar acceso non-isolated al singleton.
+                    TransitionDiagnostics.shared.genreCapApplied = crossfadeResult.genreCapApplied
                 }
 
                 // ── Trailing silence on A ──
