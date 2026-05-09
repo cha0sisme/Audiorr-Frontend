@@ -1742,37 +1742,15 @@ enum DJMixingService {
         // tracks with immediate vocals; it was being short-circuited by
         // the inferred chorus-8s value.
 
-        // ── 1. ML override cross-validation (FIRST — before any caps) ──
-        // When the ML model overrode intro/outro values, cross-check with heuristics.
-        // If ML and heuristic diverge wildly (>15s), the ML may have hallucinated — fall back to heuristic.
-        // This MUST run before chorus/speechSegment/hard caps so they see the corrected value.
-        if a.modelUsed {
-            if let hIntro = a.introEndTimeHeuristic, a.hasIntroData {
-                let mlIntro = a.introEndTime
-                if abs(mlIntro - hIntro) > 15 {
-                    print("[DJMixingService] ⚠️ Sanitize: ML introEnd (\(String(format: "%.1f", mlIntro))s) diverges >15s from heuristic (\(String(format: "%.1f", hIntro))s) — using heuristic")
-                    a.introEndTime = hIntro
-                }
-            }
-            if let hOutro = a.outroStartTimeHeuristic, a.hasOutroData {
-                let mlOutro = a.outroStartTime
-                if abs(mlOutro - hOutro) > 15 {
-                    print("[DJMixingService] ⚠️ Sanitize: ML outroStart (\(String(format: "%.1f", mlOutro))s) diverges >15s from heuristic (\(String(format: "%.1f", hOutro))s) — using heuristic")
-                    a.outroStartTime = hOutro
-                }
-            }
-        }
+        // ── 1. Cross-validate introEnd against structural landmarks (safety nets) ──
 
-        // ── 2. Cross-validate introEnd against structural landmarks (safety nets) ──
-        // These run AFTER the ML check, so they operate on already-corrected values.
-
-        // 2a. Chorus before introEnd: the intro must end before the chorus starts
+        // 1a. Chorus before introEnd: the intro must end before the chorus starts
         if a.hasIntroData && a.chorusStartTime > 4 && a.chorusStartTime < a.introEndTime - 5 {
             print("[DJMixingService] ⚠️ Sanitize: chorusStart (\(String(format: "%.1f", a.chorusStartTime))s) << introEnd (\(String(format: "%.1f", a.introEndTime))s) — capping introEnd to chorus")
             a.introEndTime = a.chorusStartTime
         }
 
-        // 2b. Speech segments (vocals) starting well before introEnd
+        // 1b. Speech segments (vocals) starting well before introEnd
         if a.hasIntroData && !a.speechSegments.isEmpty {
             let earlyVocal = a.speechSegments.first(where: { $0.end - $0.start > 3 && $0.start < a.introEndTime - 5 })
             if let ev = earlyVocal {
@@ -1784,7 +1762,7 @@ enum DJMixingService {
             }
         }
 
-        // 2c. Hard cap: intros > 30s are extremely rare outside ambient/classical.
+        // 1c. Hard cap: intros > 30s are extremely rare outside ambient/classical.
         if a.hasIntroData && a.introEndTime > 30 {
             print("[DJMixingService] ⚠️ Sanitize: introEnd (\(String(format: "%.1f", a.introEndTime))s) > 30s hard cap — capping")
             a.introEndTime = min(a.introEndTime, 30)
