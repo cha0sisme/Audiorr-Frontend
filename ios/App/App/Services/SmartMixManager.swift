@@ -447,12 +447,18 @@ final class SmartMixManager {
         if let essA = a.bpmEssentia, abs(essA - bpmA) / bpmA > 0.10 { bpmPenalty *= 0.7 }
         if let essB = b.bpmEssentia, abs(essB - bpmB) / bpmB > 0.10 { bpmPenalty *= 0.7 }
 
-        // ── 3. Energy penalty (unchanged from v3.0) ──
+        // ── 3. Energy penalty ──
+        // Refuerzo "low-energy floor" recalibrado 2026-05-09 (audit dj-engineer
+        // sobre 6 playlists). Antes: umbral 0.45, multiplicador 60. Resultado:
+        // catálogos mainstream Hip-Hop / R&B / Pop raramente pasan 0.40 de
+        // energy → el refuerzo penalizaba TODOS los pares (mean weighted 6-8
+        // pts). Recalibrado a 0.40 / 35 deja la curva intacta para pistas
+        // genuinamente "downer" pero quita el ruido sistémico.
         let energyDiff = abs(energyA - energyB)
         var energyPenalty = pow(energyDiff, 2) * 15
         let minEnergy = min(energyA, energyB)
-        if minEnergy < 0.45 {
-            energyPenalty += pow(0.45 - minEnergy, 1.5) * 60
+        if minEnergy < 0.40 {
+            energyPenalty += pow(0.40 - minEnergy, 1.5) * 35
         }
 
         // ── 4. Transition quality penalty (v4.0 — multi-layer) ──
@@ -525,19 +531,34 @@ final class SmartMixManager {
         }
 
         // ── 8. Style affinity bonus (v4.0 — rewards same-world adjacency) ──
+        //
+        // Recalibrado 2026-05-09 (audit dj-engineer sobre 6 playlists, 131
+        // pares evaluados): el bonus llegaba al techo -12 sistemáticamente
+        // (mean -10/-12 en 4 de 5 playlists). Era un OFFSET CONSTANTE en lugar
+        // de una señal discriminativa: clashes de key real obtenían score
+        // total bajo porque el bonus saturado los compensaba.
+        //
+        // Dos cambios:
+        //   1. Techo 12 → 7. Reduce el rango efectivo del bonus a algo que
+        //      pueda diferenciar pares afines vs muy afines, en lugar de
+        //      todos quedar pegados al techo.
+        //   2. harmonicAffinity COMPATIBLE 1.0 → 0.6. No regalamos el
+        //      componente harmónico al máximo: el par compatible ya recibe
+        //      keyPenalty=0 (ya está premiado). Sumar harmonic=1.0 es contar
+        //      la afinidad armónica dos veces.
         let bpmAffinity = max(0, 1.0 - abs(bpmA - harmonicB) / 30.0)
         let energyAffinity = max(0, 1.0 - abs(energyA - energyB) / 0.6)
         let danceAffinity = max(0, 1.0 - abs(a.danceability - b.danceability) / 0.5)
         let harmonicAffinity: Double
         switch harmonic.compatibility {
-        case .compatible: harmonicAffinity = 1.0
+        case .compatible: harmonicAffinity = 0.6
         case .acceptable: harmonicAffinity = 0.7
         case .tense:      harmonicAffinity = 0.4
         case .clash:      harmonicAffinity = 0.1
         }
         let styleAffinity = bpmAffinity * 0.35 + energyAffinity * 0.25
                           + harmonicAffinity * 0.25 + danceAffinity * 0.15
-        let affinityBonus = -styleAffinity * 12
+        let affinityBonus = -styleAffinity * 7
 
         // ── Weighted sum ──
         return keyPenalty * 3.5
