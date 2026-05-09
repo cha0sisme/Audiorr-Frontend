@@ -793,11 +793,12 @@ final class QueueManager: AudioEngineDelegate {
                 var nextSongAnalysis = DJMixingService.SongAnalysis()
 
                 // Genre lists travel with the queue (PersistableSong.genres mirror
-                // NavidromeSong.genres). Always copy regardless of backend
-                // analysis availability — gates v13.M/N must work even when
-                // the backend hasn't analyzed the track yet.
-                currentSongAnalysis.genres = current.genres
-                nextSongAnalysis.genres = nextSong.genres
+                // NavidromeSong.genres). Optional para retrocompat con queues
+                // persistidas pre-v13.M (Codable falla con keyNotFound si default
+                // value no aplica). Caller usa `?? []` — gates v13.M/N tratan
+                // genres vacío como "sin tags" (default conservador, no cap).
+                currentSongAnalysis.genres = current.genres ?? []
+                nextSongAnalysis.genres = nextSong.genres ?? []
 
                 // Mark as "no data" when backend analysis is unavailable
                 // so DJMixingService uses userFadeDuration instead of structural calculation
