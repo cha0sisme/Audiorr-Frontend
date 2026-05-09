@@ -199,6 +199,11 @@ final class BackendService {
         var savedAt: String
         var queue: [LastPlaybackQueueItem]?
         var currentIndex: Int?
+        // Opcionales — backend puede no emitirlos. iOS los aprovecha cuando llegan
+        // (cross-device restore de modo DJ + contexto). Mientras backend no los
+        // emita, el restore local desde UserDefaults cubre el device mismo.
+        var contextUri: String?
+        var playbackMode: String?  // "normal" | "dj"
     }
 
     func getLastPlayback(username: String) async -> LastPlaybackState? {

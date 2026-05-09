@@ -64,6 +64,12 @@ final class NowPlayingState {
     var repeatMode = "off"     // "off", "all", "one"
     var isCrossfading = false
 
+    // -- Playback intent (set by QueueManager.syncNowPlayingState) --
+    /// `.dj` only when SmartMix is the active playback. Drives the "AutoMix"
+    /// label visibility — UI components that need to know the algorithm is
+    /// running (mini-player subtitle, progress bar indicator) read this.
+    var playbackMode: PlaybackMode = .normal
+
     // -- BPM of the current song (from analysis cache, nil if unknown) --
     var currentBpm: Double?
 

@@ -56,10 +56,11 @@ struct MiniPlayerView: View {
                         .lineLimit(1)
 
                     if let subtitle = state.subtitle, !subtitle.isEmpty {
-                        // AutoMix branding requires backend — without it, hide the
-                        // AutoMix subtitle entirely (other subtitles still render).
+                        // AutoMix subtitle only when DJ algorithm is the active mode
+                        // (SmartMix-driven). For other subtitles (e.g. remote device
+                        // banner), render normally regardless of mode.
                         if subtitle.hasPrefix("AutoMix") {
-                            if BackendState.shared.isAvailable {
+                            if state.playbackMode == .dj {
                                 WaveText(subtitle, font: .system(size: 10, weight: .semibold), color: .cyan)
                                     .lineLimit(1)
                                     .transition(.opacity)

@@ -74,9 +74,10 @@ struct ProgressBarView: View {
 
                 Spacer()
 
-                // AutoMix branding is a backend feature — without backend, even
-                // when a basic crossfade is happening, the indicator stays hidden.
-                if state.isCrossfading && BackendState.shared.isAvailable {
+                // AutoMix label only when DJ algorithm is the active mode AND
+                // a real crossfade is happening. SmartMix is the only `.dj` path,
+                // so this never appears for plain Album/Playlist/Artist play.
+                if state.isCrossfading && state.playbackMode == .dj {
                     WaveText("AutoMix", font: .caption2.weight(.bold), color: .white)
                         .transition(.opacity.combined(with: .scale))
                 }

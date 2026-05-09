@@ -1,6 +1,16 @@
 import Foundation
 import AVFoundation
 
+/// Playback intent — explicit DJ mode is opt-in via SmartMix only.
+/// `.normal` = standard player (no DJ algorithm). With backend = no crossfade.
+///             Without backend = respects user's manual crossfade toggle in Settings.
+/// `.dj`     = full DJ algorithm (crossfade + transitions + AutoMix label).
+///             Reachable ONLY when backend is available (SmartMix is gated by it).
+enum PlaybackMode: String {
+    case normal
+    case dj
+}
+
 /// Native queue manager — replaces PlayerContext.tsx queue logic.
 /// Source of truth for the playback queue, shuffle, repeat, and track advancement.
 /// Conforms to AudioEngineDelegate to react to engine events (track end, progress, etc.).
@@ -61,22 +71,25 @@ final class QueueManager: AudioEngineDelegate {
         return dict
     }
 
-    private var isDjMode: Bool {
-        settingsDict?["isDjMode"] as? Bool ?? true
-    }
+    /// Current playback intent. Set by `play(songs:mode:)` (default `.normal`),
+    /// preserved across skip/insert/seek, persisted to UserDefaults so cold-start
+    /// can resume a SmartMix in `.dj`. The legacy `audiorr_settings.isDjMode` JSON
+    /// key is dead-data; the QueueManager no longer reads it.
+    private(set) var currentPlaybackMode: PlaybackMode = .normal
 
     private var useReplayGain: Bool {
         settingsDict?["useReplayGain"] as? Bool ?? true
     }
 
     private var crossfadeEnabled: Bool {
-        // DJ mode always implies crossfade, regardless of the toggle
-        if isDjMode { return true }
-        // With backend, crossfade is always on (analysis-driven).
-        if BackendState.shared.isAvailable { return true }
-        // Without backend, the user toggle decides. Default true to match the
-        // SettingsView default — without alignment, fresh users would see the
-        // toggle ON in the UI but the engine would treat it as OFF.
+        // DJ mode always implies crossfade (the algorithm IS the crossfade).
+        if currentPlaybackMode == .dj { return true }
+        // Normal mode + backend = pure player, no crossfade. SmartMix is the
+        // only path to crossfade when backend is available.
+        if BackendState.shared.isAvailable { return false }
+        // Normal mode + no backend: user toggle decides. Default true to match
+        // the SettingsView default — without alignment, fresh users would see
+        // the toggle ON in the UI but the engine would treat it as OFF.
         return settingsDict?["crossfadeEnabled"] as? Bool ?? true
     }
 
@@ -116,11 +129,25 @@ final class QueueManager: AudioEngineDelegate {
     // MARK: - Play
 
     /// Play a list of songs starting at the given index.
-    func play(songs: [NavidromeSong], startIndex: Int = 0) {
+    /// - Parameter mode: explicit playback intent. `.dj` requires backend; if
+    ///   `BackendState.shared.isAvailable == false`, falls back to `.normal`
+    ///   defensively (SmartMix is the only `.dj` path and is gated by backend
+    ///   availability — this guard catches programmer error).
+    func play(songs: [NavidromeSong], startIndex: Int = 0, mode: PlaybackMode = .normal) {
         // User explicitly chose new content — discard any restored resume position.
         // Without this, a cold-start restore at 2:00 would make a completely different
         // song start at 2:00 when tapped.
         pendingResumePosition = 0
+
+        // Invariant: .dj mode requires backend. SmartMix UI is gated by
+        // BackendState.isAvailable, so reaching this branch means a caller
+        // bypassed the gate (programmer error). Degrade gracefully.
+        var effectiveMode = mode
+        if mode == .dj && !BackendState.shared.isAvailable {
+            print("[QueueManager] ⚠️ .dj requested without backend — falling back to .normal")
+            effectiveMode = .normal
+        }
+        currentPlaybackMode = effectiveMode
 
         let persistable = songs.map { PersistableSong(from: $0) }
         queue = persistable
@@ -132,6 +159,7 @@ final class QueueManager: AudioEngineDelegate {
         }
 
         persistState()
+        syncNowPlayingState()
         playCurrentSong()
     }
 
@@ -385,6 +413,7 @@ final class QueueManager: AudioEngineDelegate {
         currentIndex = -1
         history = []
         isPlaying = false
+        currentPlaybackMode = .normal
         syncNowPlayingState()
         persistState()
     }
@@ -1486,6 +1515,7 @@ final class QueueManager: AudioEngineDelegate {
         state.progress = currentTime
         state.duration = duration > 0 ? duration : 1
         state.contextUri = PlayerService.shared.currentContextUri ?? ""
+        state.playbackMode = currentPlaybackMode
 
         // Sync queue for the viewer
         state.queue = queue.map { $0.toQueueSong() }
@@ -1498,6 +1528,8 @@ final class QueueManager: AudioEngineDelegate {
         persistence.currentIndex = currentIndex
         persistence.lastSongId = currentSong?.id
         persistence.position = NowPlayingState.shared.progress
+        persistence.playbackMode = currentPlaybackMode.rawValue
+        persistence.contextUri = PlayerService.shared.currentContextUri ?? ""
         saveToBackend()
     }
 
@@ -1540,7 +1572,9 @@ final class QueueManager: AudioEngineDelegate {
                 position: NowPlayingState.shared.progress,
                 savedAt: ISO8601DateFormatter().string(from: Date()),
                 queue: queueItems,
-                currentIndex: self.currentIndex
+                currentIndex: self.currentIndex,
+                contextUri: PlayerService.shared.currentContextUri,
+                playbackMode: self.currentPlaybackMode.rawValue
             )
 
             BackendService.shared.saveLastPlayback(username: username, state: state)
@@ -1556,6 +1590,32 @@ final class QueueManager: AudioEngineDelegate {
         currentIndex = persistence.currentIndex
         shuffleMode = persistence.shuffleMode
         repeatMode = RepeatMode(rawValue: persistence.repeatMode) ?? .off
+
+        // Restore playback mode + context URI with coherence validation.
+        // Invariants for `.dj` to be honored at cold-start:
+        //   1. Persisted contextUri must start with "smartmix:" (the only `.dj` source).
+        //   2. Backend must be available (SmartMix is gated by it; without backend
+        //      the algorithm can't operate fully).
+        // Either invariant violated → fallback to `.normal` (defensive). The user
+        // can re-enter `.dj` by tapping SmartMix again.
+        let restoredContextUri = persistence.contextUri
+        let restoredMode = PlaybackMode(rawValue: persistence.playbackMode) ?? .normal
+        if restoredMode == .dj
+            && restoredContextUri.hasPrefix("smartmix:")
+            && BackendState.shared.isAvailable {
+            currentPlaybackMode = .dj
+        } else {
+            if restoredMode == .dj {
+                print("[QueueManager] cold-start `.dj` invariants failed (contextUri=\(restoredContextUri), backend=\(BackendState.shared.isAvailable)) — falling back to .normal")
+            }
+            currentPlaybackMode = .normal
+        }
+        // Re-hydrate PlayerService context so views that read it (PlaylistDetailView
+        // SmartMix-context indicator, scrobble pipeline) see the right value
+        // before any user interaction.
+        if !restoredContextUri.isEmpty {
+            PlayerService.shared.restoreContextUri(restoredContextUri)
+        }
 
         // Validate index
         if currentIndex >= queue.count { currentIndex = max(0, queue.count - 1) }
@@ -1577,6 +1637,7 @@ final class QueueManager: AudioEngineDelegate {
             state.isVisible = true
             state.duration = song.duration
             state.progress = savedPos
+            state.playbackMode = currentPlaybackMode
             state.refreshBpm()
         }
 
@@ -1629,6 +1690,26 @@ final class QueueManager: AudioEngineDelegate {
                 persistence.currentIndex = currentIndex
                 persistence.lastSongId = currentSong?.id
 
+                // Restore mode + contextUri from backend response with the same
+                // invariants enforced in restoreState(). Any field absent → fallback.
+                let restoredContextUri = last.contextUri ?? ""
+                let restoredMode = PlaybackMode(rawValue: last.playbackMode ?? "") ?? .normal
+                if restoredMode == .dj
+                    && restoredContextUri.hasPrefix("smartmix:")
+                    && BackendState.shared.isAvailable {
+                    currentPlaybackMode = .dj
+                } else {
+                    if restoredMode == .dj {
+                        print("[QueueManager] backend-restore `.dj` invariants failed — falling back to .normal")
+                    }
+                    currentPlaybackMode = .normal
+                }
+                if !restoredContextUri.isEmpty {
+                    PlayerService.shared.restoreContextUri(restoredContextUri)
+                }
+                persistence.playbackMode = currentPlaybackMode.rawValue
+                persistence.contextUri = restoredContextUri
+
                 // Update UI state
                 if let song = currentSong {
                     let state = NowPlayingState.shared
@@ -1641,6 +1722,7 @@ final class QueueManager: AudioEngineDelegate {
                     state.isVisible = true
                     state.duration = song.duration
                     state.progress = last.position
+                    state.playbackMode = currentPlaybackMode
                     state.queue = queue.map { $0.toQueueSong() }
                     state.refreshBpm()
                 }

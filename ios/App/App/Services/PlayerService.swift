@@ -45,7 +45,7 @@ final class PlayerService {
 
     // MARK: - Play
 
-    /// Play a single song.
+    /// Play a single song. Always `.normal` mode — DJ is reserved for SmartMix.
     @MainActor
     func play(song: NavidromeSong) {
         if NowPlayingState.shared.isRemote {
@@ -54,10 +54,12 @@ final class PlayerService {
         }
         currentContextUri = nil
         currentContextName = nil
-        QueueManager.shared.play(songs: [song], startIndex: 0)
+        QueueManager.shared.play(songs: [song], startIndex: 0, mode: .normal)
     }
 
-    /// Play a list of songs starting at the given index.
+    /// Play a list of songs starting at the given index. Always `.normal` —
+    /// album/playlist/artist play are pure-player paths. SmartMix is the only
+    /// `.dj` entrypoint (see `playSmartMix(playlistId:playlistName:)`).
     @MainActor
     func playPlaylist(_ songs: [NavidromeSong], startingAt index: Int = 0, contextUri: String? = nil, contextName: String? = nil) {
         guard index < songs.count else { return }
@@ -67,7 +69,14 @@ final class PlayerService {
         }
         currentContextUri = contextUri
         currentContextName = contextName
-        QueueManager.shared.play(songs: songs, startIndex: index)
+        QueueManager.shared.play(songs: songs, startIndex: index, mode: .normal)
+    }
+
+    /// Restore contextUri at cold-start. Called by QueueManager.restoreState()
+    /// / restoreLastPlayback() before any user interaction.
+    @MainActor
+    func restoreContextUri(_ uri: String) {
+        currentContextUri = uri
     }
 
     // MARK: - Queue operations
@@ -159,7 +168,7 @@ final class PlayerService {
         // same id.
         currentContextUri = "smartmix:\(playlistId)"
         currentContextName = playlistName
-        QueueManager.shared.play(songs: mix, startIndex: 0)
+        QueueManager.shared.play(songs: mix, startIndex: 0, mode: .dj)
     }
 
     func updateSmartMixStatus(playlistId: String, status: String) {

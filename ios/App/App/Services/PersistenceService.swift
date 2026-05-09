@@ -19,6 +19,8 @@ final class PersistenceService {
         static let repeatMode = "audiorr_repeatMode"
         static let volume = "audiorr_volume"
         static let lastSongId = "audiorr_lastSongId"
+        static let playbackMode = "audiorr_playback_mode"
+        static let contextUri = "audiorr_context_uri"
     }
 
     // MARK: - Queue
@@ -54,6 +56,22 @@ final class PersistenceService {
     var lastSongId: String? {
         get { defaults.string(forKey: Key.lastSongId) }
         set { defaults.set(newValue, forKey: Key.lastSongId) }
+    }
+
+    // MARK: - Playback Mode (PlaybackMode.normal | .dj)
+
+    /// Persisted playback mode for cold-start restoration. Stored as raw string
+    /// ("normal" | "dj"). Default "normal" — only `.dj` when SmartMix sounded.
+    var playbackMode: String {
+        get { defaults.string(forKey: Key.playbackMode) ?? "normal" }
+        set { defaults.set(newValue, forKey: Key.playbackMode) }
+    }
+
+    /// Persisted context URI ("playlist:abc", "album:xyz", "smartmix:abc"...).
+    /// Used at cold-start to validate restored playbackMode coherence.
+    var contextUri: String {
+        get { defaults.string(forKey: Key.contextUri) ?? "" }
+        set { defaults.set(newValue, forKey: Key.contextUri) }
     }
 
     // MARK: - Shuffle / Repeat
@@ -109,7 +127,8 @@ final class PersistenceService {
 
     func clearAll() {
         for key in [Key.queue, Key.currentIndex, Key.position,
-                    Key.shuffleMode, Key.repeatMode, Key.volume, Key.lastSongId] {
+                    Key.shuffleMode, Key.repeatMode, Key.volume, Key.lastSongId,
+                    Key.playbackMode, Key.contextUri] {
             defaults.removeObject(forKey: key)
         }
     }
