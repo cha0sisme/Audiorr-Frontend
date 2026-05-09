@@ -26,12 +26,10 @@ private func avatarInitial(for username: String) -> String {
 
 @MainActor
 final class SettingsViewModel: ObservableObject {
-    // Defaults match QueueManager (the engine reads the same JSON dict and must
-    // agree on what's "on" before the user touches anything). isDjMode and
-    // crossfadeEnabled both default to true so a fresh user gets the full
-    // experience out of the box. If they disable DJ mode in the toggle, the
-    // crossfade toggle becomes their explicit, independent choice.
-    @Published var isDjMode = true
+    // El modo DJ ya no se persiste — se decide por el botón pulsado (Play vs
+    // SmartMix) en QueueManager.PlaybackMode. Crossfade manual sólo aplica sin
+    // backend; con backend, los Plays son normales y SmartMix es el único path
+    // a crossfade (vía algoritmo DJ).
     @Published var useReplayGain = true
     @Published var crossfadeEnabled = true
     @Published var crossfadeDuration: Double = 8  // seconds (2–15)
@@ -55,16 +53,13 @@ final class SettingsViewModel: ObservableObject {
     // MARK: - JS Settings bridge (audiorr_settings in localStorage)
 
     private func loadJSSettings() {
-        // Read from UserDefaults mirror (AppDelegate syncs from JS localStorage)
+        // Read from UserDefaults mirror (AppDelegate syncs from JS localStorage).
+        // `isDjMode` queda como dead key en el JSON persistido — se ignora.
         guard let json = UserDefaults.standard.string(forKey: settingsKey),
               let data = json.data(using: .utf8),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return }
 
-        // Defaults must match QueueManager.isDjMode / .crossfadeEnabled getters.
-        // Previously isDjMode defaulted to false here but true in QueueManager,
-        // showing "DJ mode OFF" in the UI while the engine treated it as ON.
-        isDjMode = dict["isDjMode"] as? Bool ?? true
         useReplayGain = dict["useReplayGain"] as? Bool ?? true
         crossfadeEnabled = dict["crossfadeEnabled"] as? Bool ?? true
         crossfadeDuration = dict["crossfadeDuration"] as? Double ?? 8
@@ -72,7 +67,6 @@ final class SettingsViewModel: ObservableObject {
 
     private func saveJSSettings() {
         let dict: [String: Any] = [
-            "isDjMode": isDjMode,
             "useWebAudio": false,
             "useReplayGain": useReplayGain,
             "crossfadeEnabled": crossfadeEnabled,
@@ -84,13 +78,6 @@ final class SettingsViewModel: ObservableObject {
 
         // Persist locally
         UserDefaults.standard.set(json, forKey: settingsKey)
-    }
-
-    func toggleDjMode() {
-        isDjMode.toggle()
-        // DJ mode requires crossfade — enable it if turning DJ mode on
-        if isDjMode { crossfadeEnabled = true }
-        saveJSSettings()
     }
 
     func toggleReplayGain() {
@@ -261,23 +248,13 @@ struct SettingsView: View {
             }
 
             // ── Reproducción ──
+            // El modo DJ ya no es un toggle: se invoca con SmartMix (sólo
+            // disponible con backend). Play/Shuffle reproducen normal sin
+            // crossfade. Sin backend, el usuario configura su crossfade aquí.
             settingsSection(
                 header: L.playback,
-                footer: crossfadeFooter
+                footer: BackendState.shared.isAvailable ? nil : crossfadeFooter
             ) {
-                // DJ Mode toggle (only when backend is available)
-                if BackendState.shared.isAvailable {
-                    settingsRow {
-                        Toggle(isOn: Binding(
-                            get: { vm.isDjMode },
-                            set: { _ in vm.toggleDjMode() }
-                        )) {
-                            Label(L.djMode, systemImage: "dial.medium.fill")
-                        }
-                    }
-                    Divider().padding(.leading, 16)
-                }
-
                 // Crossfade toggle (only when backend is unavailable — with backend, crossfade is always on)
                 if !BackendState.shared.isAvailable {
                     settingsRow {
@@ -554,14 +531,13 @@ struct SettingsView: View {
 
     // MARK: - Dynamic footers
 
+    /// Footer dinámico de la sección Reproducción. Sólo se evalúa cuando NO hay
+    /// backend (la llamada está gateada en `settingsContent`). Con backend la
+    /// sección sólo expone ReplayGain — no necesita explicar crossfade.
     private var crossfadeFooter: String {
-        if BackendState.shared.isAvailable {
-            if vm.isDjMode {
-                return L.crossfadeFooterDjOn()
-            }
-            return L.crossfadeFooterBackend()
-        }
-        return L.crossfadeFooterOn(Int(vm.crossfadeDuration))
+        vm.crossfadeEnabled
+            ? L.crossfadeFooterOn(Int(vm.crossfadeDuration))
+            : L.crossfadeFooterOff()
     }
 
     // MARK: - Section / row helpers

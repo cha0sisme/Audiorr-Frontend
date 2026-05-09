@@ -961,7 +961,7 @@ final class QueueManager: AudioEngineDelegate {
                     nextAnalysis: nextSongAnalysis,
                     bufferADuration: currentDuration,
                     bufferBDuration: nextDuration,
-                    mode: self.isDjMode ? .dj : .normal,
+                    mode: self.currentPlaybackMode == .dj ? .dj : .normal,
                     currentPlaybackTimeA: currentPlaybackTime,
                     userFadeDuration: self.crossfadeDuration
                 )
