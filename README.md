@@ -2,46 +2,120 @@
 
 <div align="center">
 
-**Audiophile-grade music player for Navidrome with native DSP crossfade engine**
+**A native iOS music player for your Navidrome library — with a DSP crossfade engine you can hear**
 
-*Native iOS — Pure Swift from UI to audio render thread*
+*Pure Swift from the UI down to the audio render thread.*
 
-[![Swift](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://developer.apple.com/swift/)
-[![SwiftUI](https://img.shields.io/badge/SwiftUI-iOS_18+-007AFF?logo=apple&logoColor=white)](https://developer.apple.com/swiftui/)
+[![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://developer.apple.com/swift/)
+[![SwiftUI](https://img.shields.io/badge/SwiftUI-iOS_26+-007AFF?logo=apple&logoColor=white)](https://developer.apple.com/swiftui/)
 [![AVAudioEngine](https://img.shields.io/badge/AVAudioEngine-Native_DSP-000000?logo=apple&logoColor=white)](https://developer.apple.com/documentation/avfaudio/avaudioengine)
-[![SwiftData](https://img.shields.io/badge/SwiftData-Persistence-34C759?logo=apple&logoColor=white)](https://developer.apple.com/xcode/swiftdata/)
+[![Navidrome](https://img.shields.io/badge/Navidrome-Subsonic_API-1A1A1A?logo=subsonic&logoColor=white)](https://www.navidrome.org/)
+[![LRCLib](https://img.shields.io/badge/LRCLib-Synced_Lyrics-0F62FE)](https://lrclib.net/)
 [![CarPlay](https://img.shields.io/badge/CarPlay-Supported-333333?logo=apple&logoColor=white)](https://developer.apple.com/carplay/)
 
 </div>
 
 ---
 
-Audiorr is a fully native iOS music player built on [Navidrome](https://www.navidrome.org/) (Subsonic-compatible). It features a custom real-time DSP pipeline written entirely in Swift — 4 cascaded biquad filters per channel with lock-free coefficient passing, beat-aligned bass management, DJ effects, and 9 transition algorithms — all running on CoreAudio's render thread at sample-level precision.
+## What Audiorr is
 
-## Standalone vs Bundle
+Audiorr is a **native iOS client for [Navidrome](https://www.navidrome.org/)** (and any Subsonic-compatible server). Plug your server URL, log in, and you have your entire self-hosted library on your iPhone with a custom audio pipeline that competes with — and in some areas exceeds — the major streaming apps.
 
-Audiorr ships in two configurations:
+The whole audio path is written from scratch in Swift: a dual-player engine with sample-level crossfade, four cascaded biquad filters per channel, and a transition decision system that listens to the music and picks the right blend instead of forcing one default fade for everything.
 
-| | **Audiorr Standalone** | **Audiorr Bundle** (Frontend + Backend) |
-|---|---|---|
-| **Requires** | Any Navidrome/Subsonic server | Navidrome + Audiorr Backend (Node.js) |
-| **Audio engine** | Full native DSP pipeline | Same |
-| **Crossfade** | DJ-grade with 9 transition types | Same + backend audio analysis (BPM, key, energy, vocals, structure) |
-| **Smart Mix** | -- | v3.0 "Harmonic Flow" playlist reordering |
-| **Daily Mixes** | -- | 5 personalized mixes |
-| **Multi-device sync** | -- | Audiorr Connect (Socket.io) |
-| **Weekly chart** | -- | Global Top 10 |
-| **Canvas** | -- | Spotify-like video loops |
-| **Listening stats** | -- | History, Wrapped |
-| **Setup** | Connect to Navidrome, play | Deploy backend, connect both |
+## What you get out of the box
 
-The app detects backend availability automatically and hides backend-exclusive features when unavailable. Standalone playback is fully functional — no degraded experience.
+You only need a Navidrome (or Subsonic) server. Connect, and these features are available immediately on every device:
+
+### Playback that sounds right
+
+- **Dual-player gapless crossfade** with eleven transition algorithms (`CROSSFADE`, `EQ_MIX`, `BEAT_MATCH_BLEND`, `NATURAL_BLEND`, `CUT`, `CUT_A_FADE_IN_B`, `FADE_OUT_A_CUT_B`, `STEM_MIX`, `DROP_MIX`, `CLEAN_HANDOFF`, `VINYL_STOP`). Audiorr picks one per song pair. *Without the optional backend, the picker falls back to a conservative default crossfade — the per-track analysis that drives the smarter choices comes from the backend.*
+- **Seven filter presets** running on a real-time DSP node: highpass sweeps, low-shelf bass swap, parametric mid scoop, high-shelf cleanup. The outgoing track thins out while the incoming track opens up.
+- **DJ-grade effects**: instant beat-aligned bass kill and bell-shaped Q resonance for the "sweeping filter" sound. Activate when analysis data confirms they'll sound good (the backend supplies that data).
+- **ReplayGain v2** loudness normalization with Apple's `kAudioUnitSubType_PeakLimiter` on the master mixer to catch inter-sample peaks.
+- **Tempo matching** within ±12 BPM using `AVAudioUnitTimePitch`, beat-quantized so the rate ramp lands on the downbeat. Requires backend BPM data.
+- **Automatic transcoding** of VBR MP3 and other troublesome formats to PCM, transparent to the listener.
+
+### Library and navigation
+
+- Full Subsonic API browsing — albums, artists, playlists, search, queue.
+- Mini player + Now Playing viewer with hero animation on album art.
+- Synced **lock screen, Control Center, and Dynamic Island** with transport controls.
+- Light/Dark theme with system override.
+
+### Synchronized lyrics
+
+- Pulled from **LRCLib** for any song that has them.
+- Karaoke-style scroll locked to the audio position.
+- Tap any line to seek to that timestamp.
+- Falls back to plain text when no timed data is available.
+
+### Offline mode
+
+- **Auto-cache** every song you play to a persistent store.
+- **Pre-cache** the next three songs in the queue so you never see a buffer.
+- **Manual downloads** for entire albums or playlists with one tap.
+- **Background downloads** continue when the app is suspended.
+- **Pin protection** for content you don't want auto-evicted.
+- **LRU eviction** on a configurable cache size limit (default 2 GB).
+- Browse and play your offline library when there's no network at all.
+
+### CarPlay
+
+- Full template-based browsing and playback with optimized I/O buffers (40 ms wireless, 20 ms wired).
 
 ---
 
-## Audio Engine
+## Privacy and data
 
-### Architecture
+- **All your music streams from your own Navidrome server.** Audiorr never reaches out to a streaming service or cloud catalogue.
+- **No tracking. No analytics. No ads.**
+- The only outbound calls Audiorr makes on its own are to **LRCLib** for lyrics, by song title and artist name only.
+- Credentials live in the iOS Keychain. Listening data lives only where you put it.
+
+---
+
+## Power-user mode — Audiorr Backend (optional)
+
+If you also self-host the **[Audiorr Backend](https://github.com/cha0sisme/Audiorr-backend)** (Node.js + SQLite) on your own homelab, Audiorr unlocks a second tier of features that depend on offline audio analysis of your library.
+
+The app detects whether the backend is reachable on launch and only shows these features when it is. **Without the backend, none of this is missed in the UI** — the standalone experience is fully self-contained.
+
+| Feature | What it does |
+|---|---|
+| **Smart Mix** | The iOS app reorders any playlist using the backend's per-track analysis: Camelot-wheel harmonic compatibility, energy arc, BPM progression with half/double-tempo harmonic matching, vocal-trainwreck avoidance, artist diversity, key-fatigue tracking. Greedy sequencing followed by windowed 2-opt optimization. The algorithm runs on-device; the analysis it consumes lives on the backend. |
+| **Smart Playlists** | The backend generates three rotating playlists nightly from your listening history: *Tiempo Atrás* (forgotten tracks), *En Bucle* (your current rotation), *Radar de Novedades* (new releases from artists you know). |
+| **Daily Mixes** | Up to five personalized mixes regenerated every night at 03:00 UTC. Familiarity/discovery balance with deterministic clustering. The "five" is the cap — fewer if your 30-day history is short. |
+| **AutoMix DJ** | The crossfade engine reads the backend's per-track analysis to drive every transition decision: entry point, fade duration, transition type, filter preset, bass-swap timing, time-stretch ratio, anticipation. Fields consumed include `bpm` with confidence, `key`/`camelotKey`, `energyProfile`, `rmsCurve`, `rmsTailCurve`, `percussiveCurve`, `harmonicCurve`, `onsetDensity`, vocal segments, song structure. |
+| **Audiorr Connect** | Spotify-Connect-style multi-device control over Socket.io. Transfer playback, remote-control any device, receiver-only mode. |
+| **Canvas** | Looping video or still per song in the Now Playing viewer, sourced from Spotify's Canvas service via the backend. Requires Spotify credentials configured server-side; only works for tracks present on Spotify. |
+| **Listening stats** | The backend records every play in its own SQLite store and exposes weekly Top 10 and Wrapped-style yearly summaries — all queryable only from your own clients. The backend itself does not scrobble to external services; that happens on the iOS side if you enable Last.fm there. |
+
+The backend runs in a Docker container on your LAN and is not required for the App Store experience. Deploy when (and if) you want the deeper integration — see the backend repository for setup.
+
+---
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| UI | SwiftUI on iOS 26+ |
+| Audio engine | `AVAudioEngine` with custom dual-player graph |
+| DSP | Custom `AUAudioUnit` v3 — 4 cascaded biquads (Direct Form II Transposed), real-time-safe Swift |
+| Persistence | SwiftData + UserDefaults + Keychain |
+| Networking | `URLSession` foreground + background |
+| Connectivity | `NWPathMonitor` |
+| CarPlay | `CPTemplate` API |
+| Now Playing | `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` |
+| Optional remote control | Socket.io over WebSocket |
+| Lyrics | LRCLib REST |
+| Server protocol | Subsonic API |
+
+---
+
+## For the curious — audio engine deep dive
+
+The DSP pipeline is written entirely in Swift. No C/C++ bridging, no Obj-C wrappers. The reasons are documented in `CrossfadeExecutor.swift` and `BiquadDSPKernel.swift` — short version: at 48 kHz with 512-frame buffers the render budget is ~10.7 ms, the four-stage biquad path consumes <0.1 ms, and Swift gives single-language coherence with the rest of the app. Real-time safety is enforced by discipline (POD structs, `os_unfair_lock_trylock`, no allocations on the render path, denormal flush) rather than by language.
 
 ```
                           ┌──────────────────────────────────────────────────────────┐
@@ -58,10 +132,10 @@ The app detects backend availability automatically and hides backend-exclusive f
   └───────────┘    └─────────────┘                        └─────────┘               │
                           └──────────────────────────────────────────────────────────┘
 
-  Automation Thread (60Hz)                     Render Thread (CoreAudio real-time)
+  Automation Thread (60 Hz)                    Render Thread (CoreAudio real-time)
   ┌──────────────────────────┐                 ┌────────────────────────────────────┐
   │ CrossfadeExecutor        │                 │ BiquadDSPKernel                    │
-  │  filterTick() @ 16ms     │ ── trylock ──>  │  process() per buffer (~5ms)       │
+  │  filterTick() @ 16 ms    │ ── trylock ──>  │  process() per buffer (~5 ms)      │
   │  - volume curves         │   coefficients  │  - Direct Form II Transposed       │
   │  - filter coefficient    │                 │  - 5 mul + 4 add per sample/stage  │
   │    calculation           │                 │  - denormal flush                  │
@@ -72,416 +146,25 @@ The app detects backend availability automatically and hides backend-exclusive f
   └──────────────────────────┘
 ```
 
-### DSP Pipeline — `BiquadDSPNode` (Standalone)
+Filter formulas come from Robert Bristow-Johnson's *Audio EQ Cookbook* (1998). Frequencies clamp to `[20 Hz, Nyquist − 1 Hz]`, gains clamp to ±60 dB, `safeNormalize()` returns passthrough on NaN/Inf, and stages with all-zero coefficients are skipped via `isPassthrough` epsilon comparison.
 
-Custom `AUAudioUnit` v3 subclass registered in-process via `AUAudioUnit.registerSubclass()`. Each channel (A and B) has its own DSP node with **4 cascaded second-order IIR filters** (biquad) implementing Direct Form II Transposed — the most numerically stable topology for 32-bit float.
-
-| Band | Filter Type | Purpose | Frequency | Automation |
-|------|------------|---------|-----------|------------|
-| **0** | Highpass (2nd order) | Spectral separation — thins out outgoing track | 400 Hz -> 8 kHz sweep | Exponential ramp with pivot at 60% |
-| **0** | Lowpass (2nd order) | Energy-down transitions — darkening sweep | 20 kHz -> 800 Hz sweep | Exponential ramp (replaces HPF) |
-| **1** | Low Shelf | Bass management — coordinated A/B bass swap | 200 Hz fixed | Linear ramp to `bassSwapTime` (downbeat-aligned) |
-| **2** | Parametric EQ | Vocal anti-clash — dip mids on outgoing track | 1.5 kHz, 1.0-1.5 oct BW | Linear ramp with pivot |
-| **3** | High Shelf | Hi-hat/cymbal cleanup | 8 kHz | Linear ramp with pivot |
-
-**Coefficient formulas:** All from Robert Bristow-Johnson's *Audio EQ Cookbook* (1998). Input clamping (frequency to Nyquist, gain to +/-60 dB) and `safeNormalize()` with NaN/Inf guard ensure numerical stability under all parameter combinations.
-
-**Thread model:**
-- **Automation thread** (`com.audiorr.crossfade.automation`, QoS `.userInteractive`): `DispatchSourceTimer` at 16ms (~60 Hz). Computes coefficients and stages them via `os_unfair_lock`.
-- **Render thread** (CoreAudio real-time): `BiquadDSPKernel.process()` uses `os_unfair_lock_trylock` (non-blocking). If contended, uses previous coefficients — imperceptible at 60 Hz update rate.
-- **Zero allocation** on the render path. All state pre-allocated at init. POD structs (`BiquadCoefficients`, `BiquadState`) — no ARC, no heap.
-
-### DJ Effects (Standalone)
-
-Two DJ effects that augment the filter pipeline during crossfade transitions. Both are conservative — they only activate when analysis data confirms they'll sound good.
-
-#### Bass Kill
-
-Instant low-frequency cut synchronized to the beat grid. Replaces the gradual bass swap (Band 1) with a DJ fader-style kill:
-
-```
-Time ──────────────────────────────────────────────────────────►
-                           bassSwapTime (downbeat-aligned)
-                                │
-  A lowshelf (Band 1):   0 dB ─┤── 100ms ramp ──► -60 dB (silence)
-                                │
-  B lowshelf (Band 1):  -8 dB ─┤── 100ms ramp ──►   0 dB (full)
-                                │
-                          SYNCHRONIZED SWAP
-```
-
-The 100ms anti-click ramp prevents pops from abrupt coefficient changes in the biquad delay line. Both channels are coordinated: B holds at `startGain` until the kill moment, then opens simultaneously — preventing bass pile-up.
-
-**Activation criteria:** `bpmTrusted` + `danceability > 0.5` + `fadeDuration > 4s` + character `punch` or `dramatic-up` + compatible transition type (not CUT/NATURAL_BLEND).
-
-#### Dynamic Q Resonance
-
-Bell-shaped Q modulation on the highpass sweep (Band 0). Creates the classic DJ "sweeping filter" resonance — the audible "wah" at the cutoff frequency as it sweeps up.
-
-```
-Q factor
-  4.0 ┤         ╭──╮
-  3.5 ┤        ╭╯  ╰╮         ← Gaussian bell, peak at 55%
-  3.0 ┤       ╭╯    ╰╮
-  2.0 ┤      ╭╯      ╰╮
-  1.1 ┤──────╯        ╰──────  ← base Q (preset)
-      └─────────────────────── crossfade progress (0% → 100%)
-           25%  55%  85%
-```
-
-Gaussian bell centered at 55% of crossfade duration (aligned with the most active sweep phase before pivot). Hard-clamped at Q = 4.0 to prevent filter self-oscillation. Exponent clamped at -10 to prevent `expf()` underflow.
-
-**Activation criteria:** Not energy-down (no highpass active) + `fadeDuration > 4s` + `danceability > 0.45` + character `punch` or `dramatic`.
-
-### Crossfade Intelligence — `DJMixingService` v4.0 "Chameleon Mix" (Bundle-enhanced)
-
-Pure analysis engine — no side effects, no audio. Computes the optimal transition strategy for any A->B pair.
-
-**Standalone behavior:** Basic crossfade with configurable duration. Filter presets based on transition type.
-
-**Bundle behavior:** Full acoustic analysis from backend (BPM, key, energy profile, vocal segments, structure, danceability, beat grid) drives every decision:
-
-| Decision | Data Used | Output |
-|----------|-----------|--------|
-| **Entry point** | `introEndTime`, `chorusStartTime`, `vocalStartTime`, `phraseBoundaries`, `downbeatTimes` | Where B starts playing |
-| **Fade duration** | `outroStartTime`, `backendFadeInDuration`, energy profile, style affinity, intro cap (B intro × 0.85), outro vocal shortening | 2-15s adaptive |
-| **Transition type** | BPM relationship, energy flow, vocal overlap risk, harmonic compatibility | 1 of 9 types |
-| **Filter preset** | Energy direction, instrumental detection, danceability | 1 of 7 presets |
-| **Bass swap timing** | `downbeatTimesB`, `beatIntervalB`, transition type | Downbeat-aligned wall-clock time |
-| **DJ effects** | `bpmConfidence`, `danceability`, character, energy flow | Bass Kill, Dynamic Q on/off |
-| **Time-stretch** | BPM diff (harmonic-normalized), confidence, max 8% rate change | A and B rates |
-| **Anticipation** | Entry point headroom, transition type | 0-4s filtered preview |
-| **Trigger bias** | Character, bass conflict, vocal overlap, style affinity | -5s to +2s shift |
-
-#### Transition Profile
-
-The A-B relationship is captured as a `TransitionProfile` — computed once, drives all downstream decisions:
-
-- **BPM Relationship**: identical (<3 diff) / compatible (3-12) / incompatible (>12), with harmonic normalization (half/double tempo)
-- **Energy Flow**: up / down / steady, from per-section energy profiles (intro/main/outro)
-- **Vocal Overlap Risk**: none / A-only / B-only / both — from `speechSegments`, `introVocals`, `outroVocals`, `lastVocalTime`
-- **Harmonic Compatibility**: Camelot Wheel distance (compatible / acceptable / tense / clash)
-- **Style Affinity**: 0-1 composite (BPM 35%, energy 25%, harmony 25%, danceability 15%)
-- **Character**: punch / smooth / dramatic / minimal — determines the transition's personality
-
-#### 9 Transition Types
-
-| Type | Volume Curve A | Volume Curve B | When |
-|------|---------------|----------------|------|
-| `CROSSFADE` | S-curve hold->drop (70% at 45%) | S-curve sin^2 complement | Default |
-| `EQ_MIX` | Gradual descent (65% at 50%), cos^2 drop | S-curve to 50%, sin^2 ramp | Compatible BPMs, filters do separation |
-| `BEAT_MATCH_BLEND` | Same as EQ_MIX | Same as EQ_MIX | Beat-synced + compatible BPMs |
-| `NATURAL_BLEND` | Pure cos^2 | Pure sin^2 (constant power) | Incompatible BPMs, gentle |
-| `CUT` | Hold full, exponential drop (3s) | Late entry, linear ramp (1.5s) | Short fades, extreme BPM diff |
-| `CUT_A_FADE_IN_B` | Hold 85% to 45%, exponential drop | S-curve ease | A abrupt ending |
-| `FADE_OUT_A_CUT_B` | Hold full to 75%, exponential drop | Late firm entry at 55% | B abrupt start |
-| `STEM_MIX` | Hold 95% to 75%, fast exit | Filtered to vocals/mids, late ramp | Vocal overlap + beat sync |
-| `DROP_MIX` | Short hold (80% at 30%), fast exponential exit | Fast S-curve, full by 60% | Hip hop/R&B drops, short B intro |
-
-#### 7 Filter Presets
-
-| Preset | HPF A Sweep | Lowshelf A | Mid Scoop | Hi-Shelf | When |
-|--------|------------|------------|-----------|----------|------|
-| **Normal** | 400 -> 4k -> 8k Hz, Q 1.1 | 0 -> -6 -> -14 dB | 1.5 kHz, -12 dB | 8 kHz, -8 dB | Default |
-| **Aggressive** | 600 -> 2.5k -> 5k Hz, Q 1.2 | 0 -> -10 -> -18 dB | 1.5 kHz, -16 dB | 8 kHz, -10 dB | Vocal clash, bass conflict |
-| **Anticipation** | 600 -> 2.5k -> 5k Hz, Q 1.2 | 0 -> -8 -> -16 dB | 1.5 kHz, -15 dB | 8 kHz, -10 dB | Short fades with intro headroom |
-| **Energy-Down** | Bypassed (40 Hz) | 0 -> -4 -> -10 dB | 1.5 kHz, -8 dB | None (LPF handles) | B less energetic than A |
-| **Gentle** | 60 -> 150 -> 300 Hz, Q 0.5 | 0 -> -4 -> -8 dB | 1.5 kHz, -6 dB | 8 kHz, -4 dB | NATURAL_BLEND |
-| **Stem Mix** | 200 -> 1.5k -> 6k Hz, Q 1.0 | 0 -> -12 -> -20 dB | 1.5 kHz, -14 dB | 8 kHz, -10 dB | STEM_MIX |
-| **Drop Mix** | 600 -> 3k -> 6k Hz, Q 1.3 | 0 -> -14 -> -22 dB | 1.5 kHz, -14 dB | 8 kHz, -10 dB | DROP_MIX (B enters clean) |
-
-Energy-Down uses a **lowpass sweep** (20 kHz -> 800 Hz) on Band 0 instead of highpass — the outgoing song "goes dark" instead of thinning out.
-
-Drop Mix uses the most aggressive HPF sweep (Q 1.3, resonant) with deep bass cut (-22 dB). B enters with **all filters bypassed** (`skipBFilters`) — clean and full from frame one. Designed for hip hop/R&B where B's intro is short (<12s) and needs to hit immediately without any filter ramp-up.
-
-### Additional Audio Features (Standalone)
-
-- **ReplayGain v2 / EBU R128 normalization:** Per-track level normalization with True Peak limiter on `mainMixerNode`.
-- **Automatic transcoding:** VBR MP3 and incompatible formats transcoded to CAF (PCM 16-bit 44.1 kHz) for AVAudioEngine compatibility.
-- **Stereo micro-separation:** During crossfade, A pans -0.08 left, B pans +0.08 right (ramps with progress). Reduces spectral masking without audible stereo shift.
-- **Energy compensation:** +2 to +4 dB boost on quieter incoming tracks to prevent perceived loudness drops.
-- **Time-stretch:** Automatic tempo matching (+/-12 BPM) via `AVAudioUnitTimePitch` with beat-quantized rate ramp (S-curve smoothing, max 8% rate change).
-- **Safety mechanisms:** Vocal Trainwreck evasion, anti-polyrhythm CUT override (>35 BPM diff), 25% track length limit, BPM confidence gating.
-- **CarPlay:** Full browsing + playback with optimized IO buffer (40ms wireless, 20ms wired).
-- **AVPlayer streaming fallback:** Transparent fallback when files need buffering, with seamless handoff to AVAudioEngine once downloaded.
+The crossfade decision system is a pure analyzer with no side effects: it consumes a `TransitionProfile` (BPM relationship, energy flow, vocal overlap risk, harmonic compatibility, style affinity, character) and emits the full plan — entry point, transition type, filter preset, bass-swap time, DJ-effect flags, time-stretch ratios, anticipation — in one pass. Every output is testable in isolation.
 
 ---
 
-## Features
+## Companion projects
 
-### Standalone (Navidrome only)
-
-#### Playback
-- Native AVAudioEngine dual-player pipeline with custom DSP
-- Gapless crossfade with 9 transition algorithms and 7 filter presets
-- DJ effects: Bass Kill (beat-synced instant low cut) + Dynamic Q Resonance (filter sweep with bell-shaped Q)
-- Beat-aligned bass swap on actual downbeats
-- ReplayGain v2 / EBU R128 normalization with True Peak limiter
-- Time-stretch tempo matching (+/-12 BPM, beat-quantized)
-- CarPlay with full browsing and playback
-
-#### Synchronized Lyrics
-- Fetched via **LRCLib** for every playing song
-- Real-time karaoke-style scroll locked to audio position
-- Tap any line to seek directly to that timestamp
-- Graceful fallback to plain text when no timed data available
-
-#### Offline Mode
-- **Auto-cache:** Every played song saved to persistent storage
-- **Pre-cache:** Next 3 songs pre-downloaded in background
-- **Manual downloads:** Entire albums or playlists with one tap
-- **Background downloads:** Continue when app is suspended (background URLSession)
-- **Pin protection:** Pin content to prevent auto-eviction
-- **LRU eviction:** Oldest unpinned content removed when cache exceeds limit (default 2 GB)
-- **Dual-cache:** Hot temp cache (5 files, instant playback) + persistent SwiftData-tracked cache
-- **Offline browsing:** HomeView shows all downloaded albums and playlists when offline
-- **Smart skip:** Only skips uncached songs when truly offline AND playback fails
-- **Storage management:** Visual storage bar, limit picker, clear cache in Settings
-
-#### Library & Navigation
-- Full Subsonic API browsing (albums, artists, playlists, search)
-- Queue management with reordering, add/remove, persistent state
-- Lock Screen & Control Center with full Now Playing card
-- Dynamic Island live activity for current track
-- Hero transitions for album/playlist art
-- Dark/Light theme with system override
-
-### Bundle-Exclusive (require Audiorr Backend)
-
-#### Smart Mix v3.0 "Harmonic Flow"
-- Reorders any playlist using multi-factor scoring:
-  - **Camelot Wheel** harmonic compatibility with energy boost key jump recognition
-  - **Harmonic BPM matching** (half/double tempo via `harmonicBPM`)
-  - **Energy arc** — builds from gentle opener to peak, then descends
-  - **BPM arc progression** — gradual tempo build-up with natural descent
-  - **Vocal trainwreck avoidance** — graduated penalty when both tracks have vocals
-  - **Smooth energy valley detection** — continuous gradient penalty prevents lulls
-  - **Artist diversity** — proximity-based same-artist penalty
-  - **Key fatigue tracking** — penalizes repeating same key 3+ times
-- **Closing song selection** — low energy, slow BPM, fading outro
-- Greedy sequencing + local 2-opt optimization (windowed +/-20 positions)
-
-#### Daily Mixes
-- Up to 5 personalized mixes based on listening history
-- 70/30 familiarity/discovery rule with deterministic clustering
-- Auto-generated at 03:00 UTC daily
-
-#### Global Weekly Top 10
-- Server-wide top 10 most-played songs
-- Trend indicators (up, down, same, New) vs last week
-
-#### Multi-Device Sync — Audiorr Connect
-Spotify Connect-style system built on Socket.io:
-
-| Capability | Details |
-|---|---|
-| **Device discovery** | Automatic — devices appear instantly |
-| **Transfer playback** | Song + queue + position to another device |
-| **Remote control** | Play/pause, next, previous, seek, volume |
-| **Receiver mode** | Turn any device into a pure speaker |
-| **Scrobble awareness** | Only controlling device records history |
-| **Session persistence** | Queue + position preserved on return |
-
-#### Canvas
-- Spotify-like looping video or image per song in Now Playing viewer
-
-#### Jump Back In
-- Recently played albums and playlists on HomeView
-
----
-
-## Architecture
-
-### iOS App — Native SwiftUI
-
-| Layer | Technology | Role |
-|---|---|---|
-| **UI** | SwiftUI (iOS 18+) | All views, navigation, animations |
-| **Audio** | AVAudioEngine + custom AUAudioUnit v3 | DSP pipeline, crossfade, gapless playback |
-| **DSP** | BiquadDSPNode (Swift, real-time safe) | 4-stage biquad filter + DJ effects |
-| **Persistence** | SwiftData + UserDefaults + Keychain | Offline cache, queue state, credentials |
-| **Networking** | URLSession (foreground + background) | Streaming, downloads, API calls |
-| **Connectivity** | NWPathMonitor | Offline detection, Wi-Fi/cellular awareness |
-| **CarPlay** | CPTemplate API | Full browsing and playback |
-| **Lock Screen** | MPNowPlayingInfoCenter + MPRemoteCommandCenter | Now Playing card, transport controls |
-| **Real-time** | Socket.io (URLSession WebSocket) | Audiorr Connect multi-device sync |
-
-### Project Structure
-
-```
-ios/App/
-├── App/
-│   ├── AppDelegate.swift              App lifecycle, audio session, CarPlay, background downloads
-│   ├── MainSceneDelegate.swift        Main UI scene
-│   ├── CarPlaySceneDelegate.swift     CarPlay template browsing + playback
-│   ├── AudioEngineManager.swift       AVAudioEngine dual-player pipeline, crossfade, streaming
-│   ├── AudioFileLoader.swift          Download + transcode + dual-cache (temp + persistent)
-│   ├── CrossfadeExecutor.swift        Crossfade state machine v3.0 "Phantom Cut" + DJ effects
-│   │
-│   ├── DSP/
-│   │   ├── BiquadDSPNode.swift        AUAudioUnit v3 wrapper — public API for engine graph
-│   │   ├── BiquadDSPKernel.swift      Real-time render: 4 cascaded biquad, lock-free coefficients
-│   │   ├── BiquadCoefficients.swift   POD coefficient struct (zero ARC, audio-thread safe)
-│   │   └── BiquadCoefficientCalculator.swift  Audio EQ Cookbook formulas (HPF, LPF, LSF, PEQ, HSF)
-│   │
-│   ├── Models/
-│   │   ├── NavidromeModels.swift      API response models (Song, Album, Artist, Playlist)
-│   │   └── OfflineModels.swift        SwiftData models (CachedSong, DownloadTask, DownloadGroup)
-│   │
-│   ├── Services/
-│   │   ├── NavidromeService.swift     Subsonic API client (streaming, browsing, playlists)
-│   │   ├── PlayerService.swift        High-level playback API (play, queue, context tracking)
-│   │   ├── QueueManager.swift         Queue state, crossfade orchestration, pre-cache, scrobble
-│   │   ├── DJMixingService.swift      Crossfade intelligence v4.0 "Chameleon Mix"
-│   │   ├── AnalysisCacheService.swift Audio analysis cache (BPM, key, energy, segments)
-│   │   ├── SmartMixManager.swift      SmartMix v3.0 "Harmonic Flow" — playlist reordering
-│   │   ├── DownloadManager.swift      Background URLSession download engine (priority queue, retry)
-│   │   ├── OfflineStorageManager.swift Persistent cache (SwiftData + Library/Caches, LRU eviction)
-│   │   ├── OfflineContentProvider.swift Offline browsing queries
-│   │   ├── NetworkMonitor.swift       NWPathMonitor connectivity awareness
-│   │   ├── PersistenceService.swift   UserDefaults for playback state + offline settings
-│   │   ├── CredentialsStore.swift     Keychain storage for server credentials
-│   │   ├── ScrobbleService.swift      Navidrome + backend scrobbling with retry queue
-│   │   ├── ConnectService.swift       Audiorr Connect (Socket.io multi-device sync)
-│   │   ├── BackendService.swift       Audiorr Backend API client
-│   │   ├── LyricsService.swift        LRCLib synchronized lyrics
-│   │   ├── CanvasService.swift        Spotify Canvas video loops
-│   │   ├── ColorExtractor.swift       Album art dominant color palette
-│   │   ├── NowPlayingState.swift      Observable state for Now Playing UI
-│   │   └── AppTheme.swift             Dark/Light theme management
-│   │
-│   └── Views/
-│       ├── ContentView.swift          Root TabView with offline banner
-│       ├── Home/HomeView.swift        Landing: Weekly Top, Jump Back In, releases, mixes
-│       ├── Albums/AlbumDetailView.swift Album hero + song list + download
-│       ├── Artists/
-│       │   ├── ArtistsView.swift      Artist grid with search
-│       │   └── ArtistDetailView.swift Artist profile + discography
-│       ├── Playlists/
-│       │   ├── PlaylistsView.swift    Playlist grid
-│       │   └── PlaylistDetailView.swift Playlist hero + SmartMix + download
-│       ├── Search/SearchView.swift    Global search (songs, albums, artists)
-│       ├── Settings/
-│       │   ├── SettingsView.swift     App settings (DJ mode, ReplayGain, scrobbling)
-│       │   ├── LoginView.swift        Server connection screen
-│       │   └── StorageManagementView.swift Offline cache management UI
-│       ├── NowPlaying/
-│       │   ├── NowPlayingViewerView.swift Full-screen Now Playing
-│       │   ├── ProgressBarView.swift  Seek bar
-│       │   ├── PlaybackControlsView.swift Transport controls
-│       │   ├── LyricsView.swift       Synchronized lyrics overlay
-│       │   ├── QueuePanelView.swift   Queue management panel
-│       │   ├── CanvasView.swift       Video loop viewer
-│       │   ├── DevicePickerView.swift Audiorr Connect device selector
-│       │   └── AddToPlaylistView.swift Playlist picker
-│       └── Shared/
-│           ├── SongListView.swift     Song table with context menus + cached indicator
-│           ├── MiniPlayerView.swift   Persistent mini player
-│           ├── AlbumCardView.swift    Album thumbnail with retry
-│           ├── ArtistCardView.swift   Artist avatar with retry
-│           ├── PlaylistCardView.swift Playlist cover with multi-source fallback
-│           ├── DownloadButton.swift   Download indicator (progress ring, states, pin/unpin)
-│           ├── HorizontalScrollSection.swift Horizontal carousel container
-│           └── SeeAllGridView.swift   Full grid for "See All" navigation
-```
-
-### Offline Storage Architecture
-
-```
-Library/
-  Application Support/
-    Audiorr/
-      offline.store              SwiftData SQLite (backed up to iCloud)
-        - CachedSong             Song metadata + file reference
-        - DownloadTask           Download queue state
-        - DownloadGroup          Album/playlist batch tracking
-        - CachedPlaylistMeta     Playlist song order for offline browsing
-  Caches/
-    Audiorr/
-      Music/
-        ab/abcdef123.caf         Audio files (NOT backed up, 2-char prefix dirs)
-        cd/cdef456789.mp3
-    AudioAnalysis/               BPM/key/energy analysis cache
-tmp/
-  audiorr-audio/                 Hot temp cache (5-file LRU for instant playback)
-  audiorr-downloads/             In-progress download staging
-```
-
----
-
-## DSP Technical Details
-
-### Why Swift for Real-Time DSP
-
-The entire DSP pipeline — from coefficient calculation to sample-level biquad processing — is written in **Swift**, not C/C++. This is a deliberate architectural decision:
-
-1. **Proven in production.** `BiquadDSPKernel` processes audio on CoreAudio's real-time thread. 4 biquad stages x 2 channels x 48 kHz = ~3.5M operations/second. Running in production with zero reported glitches.
-
-2. **Trivial CPU load.** At 48 kHz with 512-frame buffers, the render callback budget is ~10.7ms. The DSP processing path consumes < 0.1ms — including all 4 filter stages. Even with 6 DJ effects active simultaneously, total DSP load stays under 1ms.
-
-3. **Real-time safety by discipline, not language:**
-   - `BiquadCoefficients` and `BiquadState` are POD structs — zero ARC, zero heap allocation
-   - `os_unfair_lock` with `trylock` on the render thread (never blocks)
-   - Pre-allocated arrays with fixed indices (never append/remove in render path)
-   - Denormal flush: values < 1e-15 snapped to zero to prevent ARM CPU spikes
-
-4. **Single-language coherence.** No bridging headers, no mixed C++/Swift builds, no dual memory models, no dual debuggers. The coefficient calculator, the kernel, and the automation engine all share the same type system.
-
-**When C++ would be necessary:** DAWs with dozens of simultaneous plugin chains, granular synthesizers with thousands of grains, convolution reverb with multi-second impulse responses, or cross-platform (iOS + Android + Desktop) plugin distribution. Audiorr is none of these — it's a music player with crossfade effects.
-
-### Biquad Filter Implementation
-
-**Topology:** Direct Form II Transposed — chosen for numerical stability with 32-bit float coefficients.
-
-```
-y[n] = b0*x[n] + z1
-z1   = b1*x[n] - a1*y[n] + z2
-z2   = b2*x[n] - a2*y[n]
-```
-
-5 multiplies + 4 adds per sample per stage. All coefficients pre-normalized (divided by a0).
-
-**Coefficient Safety:**
-- Frequency clamped to [20 Hz, Nyquist - 1 Hz]
-- Gain clamped to +/-60 dB
-- `safeNormalize()` returns passthrough if any coefficient is NaN/Inf
-- `isPassthrough` epsilon comparison (1e-6) to skip inactive stages in the render loop
-
-### Lock-Free Coefficient Passing
-
-```
-Automation (60Hz)                    Render (CoreAudio RT)
-     │                                    │
-     ├── lock(&lock)                      │
-     ├── write pendingCoefficients[]      │
-     ├── hasPending = true                │
-     ├── unlock(&lock)                    │
-     │                                    ├── trylock(&lock)
-     │                                    │   ├── success: copy pending → active
-     │                                    │   └── fail: use previous (skip 1 tick = 16ms)
-     │                                    ├── process 4 stages in series
-     │                                    └── denormal flush
-```
-
-The render thread **never blocks**. If the automation thread is writing coefficients at the exact moment the render thread needs them, the render thread uses the previous values. At 60 Hz coefficient updates, skipping one 16ms frame is imperceptible.
-
----
-
-## Privacy & Data
-
-- **All music streams from your own Navidrome server.** Audiorr never accesses external music.
-- **Listening history** stored in local SQLite on your backend server, never sent externally.
-- **LRCLib** queried for lyrics by song title and artist only.
-- **No tracking, no analytics, no ads.**
+- **Audiorr Backend** — Node.js + SQLite analysis server. Optional. Powers Smart Mix, AutoMix, Daily Mixes, Connect, Canvas, listening stats. Currently kept as a private self-hosted service; release plan TBD.
+- **[Audiorr Web](https://github.com/cha0sisme/Audiorr-web)** — SvelteKit web client for the same Navidrome + backend setup. Different surface, same philosophy.
 
 ---
 
 ## Requirements
 
-- iOS 18.0+
-- A Navidrome server (self-hosted)
-- Xcode 16+ (to build from source)
-- Optional: Audiorr Backend (Node.js) for bundle features
+- iOS 26.0 or later
+- A Navidrome (or Subsonic-compatible) server
+- Optional: Audiorr Backend on your own LAN for power-user features
+- Xcode 16 or later to build from source
 
 ---
 
@@ -492,5 +175,5 @@ This project is for personal use. All rights reserved.
 ---
 
 <div align="center">
-<i>Built for audiophiles who hear the difference.</i>
+<i>Built for people who hear the difference.</i>
 </div>
