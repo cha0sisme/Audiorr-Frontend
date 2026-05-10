@@ -292,31 +292,21 @@ final class TransitionDiagnostics {
     var networkSnapshotStart: NetworkSnapshot?
     var networkSnapshotEnd: NetworkSnapshot?
 
-    // MARK: - Persistent log
-
-    /// Path to the log file in Documents.
-    var logFilePath: String { logFileURL.path }
-
-    private let logFileURL: URL = {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("transition_diagnostics.log")
-    }()
-
-    /// Round 2026-05-10 (diagnostics-backend-port) — el JSON local
-    /// `transition_diagnostics_history.json` se eliminó (bug operativo: cada
-    /// update TestFlight con schema breaking de Codable rompía el decode y
-    /// dejaba history=[], luego el siguiente save sobrescribía el archivo —
-    /// pérdida silenciosa). Source of truth = backend
-    /// `<navidromeHost>:2999/api/diagnostics`. Ver `TransitionDiagnosticsBackend`.
+    /// Round 2026-05-10 (diagnostics-backend-port) — eliminados:
+    ///   - JSON local `transition_diagnostics_history.json`.
+    ///   - Log textual `transition_diagnostics.log`.
+    ///   - Métodos asociados (writeTransitionToLog, appendToLog, readLog,
+    ///     clearLog, deleteLog, copyLogToClipboard, exportSessionFile,
+    ///     logEvent, logFilePath, logFileSize, logFileURL).
+    /// Source of truth = backend `<navidromeHost>:2999/api/diagnostics`. Ver
+    /// `TransitionDiagnosticsBackend`. La UI Settings>Diagnostics rediseñada
+    /// (sesión iOS parte 2 del round) consume directamente del backend.
 
     /// Cap del array `history` en memoria. No persiste — al arrancar se
     /// rellena con la primera página del backend (`fetchTransitions(limit: 200)`).
     /// Mantenido para que la UI de Settings>Diagnostics no cargue 1000+ records
-    /// en SwiftUI list de golpe (paginación lazy es trabajo de la sesión 2).
+    /// en SwiftUI list de golpe; la paginación lazy carga más bajo demanda.
     private let historyLimit = 200
-
-    /// Ticks collected during active crossfade, flushed on completion.
-    private var pendingTicks: [String] = []
 
     // MARK: - Init
 
@@ -326,38 +316,27 @@ final class TransitionDiagnostics {
         // "Eliminar persistencia local completa"). Si quedan records en el
         // JSON viejo se pierden; el director ya los analizó en
         // `D:\Audiorr-shared\analysis\2026-05-10_v13O-commit2-cochetest132.md`.
-        //
-        // El fichero .log de texto humano (`transition_diagnostics.log`) ya no
-        // se escribe desde este round (publishCompletion deja de llamar
-        // writeTransitionToLog). Lo borramos también.
         Self.purgeLegacyLocalArtifacts()
-
-        // Write header on first launch if file doesn't exist — TODO retirar
-        // junto con UI Settings>Diagnostics en sesión 2 del round (los métodos
-        // logFilePath/logFileSize/copyLogToClipboard/clearLog/deleteLog/readLog
-        // siguen referenciados desde TransitionDiagnosticsView mientras tanto).
-        if !FileManager.default.fileExists(atPath: logFileURL.path) {
-            let header = "# Audiorr Transition Diagnostics Log\n# Format: human-readable, one block per transition\n# Generated automatically by TransitionDiagnostics\n# Round 2026-05-10: this file is no longer written — backend is source of truth.\n\n"
-            try? header.write(to: logFileURL, atomically: true, encoding: .utf8)
-        }
 
         // Carga inicial desde backend en background. Si backend no disponible
         // todavía (BackendStateMonitor no ha hecho el primer health check), el
         // resultado quedará vacío — la primera transición de la sesión vivirá
-        // solo en memoria hasta que el backend responda. Asumimos que en LAN
-        // el monitor ya marcó disponible antes de la primera transición.
+        // solo en memoria hasta que el backend responda. `BackendState` re-llama
+        // a `loadHistoryFromBackend()` en transición unavailable→available
+        // (BackendState.swift:101).
         Task { await self.loadHistoryFromBackend() }
     }
 
-    /// Borra los artefactos locales obsoletos (JSON history + .log del v12
-    /// previo). Idempotente — si no existen, no-op. Llamado una vez en init.
+    /// Borra los artefactos locales obsoletos del v12 previo (JSON history +
+    /// .log textual). Idempotente — si no existen, no-op. Llamado una vez en
+    /// init. Round 2026-05-10 sesión iOS parte 2: ahora también borra el .log
+    /// (la UI rediseñada ya no lo referencia).
     private static func purgeLegacyLocalArtifacts() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let legacyJSON = docs.appendingPathComponent("transition_diagnostics_history.json")
         try? FileManager.default.removeItem(at: legacyJSON)
-        // El .log NO lo borramos aún: la UI Settings>Diagnostics sigue mostrando
-        // path/size en sesión 2 hasta que se rediseñe. Cuando el rediseño retire
-        // los call sites, este método se actualiza para borrar también el .log.
+        let legacyLog = docs.appendingPathComponent("transition_diagnostics.log")
+        try? FileManager.default.removeItem(at: legacyLog)
     }
 
     // MARK: - Backend sync (round 2026-05-10)
@@ -442,76 +421,6 @@ final class TransitionDiagnostics {
     func handleBackendUnavailable() {
         Self.debugModeEnabled = false
         UserDefaults.standard.set(false, forKey: "audiorr_diagnostics_enabled")
-    }
-
-    // MARK: - Export Session (v12)
-
-    /// Genera un archivo combinado con la sesion completa: header (device, app
-    /// version, fecha, stats), un bloque por transicion con sus AUTOMATION TICKS
-    /// + post-reset audits + seccion OPINION (rating + comment), y footer con
-    /// agregados (promedio, distribucion, conteo de Tier 4 / DJ effects).
-    /// Diseñado para que un agente externo (Claude) pueda leer todo el set de
-    /// una vez sin necesitar dos archivos separados.
-    nonisolated func exportSessionFile() -> URL? {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HHmm"
-        let stamp = formatter.string(from: Date())
-        let url = docs.appendingPathComponent("audiorr_session_\(stamp).txt")
-
-        var content = "# Audiorr Session Export — \(stamp)\n"
-        content += "# Combina diagnosticos tecnicos + opiniones del usuario.\n\n"
-
-        // Append the existing transition log (if any).
-        let logURL = docs.appendingPathComponent("transition_diagnostics.log")
-        if let logText = try? String(contentsOf: logURL, encoding: .utf8) {
-            content += "## TECHNICAL LOG\n\n"
-            content += logText
-            content += "\n\n"
-        }
-
-        // Append per-transition opinions and final stats from history.
-        let snapshot: [TransitionRecord] = MainActor.assumeIsolated { Self.shared.history }
-        if !snapshot.isEmpty {
-            content += "## USER OPINIONS\n\n"
-            let dateFmt = ISO8601DateFormatter()
-            for record in snapshot.reversed() {
-                let rating = record.userRating.map { "\($0)/10" } ?? "—"
-                let comment = record.userComment ?? ""
-                content += "[\(dateFmt.string(from: record.date))] \(record.type)\n"
-                content += "  FROM: \(record.fromTitle)\n"
-                content += "  TO:   \(record.toTitle)\n"
-                content += "  RATING: \(rating)\n"
-                if !comment.isEmpty {
-                    content += "  COMMENT: \(comment)\n"
-                }
-                content += "\n"
-            }
-
-            // Aggregates.
-            let rated = snapshot.compactMap { $0.userRating }
-            if !rated.isEmpty {
-                let avg = Double(rated.reduce(0, +)) / Double(rated.count)
-                content += "## AGGREGATES\n\n"
-                content += "  Total transitions: \(snapshot.count)\n"
-                content += "  Rated: \(rated.count)\n"
-                content += "  Average rating: \(String(format: "%.2f", avg))/10\n"
-                let tier4Count = snapshot.filter { $0.tier4Active }.count
-                let bassKillCount = snapshot.filter { $0.useBassKill }.count
-                let stutterCount = snapshot.filter { $0.useStutterCut }.count
-                content += "  Tier4 fires: \(tier4Count)/\(snapshot.count)\n"
-                content += "  bassKill: \(bassKillCount)/\(snapshot.count)\n"
-                content += "  stutterCut: \(stutterCount)/\(snapshot.count)\n"
-            }
-        }
-
-        do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            print("[TransitionDiagnostics] ⚠️ Failed to export session: \(error.localizedDescription)")
-            return nil
-        }
     }
 
     // MARK: - Network snapshot capture
@@ -637,7 +546,6 @@ final class TransitionDiagnostics {
             self.volumeB = 0
             self.highpassFreqA = 0
             self.highpassFreqB = 0
-            self.pendingTicks = []
             self.networkSnapshotStart = Self.captureNetworkSnapshot()
             self.networkSnapshotEnd = nil
         }
@@ -680,20 +588,9 @@ final class TransitionDiagnostics {
             self.panA = panA
             self.panB = panB
             self.currentRateA = currentRateA
-
-            // Buffer tick for log
-            let label = filterTypeA == "lp" ? "lpA" : "hpA"
-            let qLabel = self.useDynamicQ ? String(format: " Q=%.2f", dynamicQA) : ""
-            let qBLabel = self.useDynamicQ ? String(format: " Qb=%.2f", dynamicQB) : ""
-            let notchLabel = self.useNotchSweep
-                ? String(format: " notch=%.0fHz/%.1fdB", notchFreqB, notchGainB)
-                : ""
-            let tick = String(format: "  t+%.1fs | volA=%.3f volB=%.3f master=%.2f | \(label)=%.0fHz\(qLabel) hpB=%.0fHz\(qBLabel)\(notchLabel) | lsA=%.1fdB lsB=%.1fdB | panA=%.3f panB=%.3f | rateA=%.3f",
-                              elapsed, volumeA, volumeB, masterVolume,
-                              highpassFreqA, highpassFreqB,
-                              lowshelfGainA, lowshelfGainB,
-                              panA, panB, currentRateA)
-            self.pendingTicks.append(tick)
+            // Round 2026-05-10 — sin buffer textual: el log .log se eliminó.
+            // La UI Settings>Diagnostics consume estas mismas propiedades en
+            // tiempo real (sección "Real-time" del active transition).
         }
     }
 
@@ -824,9 +721,6 @@ final class TransitionDiagnostics {
     /// Whether the last audit detected stuck filters (non-neutral values).
     var lastAuditFailed = false
     var lastAuditDetails = ""
-
-    /// Pending audits to be flushed to log on next writeTransitionToLog or standalone.
-    private var pendingAudits: [String] = []
 
     /// Called from CrossfadeExecutor after dsp.reset() to verify filter state.
     /// With BiquadDSPNode, both snapshots read from the same kernel — divergence is impossible.
@@ -970,147 +864,19 @@ final class TransitionDiagnostics {
         Task { @MainActor in
             self.lastAuditFailed = !isClean
             self.lastAuditDetails = line
-            self.pendingAudits.append(line)
-
-            if !self.isActive {
-                self.flushAuditsToLog()
-            }
+            // Round 2026-05-10 — sin pendingAudits ni flush a log: el .log se
+            // eliminó. La detección de stuck filters / DSP divergence sigue
+            // viva (console output arriba y `lastAuditFailed`/`lastAuditDetails`
+            // observables por la UI si hace falta).
         }
     }
 
-    /// Flush pending audits to the log file.
-    private func flushAuditsToLog() {
-        guard !pendingAudits.isEmpty else { return }
-        var block = "\n  ── POST-RESET AUDITS ──\n"
-        for audit in pendingAudits {
-            block += audit + "\n"
-        }
-        block += "\n"
-        pendingAudits.removeAll()
-        appendToLog(block)
-    }
-
-    // MARK: - Log file
-
-    private func writeTransitionToLog() {
-        let ts = ISO8601DateFormatter().string(from: Date())
-        var block = """
-        ═══════════════════════════════════════════════════════════
-        [\(ts)] \(transitionType)
-        REASON: \(transitionReason.isEmpty ? "N/A" : transitionReason)
-        FROM: \(currentTitle)
-        TO:   \(nextTitle)
-
-        TIMING:
-          fade=\(String(format: "%.1f", fadeDuration))s  entry=\(String(format: "%.1f", entryPoint))s  offset=\(String(format: "%.1f", startOffset))s  anticipation=\(String(format: "%.1f", anticipationTime))s
-
-        FILTERS:
-          enabled=\(filtersEnabled)  preset=\(filterPreset)
-          midScoop=\(useMidScoop)  hiShelfCut=\(useHighShelfCut)  skipBFilters=\(skipBFilters)
-          bassKill=\(useBassKill)  dynamicQ=\(useDynamicQ)  notchSweep=\(useNotchSweep)  stutterCut=\(useStutterCut)
-          bRapidFadeIn=\(bRapidFadeIn)  tier4Active=\(tier4Active)
-
-        ANALYSIS:
-          energyA=\(String(format: "%.2f", energyA))  energyB=\(String(format: "%.2f", energyB))  danceability=\(String(format: "%.2f", danceability))
-          outroInstrumental=\(isOutroInstrumental)  introInstrumental=\(isIntroInstrumental)
-          outroStartA=\(String(format: "%.1f", outroStartA))s  introEndB=\(String(format: "%.1f", introEndB))s  vocalStartB=\(String(format: "%.1f", vocalStartB))s  chorusStartB=\(String(format: "%.1f", chorusStartB))s  introVocalsB=\(hasIntroVocalsB)
-
-        BEAT SYNC:
-          hasBeatData=\(isBeatSynced)  info=\(beatSyncInfo)
-          bpmA=\(String(format: "%.1f", bpmA))  bpmB=\(String(format: "%.1f", bpmB))  diff=\(String(format: "%.1f", abs(bpmA - bpmB)))
-
-        TIME STRETCH:
-          enabled=\(useTimeStretch)  rateA=\(String(format: "%.3f", rateA))  rateB=\(String(format: "%.3f", rateB))
-
-        REPLAY GAIN:
-          rgA=\(String(format: "%.3f", replayGainA))  rgB=\(String(format: "%.3f", replayGainB))
-
-        """
-
-        // Environment snapshot (start vs end)
-        if let s = networkSnapshotStart {
-            block += "\n  ENVIRONMENT (start):\n"
-            block += "    route=\(s.audioRoute)  bluetooth=\(s.isBluetoothActive)  carplay=\(s.isCarPlayActive)\n"
-            block += "    appState=\(s.appState)  ioBuffer=\(String(format: "%.1f", s.ioBufferDuration * 1000))ms  sampleRate=\(String(format: "%.0f", s.sampleRate))Hz  outputLatency=\(String(format: "%.1f", s.outputLatency * 1000))ms\n"
-        }
-        if let e = networkSnapshotEnd {
-            block += "  ENVIRONMENT (end):\n"
-            block += "    route=\(e.audioRoute)  bluetooth=\(e.isBluetoothActive)  carplay=\(e.isCarPlayActive)\n"
-            block += "    appState=\(e.appState)  ioBuffer=\(String(format: "%.1f", e.ioBufferDuration * 1000))ms  sampleRate=\(String(format: "%.0f", e.sampleRate))Hz  outputLatency=\(String(format: "%.1f", e.outputLatency * 1000))ms\n"
-            // Flag route change during crossfade
-            if let s = networkSnapshotStart, s.audioRoute != e.audioRoute {
-                block += "    ⚠️ ROUTE CHANGED DURING CROSSFADE: \(s.audioRoute) → \(e.audioRoute)\n"
-            }
-            if let s = networkSnapshotStart, s.appState != e.appState {
-                block += "    ⚠️ APP STATE CHANGED DURING CROSSFADE: \(s.appState) → \(e.appState)\n"
-            }
-        }
-
-        block += "\n  AUTOMATION TICKS (\(pendingTicks.count) samples):\n"
-
-        for tick in pendingTicks {
-            block += tick + "\n"
-        }
-        block += "\n"
-
-        // Include any post-reset audits that arrived before or at completion
-        if !pendingAudits.isEmpty {
-            block += "  ── POST-RESET AUDITS ──\n"
-            for audit in pendingAudits {
-                block += audit + "\n"
-            }
-            block += "\n"
-            pendingAudits.removeAll()
-        }
-
-        appendToLog(block)
-    }
-
-    private nonisolated func appendToLog(_ text: String) {
-        guard let data = text.data(using: .utf8) else { return }
-        if let handle = try? FileHandle(forWritingTo: logFileURL) {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            handle.closeFile()
-        } else {
-            try? data.write(to: logFileURL, options: .atomic)
-        }
-    }
-
-    /// Read the full log file contents.
-    func readLog() -> String {
-        (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? "(empty log)"
-    }
-
-    /// Clear the log file.
-    func clearLog() {
-        let header = "# Audiorr Transition Diagnostics Log\n# Cleared: \(ISO8601DateFormatter().string(from: Date()))\n\n"
-        try? header.write(to: logFileURL, atomically: true, encoding: .utf8)
-        history.removeAll()
-    }
-
-    /// Delete the log file entirely from disk.
-    func deleteLog() {
-        try? FileManager.default.removeItem(at: logFileURL)
-        history.removeAll()
-    }
-
-    /// Log file size in bytes (0 if missing).
-    var logFileSize: Int64 {
-        (try? FileManager.default.attributesOfItem(atPath: logFileURL.path)[.size] as? Int64) ?? 0
-    }
-
-    /// Copy log contents to clipboard.
-    func copyLogToClipboard() {
-        UIPasteboard.general.string = readLog()
-    }
-
-    /// Append a raw line to the diagnostics log (for nuclear reconnect events, etc.)
-    /// nonisolated because this is called from automationQueue and other non-main contexts.
-    nonisolated func logEvent(_ text: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        appendToLog("[\(timestamp)] \(text)\n")
-    }
+    // MARK: - Removed in round 2026-05-10 (diagnostics-backend-port)
+    // Eliminados: writeTransitionToLog, appendToLog, readLog, clearLog,
+    // deleteLog, copyLogToClipboard, logEvent, logFilePath, logFileSize,
+    // logFileURL, flushAuditsToLog, pendingAudits, exportSessionFile.
+    // El backend es la fuente de verdad. Console output (print) sigue siendo
+    // útil para debugging en Xcode durante desarrollo.
 
     /// Update backend status.
     func updateBackendStatus(connected: Bool, url: String) {
