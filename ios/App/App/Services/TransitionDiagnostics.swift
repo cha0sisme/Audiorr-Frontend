@@ -173,7 +173,7 @@ final class TransitionDiagnostics {
 
     // MARK: - History (last N transitions, in-memory for UI)
 
-    struct TransitionRecord: Identifiable, Codable {
+    struct TransitionRecord: Identifiable, Codable, Sendable {
         var id = UUID()
         let date: Date
         let fromTitle: String
@@ -237,13 +237,34 @@ final class TransitionDiagnostics {
         var entryFinalCapApplied: Bool? = nil
         var anticipationReason: String? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
-        // Persistida en Documents/transition_diagnostics_history.json.
+        // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
+        // (antes en Documents/transition_diagnostics_history.json — eliminado).
         // userRating: 0-10 (en pasos de 1, equivalente a 5 estrellas con halves).
         // userComment: texto libre para notas del usuario.
         // ratedAt: timestamp del rating (para distinguir vs. nunca rated).
         var userRating: Int? = nil
         var userComment: String? = nil
         var ratedAt: Date? = nil
+        // Round 2026-05-10 diagnostics-backend-port — versionado obligatorio en
+        // cada record que se sube al backend. `algorithmVersion` semantico
+        // (bumped en cada commit que toque DJMixingService/CrossfadeExecutor),
+        // `buildId` git SHA del commit del binario. Permiten al backend correlar
+        // ratings con cambios concretos del repo. Optional para retrocompat con
+        // records persistidos antes del round (si quedara alguno en memoria).
+        var algorithmVersion: String? = nil
+        var buildId: String? = nil
+        // Round 2026-05-10 — sessionId asignado por el backend (gap-based, ≥30
+        // min sin transición = nueva sesión). El cliente NO lo calcula. Se
+        // rellena con la respuesta del POST /transitions y queda en memoria
+        // para el resto de la sesión activa. nil para el record en el momento
+        // de subirlo (el backend lo asigna y lo devuelve).
+        var sessionId: UUID? = nil
+        /// Marker de soft-delete del comment. Backend setea `deletedAt = now`
+        /// cuando se llama DELETE /transitions/:id/comment. El record persiste
+        /// con rating intacto; solo `userComment = nil`. Permite distinguir
+        /// "nunca tuvo comment" (deletedAt nil) de "tenía y se borró" para
+        /// estadísticas.
+        var deletedAt: Date? = nil
     }
 
     var history: [TransitionRecord] = []
@@ -281,18 +302,17 @@ final class TransitionDiagnostics {
         return docs.appendingPathComponent("transition_diagnostics.log")
     }()
 
-    /// v12 (audit 2026-05-05) — JSON persistente con la history completa
-    /// (transiciones + opiniones del usuario). El .log de texto sigue activo
-    /// para legibilidad humana, pero el JSON es el source of truth para
-    /// reconstruir history al arrancar y para hacer export estructurado.
-    private let historyFileURL: URL = {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent("transition_diagnostics_history.json")
-    }()
+    /// Round 2026-05-10 (diagnostics-backend-port) — el JSON local
+    /// `transition_diagnostics_history.json` se eliminó (bug operativo: cada
+    /// update TestFlight con schema breaking de Codable rompía el decode y
+    /// dejaba history=[], luego el siguiente save sobrescribía el archivo —
+    /// pérdida silenciosa). Source of truth = backend
+    /// `<navidromeHost>:2999/api/diagnostics`. Ver `TransitionDiagnosticsBackend`.
 
-    /// Limit de records persistidos. Los mas antiguos se descartan FIFO cuando
-    /// se supera. 200 cubre ~3 sesiones largas de coche (50-70 transiciones
-    /// cada una) sin saturar el archivo ni perder contexto reciente.
+    /// Cap del array `history` en memoria. No persiste — al arrancar se
+    /// rellena con la primera página del backend (`fetchTransitions(limit: 200)`).
+    /// Mantenido para que la UI de Settings>Diagnostics no cargue 1000+ records
+    /// en SwiftUI list de golpe (paginación lazy es trabajo de la sesión 2).
     private let historyLimit = 200
 
     /// Ticks collected during active crossfade, flushed on completion.
@@ -301,51 +321,78 @@ final class TransitionDiagnostics {
     // MARK: - Init
 
     private init() {
-        // Write header on first launch if file doesn't exist
+        // Round 2026-05-10 — borrón y cuenta nueva: housekeeping de los
+        // ficheros locales obsoletos. Firmado por director (round-current
+        // "Eliminar persistencia local completa"). Si quedan records en el
+        // JSON viejo se pierden; el director ya los analizó en
+        // `D:\Audiorr-shared\analysis\2026-05-10_v13O-commit2-cochetest132.md`.
+        //
+        // El fichero .log de texto humano (`transition_diagnostics.log`) ya no
+        // se escribe desde este round (publishCompletion deja de llamar
+        // writeTransitionToLog). Lo borramos también.
+        Self.purgeLegacyLocalArtifacts()
+
+        // Write header on first launch if file doesn't exist — TODO retirar
+        // junto con UI Settings>Diagnostics en sesión 2 del round (los métodos
+        // logFilePath/logFileSize/copyLogToClipboard/clearLog/deleteLog/readLog
+        // siguen referenciados desde TransitionDiagnosticsView mientras tanto).
         if !FileManager.default.fileExists(atPath: logFileURL.path) {
-            let header = "# Audiorr Transition Diagnostics Log\n# Format: human-readable, one block per transition\n# Generated automatically by TransitionDiagnostics\n\n"
+            let header = "# Audiorr Transition Diagnostics Log\n# Format: human-readable, one block per transition\n# Generated automatically by TransitionDiagnostics\n# Round 2026-05-10: this file is no longer written — backend is source of truth.\n\n"
             try? header.write(to: logFileURL, atomically: true, encoding: .utf8)
         }
-        loadHistory()
+
+        // Carga inicial desde backend en background. Si backend no disponible
+        // todavía (BackendStateMonitor no ha hecho el primer health check), el
+        // resultado quedará vacío — la primera transición de la sesión vivirá
+        // solo en memoria hasta que el backend responda. Asumimos que en LAN
+        // el monitor ya marcó disponible antes de la primera transición.
+        Task { await self.loadHistoryFromBackend() }
     }
 
-    // MARK: - History persistence (v12)
+    /// Borra los artefactos locales obsoletos (JSON history + .log del v12
+    /// previo). Idempotente — si no existen, no-op. Llamado una vez en init.
+    private static func purgeLegacyLocalArtifacts() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let legacyJSON = docs.appendingPathComponent("transition_diagnostics_history.json")
+        try? FileManager.default.removeItem(at: legacyJSON)
+        // El .log NO lo borramos aún: la UI Settings>Diagnostics sigue mostrando
+        // path/size en sesión 2 hasta que se rediseñe. Cuando el rediseño retire
+        // los call sites, este método se actualiza para borrar también el .log.
+    }
 
-    /// Carga history desde JSON al arrancar. Si el archivo no existe o esta
-    /// corrupto, history queda vacia (no es error fatal — solo perdimos sesiones
-    /// previas). Aplica el limite FIFO por si el archivo viene de una version
-    /// anterior con limite distinto.
-    private func loadHistory() {
-        guard FileManager.default.fileExists(atPath: historyFileURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: historyFileURL)
-            let decoded = try JSONDecoder().decode([TransitionRecord].self, from: data)
-            self.history = Array(decoded.prefix(historyLimit))
-        } catch {
-            print("[TransitionDiagnostics] ⚠️ Failed to load history JSON: \(error.localizedDescription)")
+    // MARK: - Backend sync (round 2026-05-10)
+
+    /// Carga la primera página del backend al arrancar y popula `history`. Si
+    /// el backend no responde, `history` queda vacío y se va llenando con
+    /// nuevos records mientras la sesión avanza. No reintenta — coherente con
+    /// "sin queue, sin sync".
+    func loadHistoryFromBackend() async {
+        let result = await TransitionDiagnosticsBackend.shared.fetchTransitions(limit: historyLimit, offset: 0)
+        switch result {
+        case .success(let response):
+            await MainActor.run {
+                // Sustitución completa: el backend es source of truth. Si había
+                // algo en memoria de la sesión actual (poco probable en init,
+                // pero defensivo), lo conservamos al final por si llegó algún
+                // record antes de que la primera fetch terminase.
+                let inMemory = self.history.filter { record in
+                    !response.transitions.contains(where: { $0.id == record.id })
+                }
+                self.history = response.transitions + inMemory
+                if self.history.count > self.historyLimit {
+                    self.history = Array(self.history.prefix(self.historyLimit))
+                }
+            }
+        case .failure(let error):
+            print("[TransitionDiagnostics] ⚠️ loadHistoryFromBackend failed: \(error.localizedDescription)")
         }
     }
 
-    /// Persiste history a JSON. Llamar tras cada cambio (nuevo record, rating
-    /// update, comment edit). FIFO al limite. Errores se loguean pero no
-    /// propagan — perder un guardado puntual no debe romper el flujo de la app.
-    private func saveHistory() {
-        if history.count > historyLimit {
-            history = Array(history.prefix(historyLimit))
-        }
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(history)
-            try data.write(to: historyFileURL, options: [.atomic])
-        } catch {
-            print("[TransitionDiagnostics] ⚠️ Failed to save history JSON: \(error.localizedDescription)")
-        }
-    }
-
-    /// Actualiza rating y/o comment de una transicion del history. Persiste
-    /// inmediatamente. Llamado desde TransitionDetailView al cambiar la opinion.
+    /// Actualiza rating y/o comment de una transicion del history. Update
+    /// optimista de la copia en memoria + PATCH al backend. Si el PATCH falla,
+    /// NO revertimos local: la UI debe mostrar lo que el user pidió (re-edita
+    /// si quiere reintentar). Llamado desde TransitionDetailView al cambiar la
+    /// opinion.
     func updateOpinion(recordId: UUID, rating: Int?, comment: String?) {
         guard let idx = history.firstIndex(where: { $0.id == recordId }) else { return }
         var record = history[idx]
@@ -353,18 +400,48 @@ final class TransitionDiagnostics {
         record.userComment = comment?.isEmpty == true ? nil : comment
         record.ratedAt = (rating != nil || (comment?.isEmpty == false)) ? Date() : nil
         history[idx] = record
-        saveHistory()
+
+        // Backend PATCH en detached task. Sin await desde el caller: la UI no
+        // espera la red (LAN <100ms pero no bloqueamos en ningún caso).
+        guard Self.backendAvailable else { return }
+        Task.detached {
+            let result = await TransitionDiagnosticsBackend.shared.updateOpinion(
+                id: recordId,
+                rating: rating,
+                comment: record.userComment
+            )
+            if case .failure(let error) = result {
+                print("[TransitionDiagnostics] ⚠️ updateOpinion(\(recordId)) failed: \(error.localizedDescription)")
+            }
+        }
     }
 
-    /// Cuando el backend pasa a no-disponible: deshabilita captura, persiste
-    /// history actual (por si quedaba algun cambio sin guardar) y NO borra los
-    /// datos existentes (el usuario debe poder exportar lo que ya tenia incluso
-    /// si pierde conexion temporalmente). Llamado desde SettingsView observando
-    /// BackendState.isAvailable.
+    /// Soft-delete del comment del record. Rating preservado. Update local
+    /// optimista + DELETE al backend (endpoint dedicado, no via PATCH para
+    /// que el backend marque `deletedAt`). Llamado desde la UI cuando el user
+    /// quiere borrar específicamente el texto sin perder la valoración.
+    func deleteOpinion(recordId: UUID) {
+        guard let idx = history.firstIndex(where: { $0.id == recordId }) else { return }
+        var record = history[idx]
+        record.userComment = nil
+        record.deletedAt = Date()
+        history[idx] = record
+
+        guard Self.backendAvailable else { return }
+        Task.detached {
+            let result = await TransitionDiagnosticsBackend.shared.deleteComment(id: recordId)
+            if case .failure(let error) = result {
+                print("[TransitionDiagnostics] ⚠️ deleteOpinion(\(recordId)) failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Cuando el backend pasa a no-disponible: deshabilita captura. Ya no hay
+    /// JSON local que persistir — el cierre se reduce a apagar el flag.
+    /// Llamado desde BackendStateMonitor observando isAvailable=false.
     func handleBackendUnavailable() {
         Self.debugModeEnabled = false
         UserDefaults.standard.set(false, forKey: "audiorr_diagnostics_enabled")
-        saveHistory()
     }
 
     // MARK: - Export Session (v12)
@@ -620,11 +697,14 @@ final class TransitionDiagnostics {
         }
     }
 
-    /// Called when crossfade completes. Archives into history and writes to log file.
+    /// Called when crossfade completes. Archives into in-memory history, then
+    /// fires off the upload to the backend in a detached task (fire-and-forget).
+    /// Round 2026-05-10 (diagnostics-backend-port): JSON local eliminado, log
+    /// textual ya no se escribe — backend es source of truth.
     nonisolated func publishCompletion() {
         guard Self.collectingEnabled else { return }
         Task { @MainActor in
-            // Save to in-memory history
+            // Build record con versionado + telemetría completa.
             let record = TransitionRecord(
                 date: Date(),
                 fromTitle: self.currentTitle,
@@ -668,19 +748,36 @@ final class TransitionDiagnostics {
                 genreCapApplied: self.genreCapApplied,
                 bGenres: self.bGenres.isEmpty ? nil : self.bGenres,
                 entryFinalCapApplied: self.entryFinalCapApplied,
-                anticipationReason: self.anticipationReason
+                anticipationReason: self.anticipationReason,
+                algorithmVersion: DJMixingService.kAlgorithmVersion,
+                buildId: DJMixingService.kBuildId
             )
             self.history.insert(record, at: 0)
             if self.history.count > self.historyLimit { self.history.removeLast() }
-            // v12: persistir cada nueva transicion al JSON inmediatamente.
-            // Asi, si el usuario fuerza-cierra la app despues del crossfade, no
-            // pierde el record (era el bug que reportaba: "se borra al cerrar").
-            self.saveHistory()
             self.isActive = false
             self.networkSnapshotEnd = Self.captureNetworkSnapshot()
 
-            // Write full block to log file
-            self.writeTransitionToLog()
+            // Upload al backend fire-and-forget. Si falla, el record vive solo
+            // en memoria de la sesión actual (se pierde al reiniciar la app).
+            // Coherente con "sin queue, sin sync, sin reconciliación".
+            if Self.backendAvailable {
+                Task.detached {
+                    let result = await TransitionDiagnosticsBackend.shared.uploadRecord(record)
+                    switch result {
+                    case .success(let response):
+                        // Guardar el sessionId que asignó el backend en la copia
+                        // en memoria. Permite filtrar history por sessionId
+                        // desde la UI sin tener que hacer GET /sessions.
+                        await MainActor.run {
+                            if let idx = TransitionDiagnostics.shared.history.firstIndex(where: { $0.id == response.id }) {
+                                TransitionDiagnostics.shared.history[idx].sessionId = response.sessionId
+                            }
+                        }
+                    case .failure(let error):
+                        print("[TransitionDiagnostics] ⚠️ uploadRecord(\(record.id)) failed: \(error.localizedDescription)")
+                    }
+                }
+            }
         }
     }
 

@@ -93,6 +93,12 @@ final class BackendState {
             // then invalidate, evicting the orphan and re-fetching from backend.
             if !wasAvailable && self.isAvailable {
                 await NavidromeService.shared.refreshPlaylistCoverHashes()
+                // Diagnostics history vive en backend (round 2026-05-10
+                // diagnostics-backend-port). Si la app arrancó offline,
+                // TransitionDiagnostics.init() encontró history vacía. Al
+                // recuperar conexión, repoblar para que la UI no arranque
+                // ciega permanentemente.
+                await TransitionDiagnostics.shared.loadHistoryFromBackend()
             }
             self.isChecking = false
             self.checkTask = nil
