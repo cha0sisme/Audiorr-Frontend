@@ -257,8 +257,11 @@ struct TransitionHistoryView: View {
                     Text("\(unratedCount) transicion\(unratedCount == 1 ? "" : "es") por valorar")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text("AirPods conectados — buen momento para escuchar")
                         .font(.caption)
+                        .lineLimit(2)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -799,23 +802,32 @@ private struct TransitionRow: View {
     private var effectsRow: some View {
         let tokens = activeTokens
         if !tokens.isEmpty {
-            HStack(spacing: 8) {
-                ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
-                    Text(token.label)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(token.color)
+            // ScrollView horizontal — la lista de tokens activos puede sumar
+            // 10+ etiquetas y desbordar el ancho de pantalla. Apple Music
+            // y Photos usan este patrón para chips/tags variables.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
+                        Text(token.label)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(token.color)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
             }
-            .lineLimit(1)
+            .scrollClipDisabled()
         }
     }
 
     /// Lista de tokens (label + color) por orden de relevancia. Solo aparecen
-    /// los efectos realmente activos en este record.
+    /// los efectos realmente activos en este record. anticipationReason se
+    /// abrevia para no comerse media línea (e.g. "outroSlopeSteep+filtersAgg"
+    /// → "slope+filt"). Preset "normal" se omite (no aporta señal visual).
     private var activeTokens: [(label: String, color: Color)] {
         var out: [(String, Color)] = []
-        if !record.filterPreset.isEmpty {
-            out.append((record.filterPreset, presetColor(record.filterPreset)))
+        let preset = record.filterPreset
+        if !preset.isEmpty && preset.lowercased() != "normal" {
+            out.append((preset, presetColor(preset)))
         }
         if record.beatSynced     { out.append(("beat", .cyan)) }
         if record.timeStretched  { out.append(("stretch", .purple)) }
@@ -831,9 +843,18 @@ private struct TransitionRow: View {
         if record.genreCapApplied == true { out.append(("cap-genre", .yellow)) }
         if record.entryFinalCapApplied == true { out.append(("cap-final", .yellow)) }
         if let reason = record.anticipationReason, !reason.isEmpty {
-            out.append(("ant:\(reason)", .pink))
+            out.append(("ant:\(abbreviateReason(reason))", .pink))
         }
         return out
+    }
+
+    /// Acorta valores largos de `anticipationReason` para que el token quepa
+    /// en una línea sin comerse el resto del row. "outroSlopeSteep" → "slope",
+    /// "filtersAggressive" → "filt", combinaciones quedan "slope+filt".
+    private func abbreviateReason(_ reason: String) -> String {
+        reason
+            .replacingOccurrences(of: "outroSlopeSteep", with: "slope")
+            .replacingOccurrences(of: "filtersAggressive", with: "filt")
     }
 
     @ViewBuilder
@@ -983,13 +1004,20 @@ struct TransitionDetailSheet: View {
             Text("\(record.fromTitle)")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.primary)
-            HStack(spacing: 6) {
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+                .multilineTextAlignment(.leading)
+            HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "arrow.down")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .padding(.top, 4)
                 Text(record.toTitle)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.leading)
             }
             HStack(spacing: 8) {
                 typePill(record.type)
@@ -1182,9 +1210,11 @@ struct TransitionDetailSheet: View {
             }
 
             // Pills coloreados — adaptive grid wraps automáticamente cuando
-            // el ancho varía con dynamic type / orientación.
+            // el ancho varía con dynamic type / orientación. El `maximum: 160`
+            // deja margen para "entryFinalCap" (13 chars) bajo accessibility
+            // dynamic type sin que el pill se aplaste o desborde de la card.
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 88, maximum: 140), spacing: 6, alignment: .leading)],
+                columns: [GridItem(.adaptive(minimum: 96, maximum: 160), spacing: 6, alignment: .leading)],
                 alignment: .leading,
                 spacing: 6
             ) {
@@ -1231,6 +1261,13 @@ struct TransitionDetailSheet: View {
         Text(pill.label)
             .font(.caption2.weight(.medium))
             .foregroundStyle(pill.active ? AnyShapeStyle(pill.color) : AnyShapeStyle(.tertiary))
+            // Defensa contra desborde con dynamic type accessibility o
+            // labels largos como "entryFinalCap": forzamos 1 línea y
+            // permitimos que el texto se reduzca hasta el 75%. La capsule
+            // crece con el contenido pero respeta el max de la columna.
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .truncationMode(.tail)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .center)
