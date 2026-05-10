@@ -99,6 +99,11 @@ struct TransitionHistoryView: View {
 
     @State private var presentedRecord: TransitionDiagnostics.TransitionRecord?
 
+    /// Singleton observable. Cuando `publishCompletion` inserta un nuevo record
+    /// en `history`, el `.onChange` sobre `diag.history.first?.id` lo detecta y
+    /// hace prepend en la lista local — evita tener que salir/volver a la view.
+    @State private var diag = TransitionDiagnostics.shared
+
     enum HistoryFilter: Int, Hashable, Identifiable, CaseIterable {
         case all = 0
         case unrated = 1
@@ -182,6 +187,12 @@ struct TransitionHistoryView: View {
         }
         .onChange(of: searchText) { _, newValue in
             scheduleSearchDebounce(query: newValue)
+        }
+        // Reactividad en tiempo real: cuando el singleton inserta un record
+        // nuevo (publishCompletion → history.insert(at: 0)), aparece arriba sin
+        // salir/volver a la view. Solo se prepend si pasa los filtros activos.
+        .onChange(of: diag.history.first?.id) { _, _ in
+            handleNewLiveRecord()
         }
         .onAppear { startRouteObserver() }
         .onDisappear { stopRouteObserver() }
@@ -593,6 +604,47 @@ struct TransitionHistoryView: View {
         case .mid:      return (4, 6, nil)
         case .high:     return (7, 10, nil)
         case .diamonds: return (10, 10, nil)
+        }
+    }
+
+    // MARK: - Live record reactivity
+
+    /// Llamado por `.onChange(of: diag.history.first?.id)`. Si el primer record
+    /// del singleton no está ya en la lista local y pasa los filtros activos
+    /// (search + filter chip), se hace prepend al instante. El record recién
+    /// publicado tiene `userRating == nil` y `userComment == nil` por
+    /// definición, así que solo casa con `.all` y `.unrated`.
+    private func handleNewLiveRecord() {
+        guard let latest = diag.history.first else { return }
+        // Idempotencia: si ya existe (re-render por mismo id) no duplicar.
+        guard !transitions.contains(where: { $0.id == latest.id }) else { return }
+        guard recordMatchesActiveFilters(latest) else { return }
+        transitions.insert(latest, at: 0)
+        totalCount += 1
+        if latest.userRating == nil { unratedCount += 1 }
+        // Refrescar resumen de sesiones para que el header de "Sesión X" cuente
+        // la transición nueva. No bloquea — corre detached.
+        Task { await loadSessions() }
+    }
+
+    /// True si el record encaja con los filtros activos (search + chip). Se
+    /// usa solo para el path de inserción reactiva — la fetch paginada del
+    /// backend ya filtra server-side.
+    private func recordMatchesActiveFilters(_ r: TransitionDiagnostics.TransitionRecord) -> Bool {
+        // Search
+        if !debouncedSearch.isEmpty {
+            let q = debouncedSearch.lowercased()
+            let hit = r.fromTitle.lowercased().contains(q) || r.toTitle.lowercased().contains(q)
+            if !hit { return false }
+        }
+        // Filter chip
+        switch selectedFilter {
+        case .all:      return true
+        case .unrated:  return r.userRating == nil
+        case .low:      if let v = r.userRating { return v >= 1 && v <= 3 } else { return false }
+        case .mid:      if let v = r.userRating { return v >= 4 && v <= 6 } else { return false }
+        case .high:     if let v = r.userRating { return v >= 7 && v <= 10 } else { return false }
+        case .diamonds: return r.userRating == 10
         }
     }
 
