@@ -138,6 +138,18 @@ enum DJMixingService {
     /// chorusStart<5s, vocalStart=0 literal, energy=0 espurio).
     private static let kEnableTier4 = true
 
+    /// v13.O Commit 2 (round 2026-05-10): cap defensivo POST-snap+beat-sync
+    /// sobre el entryPoint final. Atrapa los casos en los que `kChorusCap=50`
+    /// del Commit 1 fue evadido por las transformaciones posteriores
+    /// (phrase snap +8s en punch / +4s en dramatic, beat sync ±1 compás)
+    /// o en los que el path de entry no pasa por `calculatePunchEntry`
+    /// (.dramatic, .smooth, fallbacks). Gate drop-driven percussive heredado
+    /// de `isBDropDrivenByPercussive(ratio>=2.0)` para preservar el oro
+    /// (ej. American Wedding→Indecision r=10 con chorusStart>50). Cap=50s
+    /// alineado con `kChorusCap` para coherencia perceptual: el listener
+    /// no espera entrar a B después del minuto.
+    private static let kEntryFinalCap: Double = 50.0
+
     /// Returns true if `type` should be skipped this round because it was used
     /// too recently. Called inside `decideTransitionType` before committing to
     /// an expressive type (currently only VINYL_STOP — extend as new types
@@ -372,6 +384,11 @@ enum DJMixingService {
         let useAggressiveFilters: Bool
         let needsAnticipation: Bool
         let anticipationTime: Double
+        /// v13.O Commit 2 (round 2026-05-10): etiqueta interna del path de
+        /// anticipación nuevo. nil cuando se eligió rama existente
+        /// (CUT-tease / PRE_PUNCH / A2 widening puro / sin anticipación).
+        /// "outroSlopeSteep" = caso nuevo de A decayendo natural.
+        let anticipationReason: String?
         let beatSyncInfo: String
         let isBeatSynced: Bool
         let useTimeStretch: Bool
@@ -444,6 +461,11 @@ enum DJMixingService {
         /// chorus≤50 o exempt drop-driven (promotion). Setter MainActor en
         /// `QueueManager.swift:1041` lo escribe en `TransitionDiagnostics.shared`.
         let genreCapApplied: Bool?
+        /// v13.O Commit 2 (round 2026-05-10): cap defensivo POST-snap+beat-sync
+        /// sobre entry final. Independiente de `genreCapApplied`. nil = entry
+        /// pre-clamp <=50, no se evaluó. true = capado. false = >50 pero exempt
+        /// drop-driven. Propagado al MainActor mismo patrón que `genreCapApplied`.
+        let entryFinalCapApplied: Bool?
     }
 
     // MARK: - Build Transition Profile
@@ -724,7 +746,11 @@ enum DJMixingService {
                 // Preserva el flag chorus-cap del path original. Si chorus se
                 // capó a 50 y luego noRealOutro lo capa a 8, el gate chorus se
                 // evaluó (`true` legítimo) aunque entry final no esté en 50.
-                genreCapApplied: entry.genreCapApplied
+                genreCapApplied: entry.genreCapApplied,
+                // Misma lógica para el cap final v13.O C2: el flag refleja la
+                // decisión post-snap original; este cap noRealOutro de 8s es
+                // siempre más restrictivo, así que el cap final ya no actúa.
+                entryFinalCapApplied: entry.entryFinalCapApplied
             )
         }
 
@@ -923,6 +949,71 @@ enum DJMixingService {
         let bGenresForAnticipation: [String] = (safeNext?.hasError != true)
             ? (safeNext?.genres ?? [])
             : []
+        // v13.O Commit 2: rmsTailCurve de A para detectar decay natural en
+        // últimos 40s. Si A no tiene curva (track corto / backend sin curva),
+        // `decideAnticipation` no dispara el caso nuevo (deriveSlope retorna nil).
+        let rmsTailCurveAForAnticipation: [Double]? = (safeCurrent?.hasError != true)
+            ? safeCurrent?.rmsTailCurve
+            : nil
+        // v13.O Commit 2 — extensión filtros agresivos (round 2026-05-10):
+        // Predicción conservadora de si decideDJEffects activará alguno de
+        // bassKill/dynamicQ/notchSweep/stutterCut. Replicamos los gates de
+        // activación primarios (los que SÍ son evaluables ANTES de calcular
+        // skipBFilters/isEnergyDown/isChillContext, que se construyen más
+        // abajo). Para mantenerlo coherente con `decideDJEffects`, también
+        // incluimos los killers principales (chill ctx + energyA floor).
+        // Falsos positivos (predigo agresivo pero luego se desactiva) son
+        // aceptables: solo se traduce en anticipación extra inocua. Falsos
+        // negativos NO son aceptables — son la queja del director "filtros
+        // de golpe en groove constante".
+        let filtersAggressivePredicted: Bool = {
+            // Killers (decideDJEffects:2608, 2621): si caemos en chill o en
+            // energyA<0.15, los 4 flags se apagan → no predecir agresivo.
+            if profile.energyA < 0.30 { return false }      // isChillContext
+            if profile.energyA < 0.15 { return false }      // energyA floor (redundante con anterior pero explícito)
+
+            // bassKill primary gate (decideDJEffects:2510-2515)
+            let bassKillCompatibleType: Bool = {
+                switch transition.type {
+                case .eqMix, .beatMatchBlend, .crossfade, .cutAFadeInB, .fadeOutACutB: return true
+                default: return false
+                }
+            }()
+            let dramaticEligible = profile.character == .dramatic && profile.energyFlow == .energyUp
+            let punchEligible = profile.character == .punch
+            let smoothEligible = profile.character == .smooth && profile.avgDanceability >= 0.55
+            let bassKillEligible = bassKillCompatibleType
+                && profile.bpmTrusted
+                && profile.avgDanceability > 0.4
+                && effectiveFadeDuration > 4.0
+                && profile.energyA >= 0.10 && profile.energyB >= 0.10
+                && (punchEligible || dramaticEligible || smoothEligible)
+            if bassKillEligible { return true }
+
+            // dynamicQ primary gate (decideDJEffects:2527-2530)
+            let isEnergyDownPredicted = profile.energyB < profile.energyA - 0.2
+            let dynQEligible = !isEnergyDownPredicted
+                && effectiveFadeDuration > 4.0
+                && profile.avgDanceability > 0.45
+                && (profile.character == .punch
+                    || (profile.character == .dramatic && profile.energyFlow != .energyDown))
+            if dynQEligible { return true }
+            // notchSweep depende de dynQ (ya cubierto arriba); si dynQ true,
+            // notchSweep también probablemente.
+
+            // stutterCut primary gate (decideDJEffects:2587-2593)
+            let stutterCompatibleType = (transition.type == .cut || transition.type == .cutAFadeInB)
+            let stutterEligible = stutterCompatibleType
+                && profile.bpmTrusted
+                && profile.bpmA >= 80
+                && profile.bpmA <= 180
+                && profile.avgDanceability > 0.50
+                && effectiveFadeDuration >= 1.5
+            if stutterEligible { return true }
+
+            return false
+        }()
+
         let anticipation = decideAnticipation(
             fadeDuration: effectiveFadeDuration,
             entryPoint: finalEntry,
@@ -932,7 +1023,9 @@ enum DJMixingService {
             bIntroSpace: bIntroSpaceForAnticipation,
             vocalStartB: vocalStartBForAnticipation,
             bpmA: bpmAForAnticipation,
-            bGenres: bGenresForAnticipation
+            bGenres: bGenresForAnticipation,
+            rmsTailCurveA: rmsTailCurveAForAnticipation,
+            filtersAggressivePredicted: filtersAggressivePredicted
         )
 
         // ── 8. Time-stretch ──
@@ -1231,6 +1324,7 @@ enum DJMixingService {
             useAggressiveFilters: filter.useAggressiveFilters,
             needsAnticipation: anticipation.needsAnticipation,
             anticipationTime: anticipation.anticipationTime,
+            anticipationReason: anticipation.anticipationReason,
             beatSyncInfo: entry.beatSyncInfo,
             isBeatSynced: entry.isBeatSynced,
             useTimeStretch: timeStretch.useTimeStretch,
@@ -1265,7 +1359,8 @@ enum DJMixingService {
             introSlopeB: tier4Telemetry.introSlopeB,
             downbeatDensityB20s: tier4Telemetry.downbeatDensityB20s,
             chillRecipeApplied: isChillContext,
-            genreCapApplied: entry.genreCapApplied
+            genreCapApplied: entry.genreCapApplied,
+            entryFinalCapApplied: entry.entryFinalCapApplied
         )
     }
 
@@ -1286,6 +1381,13 @@ enum DJMixingService {
         /// `punchChorusPromotion` y `punchChorusFallback`. Propagado a
         /// `CrossfadeResult.genreCapApplied` y de ahí a `TransitionDiagnostics`.
         var genreCapApplied: Bool? = nil
+        /// v13.O Commit 2 (round 2026-05-10): cap defensivo POST-snap+beat-sync
+        /// disparado (true) cuando el entry final superaba `kEntryFinalCap=50s`
+        /// y B NO era drop-driven percussive. nil = nunca evaluado (entry
+        /// quedó <=50 antes del clamp). Independiente de `genreCapApplied`:
+        /// pueden ser ambos true (path chorusFallback+entry>50 post-snap raro)
+        /// o solo este true (paths .dramatic/.smooth que no escriben el otro).
+        var entryFinalCapApplied: Bool? = nil
     }
 
     /// Calculate where B starts playing. Driven by the A↔B relationship profile.
@@ -1444,13 +1546,40 @@ enum DJMixingService {
 
         entryPoint = max(0, min(entryPoint, bufferDuration - 1))
 
+        // ── v13.O Commit 2: hard-cap final POST-snap+beat-sync ──
+        // Salida común para los paths `.punch` y `.dramatic` (los que producen
+        // entries grandes). `.smooth` / `.minimal` retornan early arriba y ya
+        // tienen sus propios caps internos (`config.fallbackMaxSeconds`,
+        // chorus-as-fallback al 25% de la pista). El cap del Commit 1
+        // (`kChorusCap=50` en `calculatePunchEntry`) NO sobrevive al phrase
+        // snap (+8s en punch) ni al beat sync (±1 compás), y `.dramatic` no
+        // pasa por ese cap. Aquí atrapamos cualquier entry > 50s salvo que B
+        // sea drop-driven percussive (gate ratio>=2.0 heredado del Commit 1)
+        // — preserva el oro tipo American Wedding→Indecision (ratio 2.18,
+        // chorusStart>50).
+        var entryFinalCapApplied: Bool? = nil
+        if entryPoint > kEntryFinalCap {
+            let (isDrop, ratioForLog) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+            if !isDrop {
+                let ratioStr = ratioForLog.map { String(format: "%.2f", $0) } ?? "n/a"
+                print("[DJMixingService] 🛡️ Entry final cap (v13.O C2): \(String(format: "%.1f", entryPoint))s → \(String(format: "%.1f", kEntryFinalCap))s (ratio=\(ratioStr) BAL, source=\(entrySource.rawValue))")
+                entryPoint = kEntryFinalCap
+                entryFinalCapApplied = true
+            } else {
+                let ratioStr = ratioForLog.map { String(format: "%.2f", $0) } ?? "n/a"
+                print("[DJMixingService] 🛡️ Entry final cap exempt: entry=\(String(format: "%.1f", entryPoint))s (ratio=\(ratioStr) DROP, source=\(entrySource.rawValue))")
+                entryFinalCapApplied = false
+            }
+        }
+
         return EntryPointResult(
             entryPoint: entryPoint,
             beatSyncInfo: beatSyncInfo,
             usedFallback: usedFallback,
             isBeatSynced: isBeatSynced,
             entrySource: entrySource,
-            genreCapApplied: genreCapApplied
+            genreCapApplied: genreCapApplied,
+            entryFinalCapApplied: entryFinalCapApplied
         )
     }
 
@@ -2576,16 +2705,24 @@ enum DJMixingService {
         // larga (>=6s) y el tipo es blendy, B suena clean varios segundos antes
         // del punch real. El llamador usa este flag para forzar skipBFilters.
         let isPrePunch: Bool
+        // v13.O Commit 2 (round 2026-05-10): etiqueta interna del path que
+        // disparó la anticipación. Permite distinguir "outroSlopeSteep" (caso
+        // nuevo, suma a A2 widening cuando A decae natural) del resto de
+        // ramas existentes (CUT-tease / PRE_PUNCH / A2 widening / noRealOutro).
+        // Propagado a `TransitionRecord` para auditoría post-coche-test sin
+        // re-parsear el `reason` humano. nil cuando no aplica este caso nuevo.
+        let anticipationReason: String?
 
-        init(needsAnticipation: Bool, anticipationTime: Double, reason: String, isPrePunch: Bool = false) {
+        init(needsAnticipation: Bool, anticipationTime: Double, reason: String, isPrePunch: Bool = false, anticipationReason: String? = nil) {
             self.needsAnticipation = needsAnticipation
             self.anticipationTime = anticipationTime
             self.reason = reason
             self.isPrePunch = isPrePunch
+            self.anticipationReason = anticipationReason
         }
     }
 
-    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0, vocalStartB: Double = 0, bpmA: Double = 0, bGenres: [String] = []) -> AnticipationResult {
+    static func decideAnticipation(fadeDuration: Double, entryPoint: Double, transitionType: TransitionType, noRealOutro: Bool = false, transitionReason: String = "", bIntroSpace: Double = 0, vocalStartB: Double = 0, bpmA: Double = 0, bGenres: [String] = [], rmsTailCurveA: [Double]? = nil, filtersAggressivePredicted: Bool = false) -> AnticipationResult {
         // No-real-outro guard: A is in full groove until the very end, so
         // anticipation (which pre-mutes A for 2-4s before the fade starts)
         // would cut material the listener is still expecting. This is one of
@@ -2713,15 +2850,80 @@ enum DJMixingService {
         let widenThreshold: Double = shouldSkipA2Widening ? 8.0 : 11.0
 
         let needs = fadeDuration < widenThreshold && hasEnoughIntro
+
+        // ── outroSlope steep / filtros agresivos helper (v13.O Commit 2, round 2026-05-10) ──
+        // Disparador del extra de anticipación. Dos triggers ortogonales:
+        //   (a) outroSlopeSteep: A decae naturalmente (slope < -0.005/s sobre
+        //       los últimos 40s = tailWindows=8). Damos aire a B antes del
+        //       fade real porque el oyente ya percibe que A "se está yendo".
+        //   (b) filtersAggressivePredicted: el llamador anticipa que se
+        //       activarán bassKill / dynamicQ / notchSweep / stutterCut. Estos
+        //       filtros son automatizaciones que mueven aire — entran de
+        //       golpe en `filterStartTime` (que cascadea desde
+        //       `anticipationTime` vía Timings). Adelantarles el rampStart
+        //       ablanda la queja del director "los filtros se aplican de
+        //       golpe" en pistas con groove constante (donde outroSlope no
+        //       dispararía). Trigger ADITIVO al outroSlope, no sustituto.
+        //
+        // Suma a A2 widening (cap total 4s) o dispara solo cuando A2 NO
+        // aplicó (fade largo / intro insuficiente). NO pisa noRealOutro /
+        // CUT-tease / PRE_PUNCH / DROP_MIX / CLEAN / VINYL (todos retornan
+        // antes de aquí). Threshold outroSlope -0.005/s y ventana de 40s
+        // buscan decay sostenido, no dip puntual del último compás.
+        // hasEnoughIntro gate aplica a AMBOS triggers: si entryPoint < 5
+        // no hay margen físico para sumar tease sin caer en zona pre-musical.
+        let outroSlopeSteepRaw: Bool = {
+            guard let slope = Self.deriveSlope(from: rmsTailCurveA, tailWindows: 8) else { return false }
+            return slope < -0.005
+        }()
+        let outroSlopeSteep = hasEnoughIntro && outroSlopeSteepRaw
+        let filtersAggressiveExtra = hasEnoughIntro && filtersAggressivePredicted
+        let extraTriggered = outroSlopeSteep || filtersAggressiveExtra
+        let outroSlopeExtra: Double = extraTriggered ? min(2.0, fadeDuration * 0.3) : 0
+        let extraReasonTag: String = {
+            switch (outroSlopeSteep, filtersAggressiveExtra) {
+            case (true, true):   return "outroSlopeSteep+filtersAggressive"
+            case (true, false):  return "outroSlopeSteep"
+            case (false, true):  return "filtersAggressive"
+            case (false, false): return ""
+            }
+        }()
+
         if needs {
             let maxAnticipation = min(4, entryPoint * 0.3)
-            let time = min(maxAnticipation, max(2, 10 - fadeDuration))
+            let baseTime = min(maxAnticipation, max(2, 10 - fadeDuration))
+            // Cap total 4s: el widening original ya acotaba a 4s. Si outroSlope
+            // sumaría por encima, lo recortamos al cap para no romper el
+            // contrato de la ventana A2 validada por bench.
+            let totalTime = min(4.0, baseTime + outroSlopeExtra)
             let detail = shouldSkipA2Widening
                 ? "fade corto, A2 gate skip (bpmA=\(String(format: "%.1f", bpmA)) drop-driven B)"
                 : "fade corto"
-            return AnticipationResult(needsAnticipation: true, anticipationTime: time,
-                                      reason: "Anticipacion: +\(String(format: "%.1f", time))s (\(detail))")
-        } else if fadeDuration >= widenThreshold {
+            if outroSlopeExtra > 0 {
+                return AnticipationResult(needsAnticipation: true, anticipationTime: totalTime,
+                                          reason: "Anticipacion: +\(String(format: "%.1f", totalTime))s (\(detail) + \(extraReasonTag) +\(String(format: "%.1f", totalTime - baseTime))s)",
+                                          anticipationReason: extraReasonTag)
+            }
+            return AnticipationResult(needsAnticipation: true, anticipationTime: totalTime,
+                                      reason: "Anticipacion: +\(String(format: "%.1f", totalTime))s (\(detail))")
+        }
+
+        // A2 widening NO aplicó. Si outroSlope steep o filtros agresivos
+        // predichos + intro suficiente, disparamos solo el extra (sin base
+        // widening): A está decayendo natural o entran filtros automatizados,
+        // y aún hay margen para tease. Cubre fades largos (>=11s o >=8s con
+        // gate skip) que sin esto no anticipaban nada.
+        if extraTriggered {
+            let maxAnticipation = min(4, entryPoint * 0.3)
+            let time = min(maxAnticipation, outroSlopeExtra)
+            if time >= 1.0 {
+                return AnticipationResult(needsAnticipation: true, anticipationTime: time,
+                                          reason: "Anticipacion: +\(String(format: "%.1f", time))s (\(extraReasonTag), fade largo)",
+                                          anticipationReason: extraReasonTag)
+            }
+        }
+
+        if fadeDuration >= widenThreshold {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: fade largo")
         } else {

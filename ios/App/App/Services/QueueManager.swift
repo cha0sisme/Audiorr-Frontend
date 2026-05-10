@@ -1050,6 +1050,11 @@ final class QueueManager: AudioEngineDelegate {
                     // persistir en TransitionRecord. Setter aquí en MainActor
                     // para evitar acceso non-isolated al singleton.
                     TransitionDiagnostics.shared.genreCapApplied = crossfadeResult.genreCapApplied
+                    // v13.O Commit 2 — cap final post-snap (Vector 1) y caso
+                    // nuevo "outroSlopeSteep" en decideAnticipation (Vector 2).
+                    // Mismo patrón MainActor que `genreCapApplied`.
+                    TransitionDiagnostics.shared.entryFinalCapApplied = crossfadeResult.entryFinalCapApplied
+                    TransitionDiagnostics.shared.anticipationReason = crossfadeResult.anticipationReason
                 }
 
                 // ── Trailing silence on A ──

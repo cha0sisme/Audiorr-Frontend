@@ -104,6 +104,15 @@ final class TransitionDiagnostics {
     /// la lista exempt drop-driven). Poblado por v13.N. nil = no aplica
     /// (entryPointSource ≠ chorus_promotion o algoritmo no llegó al gate).
     var genreCapApplied: Bool? = nil
+    /// v13.O Commit 2 (round 2026-05-10) — cap defensivo POST-snap+beat-sync.
+    /// true = entry final >50s capado a 50 (B no drop-driven). false = entry
+    /// >50s pero exempt drop-driven percussive. nil = entry pre-clamp <=50,
+    /// no se evaluó. Independiente de `genreCapApplied`.
+    var entryFinalCapApplied: Bool? = nil
+    /// v13.O Commit 2 (round 2026-05-10) — etiqueta del path de anticipación
+    /// nuevo. Solo "outroSlopeSteep" cuando A decae natural (slope < -0.005/s
+    /// en últimos 40s) y disparó extra widening. nil para resto de ramas.
+    var anticipationReason: String? = nil
     /// Lista plural de géneros de B vista por el algoritmo en el momento del
     /// cálculo. Poblada siempre que el path se ejecute (vía SongAnalysis.genres
     /// que copia de NavidromeSong.genres).
@@ -222,6 +231,11 @@ final class TransitionDiagnostics {
         //          qué géneros vio el algoritmo y validar gates post-deploy.
         var genreCapApplied: Bool? = nil
         var bGenres: [String]? = nil
+        // v13.O Commit 2 (round 2026-05-10) — cap final post-snap +
+        // anticipación por outroSlope. Optional para retrocompat con records
+        // persistidos antes de Commit 2 (decoder JSON los rellena con nil).
+        var entryFinalCapApplied: Bool? = nil
+        var anticipationReason: String? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en Documents/transition_diagnostics_history.json.
         // userRating: 0-10 (en pasos de 1, equivalente a 5 estrellas con halves).
@@ -652,7 +666,9 @@ final class TransitionDiagnostics {
                 downbeatDensityB20s: self.downbeatDensityB20s,
                 chillRecipeApplied: self.chillRecipeApplied,
                 genreCapApplied: self.genreCapApplied,
-                bGenres: self.bGenres.isEmpty ? nil : self.bGenres
+                bGenres: self.bGenres.isEmpty ? nil : self.bGenres,
+                entryFinalCapApplied: self.entryFinalCapApplied,
+                anticipationReason: self.anticipationReason
             )
             self.history.insert(record, at: 0)
             if self.history.count > self.historyLimit { self.history.removeLast() }
