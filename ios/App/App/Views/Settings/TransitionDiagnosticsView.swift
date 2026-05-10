@@ -1190,7 +1190,9 @@ struct TransitionDetailSheet: View {
                     Spacer()
                     Text(record.filtersEnabled ? "Yes" : "No")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(record.filtersEnabled ? .primary : .tertiary)
+                        .foregroundStyle(record.filtersEnabled
+                            ? AnyShapeStyle(.primary)
+                            : AnyShapeStyle(.tertiary))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
@@ -1203,7 +1205,9 @@ struct TransitionDetailSheet: View {
                     Spacer()
                     Text(record.skipBFilters ? "Yes" : "No")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(record.skipBFilters ? .yellow : .tertiary)
+                        .foregroundStyle(record.skipBFilters
+                            ? AnyShapeStyle(Color.yellow)
+                            : AnyShapeStyle(.tertiary))
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)

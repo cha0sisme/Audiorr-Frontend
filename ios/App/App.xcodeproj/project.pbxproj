@@ -44,6 +44,7 @@
 		3400FF412FA8000000000041 /* BackendState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF402FA8000000000040 /* BackendState.swift */; };
 		3400FF432FA8000000000043 /* TransitionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF422FA8000000000042 /* TransitionDiagnostics.swift */; };
 		3400FF452FA8000000000045 /* TransitionDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */; };
+		3400FF492FA8000000000049 /* TransitionDiagnosticsBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */; };
 		3400FF472FA8000000000047 /* TransitionOpinionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF462FA8000000000046 /* TransitionOpinionViews.swift */; };
 		342286B92F90CB0900785736 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286B62F90CB0900785736 /* SearchView.swift */; };
 		342286BC2F90CB1800785736 /* NavidromeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286BA2F90CB1800785736 /* NavidromeService.swift */; };
@@ -113,6 +114,7 @@
 		3400FF402FA8000000000040 /* BackendState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendState.swift; sourceTree = "<group>"; };
 		3400FF422FA8000000000042 /* TransitionDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnostics.swift; sourceTree = "<group>"; };
 		3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnosticsView.swift; sourceTree = "<group>"; };
+		3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnosticsBackend.swift; sourceTree = "<group>"; };
 		3400FF462FA8000000000046 /* TransitionOpinionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionOpinionViews.swift; sourceTree = "<group>"; };
 		342286B62F90CB0900785736 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		342286BA2F90CB1800785736 /* NavidromeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavidromeService.swift; sourceTree = "<group>"; };
@@ -236,6 +238,7 @@
 				3400FF042FA8000000000004 /* DJMixingService.swift */,
 				3400FF0E2FA800000000000E /* ConnectService.swift */,
 				3400FF422FA8000000000042 /* TransitionDiagnostics.swift */,
+				3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -489,6 +492,7 @@
 				3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */,
 				3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */,
 				3400FF432FA8000000000043 /* TransitionDiagnostics.swift in Sources */,
+				3400FF492FA8000000000049 /* TransitionDiagnosticsBackend.swift in Sources */,
 				3400FF452FA8000000000045 /* TransitionDiagnosticsView.swift in Sources */,
 				3400FF472FA8000000000047 /* TransitionOpinionViews.swift in Sources */,
 			);
