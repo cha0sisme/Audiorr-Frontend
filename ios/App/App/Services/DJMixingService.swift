@@ -121,7 +121,7 @@ enum DJMixingService {
     /// `TransitionRecord` que se sube al backend para vincular ratings con
     /// cambios concretos del repo. Historial completo en
     /// `D:\Audiorr-shared\algorithm-versions.md`.
-    public static let kAlgorithmVersion: String = "v13.O.2"
+    public static let kAlgorithmVersion: String = "v13.O.3"
 
     /// SHA git corto del commit en el que se construyó esta build. Permite al
     /// backend distinguir "v13.O.2 antes del fix X" vs "v13.O.2 después del fix
@@ -130,7 +130,7 @@ enum DJMixingService {
     /// (clave `GitCommitSha` inyectada por Xcode Cloud via xcconfig). Mientras
     /// tanto se hardcodea — bumping este string en cada commit de algoritmo
     /// es trivial y no requiere infra extra.
-    public static let kBuildId: String = "f59fdeb"
+    public static let kBuildId: String = "v13O3-pending"
 
     // MARK: - Set diversity (cooldowns)
 
@@ -1075,11 +1075,22 @@ enum DJMixingService {
         // spectral shaping needed; the gesture on A is the effect), o PRE_PUNCH
         // (B suena clean varios segundos antes del punch — el TEASE largo NO
         // tiene sentido si B viene filtrada; queremos su beat / intro al aire).
+        //
+        // v13.O.3 (#7 mínimo): CUT / CUT_A_FADE_IN_B con fade<5s también skip.
+        // Quote testigo Y¿Si fuera ella?→If I Were a Boy (CUT fade=3s, r=3):
+        // "filtro se aplicó desde el principio en playerB pero se quitaron de
+        // repente, quedó fatal". El path de filtros B con fade tan corto deja
+        // un sweep audible que se siente como artefacto de edición, no como
+        // técnica DJ. Mejor B clean en estas ventanas. Versión completa (gate
+        // análogo para CUTs 5-7s en applyFiltersB) diferida v13.O.4.
+        let isShortCut = (transition.type == .cut || transition.type == .cutAFadeInB)
+            && effectiveFadeDuration < 5.0
         var skipBFilters = effectiveFadeDuration <= 3.0
             || transition.type == .dropMix
             || transition.type == .cleanHandoff
             || transition.type == .vinylStop
             || anticipation.isPrePunch
+            || isShortCut
         if anticipation.isPrePunch {
             print("[DJMixingService] 🎬 PRE_PUNCH: forzando skipBFilters (B clean durante tease largo)")
         }
@@ -1810,9 +1821,23 @@ enum DJMixingService {
         let chorusDeepEnough = chorusStart > 35
         let chorusFarFromReference = referenceForGap > 0 && chorusStart > referenceForGap + 20
         let chorusInUsableHalf = chorusStart < bufferDuration * 0.5
+        // v13.O.3 (P3): guardia `vocalStartUsable`. Si vocalStart de B está en
+        // ventana razonable [8s, 40s] Y está suficientemente lejos del chorus
+        // (>=15s), preferir vocalStart sobre chorus. La promotion histórica
+        // disparaba aunque vocalStart fuese una intro perfectamente utilizable.
+        // Quote testigo (All Tinted → Mamichula r=3): "playerA dejaba una
+        // entrada perfecta para playerB. Sin embargo playerB ha escogido de
+        // punto de entrada muy malo y muy lejano a lo que podía ser una intro
+        // mejor". Bench v13.O.3 (1026926): 14/27 promotions reasignadas,
+        // upside teórico +0.092. La promotion solo dispara cuando vocalStart
+        // NO sirve (<8s = inutilizable, >40s = vocal tardía donde chorus gana).
+        let vocalStartUsable: Bool = vocalStart >= 8.0
+            && vocalStart <= 40.0
+            && (chorusStart - vocalStart) >= 15.0
         if isDanceable && bufferLongEnough && chorusDeepEnough
             && chorusFarFromReference && chorusInUsableHalf
-            && !chorusLikelyMislabeled {
+            && !chorusLikelyMislabeled
+            && !vocalStartUsable {
             // v13.O round 2026-05-10 — cap chorus_promotion con gate percussive.
             //
             // Director descubrió 2026-05-10 que Navidrome es generalista
@@ -2892,7 +2917,12 @@ enum DJMixingService {
         // no hay margen físico para sumar tease sin caer en zona pre-musical.
         let outroSlopeSteepRaw: Bool = {
             guard let slope = Self.deriveSlope(from: rmsTailCurveA, tailWindows: 8) else { return false }
-            return slope < -0.005
+            // v13.O.3: bajado -0.005 → -0.003. backend-guardian confirmó que
+            // rmsTailCurve cobertura backend es 100%. El 38% del trigger era
+            // threshold iOS demasiado exigente para pistas con decay gradual.
+            // Cobertura esperada: 38% → ~55-60%. Falsos positivos (outro vocal
+            // sostenido) acotados sin lastVocalTime guard — diferido v13.O.4.
+            return slope < -0.003
         }()
         let outroSlopeSteep = hasEnoughIntro && outroSlopeSteepRaw
         let filtersAggressiveExtra = hasEnoughIntro && filtersAggressivePredicted
@@ -3233,8 +3263,52 @@ enum DJMixingService {
                     reason = "Punch + bass-heavy A + B abrupta (chorus B=\(String(format: "%.0f", bChorusStart))s)\(bpmNote) → VINYL_STOP"
                 }
                 else if useDropMix && fadeDuration >= 2 {
-                    type = .dropMix
-                    reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
+                    // v13.O.3 (P2-refined-4s-bpm): DROP_MIX gate restrictivo.
+                    //
+                    // Coche-test v13.O.2: DROP_MIX N=17 mean 4.06 cola 41%.
+                    // Quote testigo MOOO!→NotYouToo r=3: "aquí un natural
+                    // blend hubiese quedado de 10". DROP_MIX se elegía por
+                    // duración (fade<5 o intro<12), ciego a si A decae o B es
+                    // realmente drop-driven.
+                    //
+                    // 3 ramas en cascada (bench v13.O.3 commit 1026926):
+                    //
+                    //  1. fadeDuration < 4s → DROP_MIX (gesto seco, sin gate).
+                    //     El drop con fade tan corto es el gesto musical.
+                    //     Preserva Berghain→Don'tStopMusic (fade=3.27s, r=9).
+                    //
+                    //  2. bpmDiff < 1.0 && beatSynced → DROP_MIX (BPM-guard).
+                    //     Cuando 2 pistas comparten grid al milisegundo
+                    //     (Psycho→BANGBANG 143.5547 BPM exacto), el corte
+                    //     seco no rompe el groove. r=9 preservado.
+                    //
+                    //  3. Resto → si A decae (rmsTailCurve slope<-0.003) o B
+                    //     NO es drop-driven percussive → plan B (BMB/NB).
+                    //     Si ni A decae ni B es plano → DROP_MIX legítimo.
+                    //
+                    // Bench: 15 transiciones reasignadas, 0 oros r≥9 tocados,
+                    // upside teórico +0.252, casos testigo confirmados.
+                    let aIsDecaying: Bool = {
+                        guard let curve = currentAnalysis?.rmsTailCurve else { return false }
+                        guard let slope = Self.deriveSlope(from: curve, tailWindows: 6) else { return false }
+                        return slope < -0.003
+                    }()
+                    let (bIsDropDriven, _) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+                    let bpmPerfectMatch = abs(profile.bpmA - profile.bpmB) < 1.0 && isBeatSynced
+
+                    if fadeDuration < 4 {
+                        type = .dropMix
+                        reason = "Punch + fade muy corto (\(String(format: "%.1f", fadeDuration))s) → DROP_MIX (gesto seco)"
+                    } else if bpmPerfectMatch {
+                        type = .dropMix
+                        reason = "Punch + BPM-grid perfecto (diff<1.0, sync) → DROP_MIX (corte seguro)"
+                    } else if aIsDecaying || !bIsDropDriven {
+                        type = isBeatSynced ? .beatMatchBlend : .naturalBlend
+                        reason = "Plan B DROP_MIX rechazado (aDecaying=\(aIsDecaying), bDropDriven=\(bIsDropDriven)) → \(isBeatSynced ? "BEAT_MATCH_BLEND" : "NATURAL_BLEND")"
+                    } else {
+                        type = .dropMix
+                        reason = "Punch + intro B corta (\(String(format: "%.0f", bIntroLen))s) → DROP_MIX (\(String(format: "%.1f", fadeDuration))s)"
+                    }
                 }
                 // ── Full DJ treatment ──
                 // Guard: STEM_MIX requires bpmDiff < 6. The mid-scoop and dynamic-Q

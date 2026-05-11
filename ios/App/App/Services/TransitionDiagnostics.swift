@@ -644,7 +644,13 @@ final class TransitionDiagnostics {
                 chillRecipeApplied: self.chillRecipeApplied,
                 genreCapApplied: self.genreCapApplied,
                 bGenres: self.bGenres.isEmpty ? nil : self.bGenres,
-                entryFinalCapApplied: self.entryFinalCapApplied,
+                // v13.O.3: serializa siempre con false por defecto. Antes el
+                // campo era `Bool?` con default nil y JSONEncoder lo omitía,
+                // dejando la cobertura backend al 13% (solo cuando entry>50).
+                // El log-analyst no podía distinguir "no aplicó cap" de "no
+                // se evaluó" — comparativas contaminadas. Forzar false
+                // distingue ambos casos y desbloquea análisis del cap real.
+                entryFinalCapApplied: self.entryFinalCapApplied ?? false,
                 anticipationReason: self.anticipationReason,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId

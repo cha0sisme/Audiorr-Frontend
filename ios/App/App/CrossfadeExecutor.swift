@@ -273,11 +273,20 @@ class CrossfadeExecutor {
         highShelfA: .init(frequency: 7000, startGain: 0, endGain: -12)
     )
 
+    // v13.O.3: banda B alineada con Aggressive (800→200→60 hpB, -12→-6→0 lsB).
+    // Antes Anticipation carve B MÁS fuerte que Aggressive (1200→600→40 hpB,
+    // 4.9 octavas vs 3.7 de Aggressive). Razón histórica: "construir tensión
+    // en el pre-fade". Pero Anticipation se elige cuando NO hay clash sino
+    // margen temporal — un carve extremo de B sin clash subyacente es
+    // contraproducente: no resuelve nada, crea un problema innecesario.
+    // Quote testigo: Sci Fi → Sweater Weather (anticipationReason=
+    // filtersAggressive, r=8) "playerB aplicó filtros o fade demasiado rápido".
+    // Banda A se queda igual — la "construcción de tensión" en A sí funciona.
     static let presetAnticipation = FilterPreset(
         highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 1.2),
-        highpassB: .init(startFreq: 1200, midFreq: 600, endFreq: 40, q: 0.6),
+        highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.6),
         lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -16),
-        lowshelfB: .init(frequency: 200, startGain: -15, midGain: -9, endGain: 0),
+        lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
         lowpassA: nil,
         midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -15),
         highShelfA: .init(frequency: 8000, startGain: 0, endGain: -10)
@@ -773,7 +782,14 @@ class CrossfadeExecutor {
         if config.transitionType == .cleanHandoff || config.transitionType == .vinylStop {
             filterLead = 0
         } else {
-            filterLead = config.useFilters ? min(1.5, config.fadeDuration * 0.2) : 0
+            // v13.O.3: extendido de min(1.5, * 0.2) → min(2.5, * 0.35). El sweep
+            // de filtros arranca antes del volume fade-out, dando al oído margen
+            // perceptual para acomodarse al cambio espectral mientras A todavía
+            // suena fuerte. Quote textual del director: "si nos anticipamos un
+            // poco y los aplicamos poco a poco". Invariante swap preservada:
+            // duration = config.fadeDuration es independiente de filterLead;
+            // gainForPlayerA(progress=1.0) sigue dando 0 (ver Timings:782).
+            filterLead = config.useFilters ? min(2.5, config.fadeDuration * 0.35) : 0
         }
 
         // FadeOut = fadeDuration (1:1). No multiplier — A disappears cleanly
@@ -2113,32 +2129,43 @@ class CrossfadeExecutor {
         let effectiveBassSwapTime = max(bassSwapTime, rampStart)
 
         // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
-        // v11 (audit 2026-05-05): linearizado expInterp → linInterp en band 0.
-        // expInterp acelera al final del sweep — el oyente percibia "filtros
-        // limpios todo el fade y de pronto se nubla" en transiciones blendy.
-        // linInterp distribuye la subida uniformemente; el sweep se siente
-        // como "una nube que entra desde lejos" en vez de "velo que cae al
-        // final". DJ profesional. La bell de Q (qProgress temporal) es
-        // ortogonal — sigue centrada en 0.55 con sus propias dimensiones.
+        // v13.O.3 (audit 2026-05-11): linInterp → expInterp REACTIVADO en band 0.
+        //
+        // Contexto histórico: v11 desactivó expInterp porque "aceleraba al final
+        // del sweep" — pero eso era con pivot=0.60. El mismo audit v8 movió el
+        // pivot a 0.40 (líneas 2097-2106) y el contexto matemático se invirtió:
+        // con pivot=0.40 + linInterp, el oído humano (logarítmico, octavas)
+        // percibe 3.32 octavas en el 40% inicial y solo 1 octava en el 60%
+        // final (preset Normal 400→4000→8000Hz). El 76.85% del trabajo
+        // perceptual queda concentrado en el primer 40% del fade, justo
+        // cuando A todavía suena fuerte — exactamente el síntoma "filtros
+        // de golpe" del coche-test v13.O.2 (20+ menciones del director).
+        //
+        // expInterp = a·(b/a)^t distribuye octavas linealmente en log-Hz:
+        // cada segundo del fade aporta octavas_totales/segundos constante.
+        // Sweep uniforme → "perilla del DJ moviéndose suave de principio a
+        // fin". Aplicado a band 0 únicamente (band 1/2/3 ya están en dB que
+        // es logarítmico). La bell de Q (qProgress temporal) sigue ortogonal,
+        // centrada en 0.55 con sus propias dimensiones.
         var freqA: Float
         let band0A: BiquadCoefficients
         if useLowpassA, let lpA = preset.lowpassA {
             let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
             if t < pivotTime {
                 let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = linInterp(lpA.startFreq, midFreq, min(1, p))
+                freqA = expInterp(lpA.startFreq, midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = linInterp(midFreq, lpA.endFreq, min(1, p))
+                freqA = expInterp(midFreq, lpA.endFreq, min(1, p))
             }
             band0A = BiquadCoefficientCalculator.lowpass(frequency: freqA, sampleRate: sampleRate, Q: lpA.q)
         } else {
             if t < pivotTime {
                 let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = linInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
+                freqA = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
             } else {
                 let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = linInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
+                freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
             }
             // Dynamic Q Resonance: bell-shaped Q curve that peaks mid-crossfade.
             // Creates the classic DJ "sweeping filter" resonance at the cutoff frequency.
@@ -2251,24 +2278,33 @@ class CrossfadeExecutor {
         var hpFreq: Float
         var lsGain: Float
 
+        // v13.O.3: hpFreq de B en expInterp (espacio log-Hz uniforme). El sweep
+        // descendente de B (1200→40 en Anticipation legacy, 800→60 en
+        // Anticipation v13.O.3) cubre 3.7-4.9 octavas. Con linInterp, B
+        // "se llena de graves de golpe" en el último tercio del fade. Con
+        // expInterp el sweep se reparte uniforme en octavas → B se abre
+        // suave de agudos a graves. lsGain mantiene linInterp porque dB ya
+        // es logarítmico. Quotes testigo: "filtros se quitaron de repente,
+        // quedó fatal" (Y¿Si fuera ella?→If I Were a Boy), "los filtros
+        // aplican de un lado y del otro de repente" (Feel No Ways→Where).
         if config.needsAnticipation {
             if t < timings.filterStartTime {
                 let dur = timings.filterStartTime - timings.anticipationStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.anticipationStartTime) / dur)
-                hpFreq = linInterp(preset.highpassB.startFreq, preset.highpassB.midFreq, p)
+                hpFreq = expInterp(preset.highpassB.startFreq, preset.highpassB.midFreq, p)
                 lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.midGain, p)
             } else if t < timings.fadeInStartTime {
                 let dur = timings.fadeInStartTime - timings.filterStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.filterStartTime) / dur)
-                hpFreq = linInterp(preset.highpassB.midFreq, 300, p)
+                hpFreq = expInterp(preset.highpassB.midFreq, 300, p)
                 lsGain = linInterp(preset.lowshelfB.midGain, -4, p)
             } else if t < timings.fadeInEndTime {
                 let dur = timings.fadeInEndTime - timings.fadeInStartTime
                 guard dur > 0 else { return }
                 let p = Float((t - timings.fadeInStartTime) / dur)
-                hpFreq = linInterp(300, preset.highpassB.endFreq, p)
+                hpFreq = expInterp(300, preset.highpassB.endFreq, p)
                 lsGain = linInterp(-4, preset.lowshelfB.endGain, p)
             } else {
                 hpFreq = preset.highpassB.endFreq
@@ -2293,7 +2329,11 @@ class CrossfadeExecutor {
             let dur = timings.fadeInEndTime - timings.fadeInStartTime
             guard dur > 0 else { return }
             let p = Float(min(1, (t - timings.fadeInStartTime) / dur))
-            hpFreq = linInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
+            // v13.O.3: expInterp para sweep log-uniforme. Esta rama "no
+            // anticipation" toca presetGentle también (NATURAL_BLEND oro
+            // 10/10). Riesgo bajo (Gentle es 250→40Hz = 2.64 octavas, sweep
+            // ya muy suave) — monitorizar en coche-test v13.O.3.
+            hpFreq = expInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
             if useBassManagement {
                 if useBassKill {
                     // Bass Kill coordination: B keeps bass filtered (startGain, e.g. -8dB)
