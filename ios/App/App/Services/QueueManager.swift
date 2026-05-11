@@ -1618,21 +1618,21 @@ final class QueueManager: AudioEngineDelegate {
         repeatMode = RepeatMode(rawValue: persistence.repeatMode) ?? .off
 
         // Restore playback mode + context URI with coherence validation.
-        // Invariants for `.dj` to be honored at cold-start:
-        //   1. Persisted contextUri must start with "smartmix:" (the only `.dj` source).
-        //   2. Backend must be available (SmartMix is gated by it; without backend
-        //      the algorithm can't operate fully).
-        // Either invariant violated → fallback to `.normal` (defensive). The user
-        // can re-enter `.dj` by tapping SmartMix again.
+        // Single invariant for `.dj` at cold-start: persisted contextUri must
+        // start with "smartmix:" (the only `.dj` source). We do NOT gate by
+        // BackendState.isAvailable here: `check()` is async and runs from
+        // ContentView.task, so at this point isAvailable is still its `false`
+        // initial value and gating on it would always demote `.dj` → `.normal`
+        // even when the user had an active SmartMix when the app was killed.
+        // If the backend is still warming up when the next transition arrives,
+        // DJMixingService falls back to a flat crossfade (curAn==nil → hasError).
         let restoredContextUri = persistence.contextUri
         let restoredMode = PlaybackMode(rawValue: persistence.playbackMode) ?? .normal
-        if restoredMode == .dj
-            && restoredContextUri.hasPrefix("smartmix:")
-            && BackendState.shared.isAvailable {
+        if restoredMode == .dj && restoredContextUri.hasPrefix("smartmix:") {
             currentPlaybackMode = .dj
         } else {
             if restoredMode == .dj {
-                print("[QueueManager] cold-start `.dj` invariants failed (contextUri=\(restoredContextUri), backend=\(BackendState.shared.isAvailable)) — falling back to .normal")
+                print("[QueueManager] cold-start `.dj` rejected (contextUri=\(restoredContextUri)) — falling back to .normal")
             }
             currentPlaybackMode = .normal
         }
@@ -1716,17 +1716,19 @@ final class QueueManager: AudioEngineDelegate {
                 persistence.currentIndex = currentIndex
                 persistence.lastSongId = currentSong?.id
 
-                // Restore mode + contextUri from backend response with the same
-                // invariants enforced in restoreState(). Any field absent → fallback.
+                // Restore mode + contextUri from backend response with the
+                // single invariant from restoreState(): contextUri must start
+                // with "smartmix:". The BackendState.isAvailable guard is NOT
+                // applied — we just round-tripped through the backend to read
+                // this, so it's available by definition (and the cold-start
+                // race in restoreState() is the same one we're avoiding here).
                 let restoredContextUri = last.contextUri ?? ""
                 let restoredMode = PlaybackMode(rawValue: last.playbackMode ?? "") ?? .normal
-                if restoredMode == .dj
-                    && restoredContextUri.hasPrefix("smartmix:")
-                    && BackendState.shared.isAvailable {
+                if restoredMode == .dj && restoredContextUri.hasPrefix("smartmix:") {
                     currentPlaybackMode = .dj
                 } else {
                     if restoredMode == .dj {
-                        print("[QueueManager] backend-restore `.dj` invariants failed — falling back to .normal")
+                        print("[QueueManager] backend-restore `.dj` rejected (contextUri=\(restoredContextUri)) — falling back to .normal")
                     }
                     currentPlaybackMode = .normal
                 }
