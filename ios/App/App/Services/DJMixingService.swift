@@ -3293,7 +3293,7 @@ enum DJMixingService {
                         guard let slope = Self.deriveSlope(from: curve, tailWindows: 6) else { return false }
                         return slope < -0.003
                     }()
-                    let (bIsDropDriven, _) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+                    let (bIsDropDriven, _) = Self.isBDropDrivenByPercussive(nextAnalysis?.percussiveCurve)
                     let bpmPerfectMatch = abs(profile.bpmA - profile.bpmB) < 1.0 && isBeatSynced
 
                     if fadeDuration < 4 {
