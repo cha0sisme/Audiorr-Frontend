@@ -121,7 +121,7 @@ enum DJMixingService {
     /// `TransitionRecord` que se sube al backend para vincular ratings con
     /// cambios concretos del repo. Historial completo en
     /// `D:\Audiorr-shared\algorithm-versions.md`.
-    public static let kAlgorithmVersion: String = "v13.O.3"
+    public static let kAlgorithmVersion: String = "v13.O.4"
 
     /// SHA git corto del commit en el que se construyó esta build. Permite al
     /// backend distinguir "v13.O.2 antes del fix X" vs "v13.O.2 después del fix
@@ -130,7 +130,7 @@ enum DJMixingService {
     /// (clave `GitCommitSha` inyectada por Xcode Cloud via xcconfig). Mientras
     /// tanto se hardcodea — bumping este string en cada commit de algoritmo
     /// es trivial y no requiere infra extra.
-    public static let kBuildId: String = "v13O3-pending"
+    public static let kBuildId: String = "v13O4-pending"
 
     // MARK: - Set diversity (cooldowns)
 

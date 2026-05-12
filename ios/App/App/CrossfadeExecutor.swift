@@ -2061,6 +2061,45 @@ class CrossfadeExecutor {
     // MARK: - Filter A automation (port exacto de AudioEffectsChain.ts líneas 209-224)
 
     private func applyFiltersA(at t: Double) {
+        // v13.O.4 H1 — pre-roll de filtros A (band 0 highpass).
+        // El guard t >= filterStartTime hacía saltar dspA de passthrough total
+        // a highpass(400-600Hz, Q=1.1) en un solo tick a 60Hz. Step discreto
+        // audible como "filtro de golpe" en 17 quotes del director coche-test
+        // v13.O.3 en BMBs rating 8-10 (cluster oro). Issue
+        // 2026-05-12-v13O3-rated-analysis.md sec E1.
+        //
+        // Fix: ventana corta previa donde band 0 rampea desde 20Hz (passthrough
+        // perceptual, -3dB @ 20Hz infrasonido) hasta startFreq del preset.
+        // expInterp para sweep uniforme en log-Hz (igual semántica que el
+        // sweep principal del fade). Bands 1/2/3 quedan passthrough — sus
+        // startGain=0dB las hace neutras, no requieren pre-roll.
+        //
+        // Verificado devils-advocate: setCoefficients no resetea delay line,
+        // z1=z2=0 al arrancar (stage estaba en passthrough → skipped), DFII-T
+        // topología constante. Cambio de coeficientes mid-stream sin click —
+        // precedente: línea 2270 ya cambia coeficientes a 60Hz en producción.
+        //
+        // No aplica a: CUT family (gate downstream), CLEAN_HANDOFF/VINYL_STOP
+        // (sin overlap), lowpass A (EnergyDown — lowpass 20Hz silenciaría
+        // toda la banda audible, semántica invertida).
+        let isCutFamily = config.transitionType == .cut || config.transitionType == .cutAFadeInB
+        let isNoOverlap = config.transitionType == .cleanHandoff || config.transitionType == .vinylStop
+        let preRollDur = min(0.5, timings.filterLead * 0.3)
+        if !isCutFamily && !isNoOverlap && !useLowpassA && preRollDur > 0 {
+            let preRollStart = timings.filterStartTime - preRollDur
+            if t >= preRollStart && t < timings.filterStartTime {
+                let p = Float((t - preRollStart) / preRollDur)
+                let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, p))
+                let band0A = BiquadCoefficientCalculator.highpass(
+                    frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
+                dspA.setCoefficients(
+                    band0: band0A, band1: .passthrough,
+                    band2: .passthrough, band3: .passthrough)
+                diagFreqA = freqA
+                return
+            }
+        }
+
         guard t >= timings.filterStartTime else { return }
 
         // CUT family: special handling.
