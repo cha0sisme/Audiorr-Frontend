@@ -3116,11 +3116,17 @@ enum DJMixingService {
         var type: TransitionType = .crossfade
         var reason = "Transicion normal"
 
-        // Very short fades: force CUT
-        if fadeDuration < 3 {
+        // v13.O.4 H6 — floor bajado de <3 a <2. En coche-test v13.O.3,
+        // 45% de los CUTs (20/44) llevaban "Fade muy corto" — fades raw de
+        // 2.0-2.9s calculados upstream que el floor convertía en CUT seco
+        // y luego CrossfadeExecutor clampaba a [3,7]. Caso testigo Ps&Qs→
+        // Water (raw=2.5s, r=1, comment "para qué hacer fade si literalmente
+        // empezamos en el primer segundo de B"): el director NO pide más
+        // fade — pide menos ceremonia. Fades 2.0-2.9 son musicalmente válidos
+        // (outro corto real / entry temprano legítimo) y deben caer al
+        // switch normal en lugar de degradarse a CUT.
+        if fadeDuration < 2 {
             type = .cut
-            // CUT clamps fadeDuration to [3, 7] downstream, so log raw + ejecutado
-            // for the diagnostic log to match the TIMING line.
             reason = "Fade muy corto (raw=\(String(format: "%.1f", fadeDuration))s, ejecutado=3.0s) → CUT directo"
         }
         // ── Character-biased selection ──
@@ -3331,12 +3337,16 @@ enum DJMixingService {
                     type = .beatMatchBlend
                     reason = "Punch + beats sync (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → BEAT_MATCH_BLEND"
                 } else if isAAbrupt && isBAbrupt {
-                    if fadeDuration < 4 {
+                    // v13.O.4 H6 — sincronizado con floor general <2.
+                    // Antes fade<4→CUT capturaba fades de 2.0-3.9s y los
+                    // degradaba. Ahora 2.0-3.9 pasan a EQ_MIX (mid-scoop
+                    // permite limpiar el clash) y solo fade<2 cae a CUT.
+                    if fadeDuration < 2 {
                         type = .cut
-                        reason = "Ambos abruptos + fade corto → CUT"
+                        reason = "Ambos abruptos + fade muy corto → CUT"
                     } else {
                         type = .eqMix
-                        reason = "Ambos abruptos + fade largo → EQ_MIX"
+                        reason = "Ambos abruptos → EQ_MIX (mid-scoop limpia clash)"
                     }
                 } else if isAAbrupt && !isBAbrupt {
                     type = .cutAFadeInB
