@@ -510,28 +510,84 @@ final class NavidromeService: ObservableObject {
         return Array(merged.prefix(count))
     }
 
-    /// Albums where the artist appears as a collaborator (not the main artist).
-    /// Mirrors navidromeApi.ts `getArtistCollaborations`.
-    func getArtistCollaborations(artistName: String) async -> [NavidromeAlbum] {
+    /// Albums where the artist appears as a collaborator (no es el primary).
+    ///
+    /// Approach (espejo del web):
+    ///   1. `search3(artistName, songCount=500)` — pedimos pistas, no albums:
+    ///      el albumArtist tag solo refleja al primary, y los features
+    ///      canción-a-canción quedan fuera de `search3` filtrado por album.
+    ///   2. Por cada song, comprobamos si el artista buscado está en
+    ///      `song.artists[]` (OpenSubsonic, captura features por id) o, como
+    ///      fallback para servers sin esa extensión, si `song.artistId` es el
+    ///      artista (la song es suya pero el album padre puede ser de otro).
+    ///   3. Dedupe por `albumId`, restamos `primaryAlbumIds` (los albums donde
+    ///      el artista YA es el primary — vienen de `getArtist().album` y se
+    ///      mostrarían en la sección de Discografía, no en "Aparece en").
+    ///   4. Resolvemos meta de cada album con `getAlbumDetail` en paralelo
+    ///      (TaskGroup).
+    ///
+    /// Reemplaza dos approaches anteriores:
+    ///   - search2 + string-match contra `album.artist` (legacy, frágil): solo
+    ///     capturaba collabs reflejadas en el albumArtist del album.
+    ///   - getAlbumList2?type=byArtist: Navidrome solo lista albums donde el
+    ///     artista es albumArtist principal — tampoco incluye feats por canción.
+    func getArtistCollaborations(
+        artistId: String,
+        artistName: String,
+        primaryAlbumIds: Set<String>
+    ) async -> [NavidromeAlbum] {
+        guard !artistId.isEmpty, !artistName.isEmpty else { return [] }
         guard let base = baseURL() else { return [] }
         let q = artistName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? artistName
-        let urlStr = "\(base)/rest/search2.view?\(authQuery())&query=\(q)&artistCount=0&albumCount=1000&songCount=0"
+        let urlStr = "\(base)/rest/search3.view?\(authQuery())&query=\(q)&artistCount=0&albumCount=0&songCount=500"
         guard let url = URL(string: urlStr),
               let (data, _) = try? await URLSession.shared.data(from: url),
-              let response = try? JSONDecoder.decodeSubsonic(Search2Response.self, from: data),
+              let response = try? JSONDecoder.decodeSubsonic(Search3Response.self, from: data),
               response.status == "ok"
         else { return [] }
 
-        let lower = artistName.lowercased()
-        let mainPrefixes = [",", " &", " and", " ", " feat", " ft", " featuring"]
-
-        return (response.searchResult2?.album ?? [])
-            .filter { album in
-                let a = album.artist.lowercased()
-                let isMain = a == lower || mainPrefixes.contains { a.hasPrefix(lower + $0) }
-                return !isMain && a.contains(lower)
+        // 1. Recolectar albumIds candidatos: songs donde el artistId está
+        //    presente como feature o como primary de la pista.
+        var candidateAlbumIds = Set<String>()
+        for song in response.searchResult3?.song ?? [] {
+            guard let albumId = song.albumId, !albumId.isEmpty else { continue }
+            if primaryAlbumIds.contains(albumId) { continue }
+            let inArtistsArray = song.artists?.contains(where: { $0.id == artistId }) ?? false
+            // Fallback: si el server no expone `artists[]`, comparamos contra
+            // el `artistId` singular de la song. Cubre el caso "song es del
+            // artista, pero el album padre lo etiqueta como otro primary".
+            let isPrimaryOfSong = song.artistId == artistId
+            if inArtistsArray || isPrimaryOfSong {
+                candidateAlbumIds.insert(albumId)
             }
-            .sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+        }
+
+        guard !candidateAlbumIds.isEmpty else { return [] }
+
+        // 2. Resolver meta de cada album en paralelo. `getAlbumDetail` ya
+        //    cachea en NavidromeService, así que si la disco ya tocó algunos
+        //    de estos albums, sale gratis.
+        let albums = await withTaskGroup(of: NavidromeAlbum?.self) { group -> [NavidromeAlbum] in
+            for id in candidateAlbumIds {
+                group.addTask {
+                    // `getAlbumDetail` devuelve una tupla cuyo `.album` ya es
+                    // `NavidromeAlbum?`. El `try?` envuelve toda la tupla en
+                    // un opcional más, así que necesitamos aplanar a un único
+                    // nivel para que la closure encaje en `NavidromeAlbum?`.
+                    guard let detail = try? await NavidromeService.shared.getAlbumDetail(albumId: id) else {
+                        return nil
+                    }
+                    return detail.album
+                }
+            }
+            var out: [NavidromeAlbum] = []
+            for await maybe in group {
+                if let a = maybe { out.append(a) }
+            }
+            return out
+        }
+
+        return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     }
 
     /// Playlists containing at least one song by the artist (excludes smart +

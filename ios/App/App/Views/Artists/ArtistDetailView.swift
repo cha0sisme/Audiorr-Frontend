@@ -87,9 +87,25 @@ final class ArtistDetailViewModel: ObservableObject {
         infoIsLoading = true
         playlistsAreLoading = true
 
+        // Si los albums principales aún no llegaron (loadAlbums corre en
+        // paralelo y suele resolver antes, pero no está garantizado), esperamos
+        // — `getArtistCollaborations` necesita `primaryAlbumIds` para no
+        // duplicar discografía en "Aparece en".
+        if albums.isEmpty && isLoadingAlbums {
+            for _ in 0..<20 {  // ~2s max
+                if !isLoadingAlbums { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        let primaryIds = Set(albums.map(\.id))
+
         // Info + collaborations are Navidrome-only — safe to run always
         async let infoTask    = api.getArtistInfo(artistId: artist.id)
-        async let collabsTask = api.getArtistCollaborations(artistName: artist.name)
+        async let collabsTask = api.getArtistCollaborations(
+            artistId: artist.id,
+            artistName: artist.name,
+            primaryAlbumIds: primaryIds
+        )
 
         self.info = await infoTask
         self.collaborations = await collabsTask

@@ -10,6 +10,17 @@ struct NavidromeCredentials: Codable {
 
 // MARK: - Domain models (mirrors TypeScript interfaces)
 
+/// OpenSubsonic `ItemArtist` — `{ id, name }` por cada artista de una pista o
+/// álbum. Navidrome lo expone en `song.artists[]` / `album.artists[]` cuando el
+/// ID3 multi-artist está poblado. Permite detectar features por id (en lugar de
+/// hacer string-matching contra `artist`, que solo trae el primary). Si el
+/// servidor no expone este campo, viene `nil` y los call-sites hacen fallback
+/// al `artistId` singular.
+struct ItemArtist: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+}
+
 struct NavidromeSong: Identifiable, Decodable, Hashable {
     let id: String
     let title: String
@@ -29,6 +40,12 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     /// "Pop" (Navidrome serializes only the primary tag in the singular field).
     let genres: [String]
     let explicitStatus: String?
+    /// OpenSubsonic extension. Lista completa de artistas de la pista
+    /// (incluyendo features). Si el server no la expone, viene `nil` y hay
+    /// que fallback al string `artist`. La usa el "Aparece en" del perfil
+    /// de artista para detectar collabs canción-a-canción, y el menú
+    /// contextual de SongRow para el toggle "Ver artista" / "Ver artistas".
+    let artists: [ItemArtist]?
     let replayGainTrackGain: Double?
     let replayGainTrackPeak: Double?
     let replayGainAlbumGain: Double?
@@ -64,6 +81,7 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case id, title, artist, artistId, album, albumId, coverArt
         case duration, track, year, genre, genres, explicitStatus
+        case artists
         case replayGain
     }
 
@@ -95,6 +113,15 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
         }
         genres = parsedGenres
         explicitStatus = try c.decodeIfPresent(String.self, forKey: .explicitStatus)
+        // OpenSubsonic `artists` array. Filtramos entradas con id vacío para
+        // no propagar basura. Si el server no lo emite, queda `nil` y los
+        // consumidores hacen fallback al `artistId` singular.
+        if let arr = try? c.decodeIfPresent([ItemArtist].self, forKey: .artists) {
+            let cleaned = arr.filter { !$0.id.isEmpty && !$0.name.isEmpty }
+            artists = cleaned.isEmpty ? nil : cleaned
+        } else {
+            artists = nil
+        }
         let rg = try c.decodeIfPresent(ReplayGainData.self, forKey: .replayGain)
         replayGainTrackGain = rg?.trackGain
         replayGainTrackPeak = rg?.trackPeak
@@ -107,6 +134,7 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
          duration: Double?, track: Int?, year: Int?, genre: String?,
          genres: [String] = [],
          explicitStatus: String?,
+         artists: [ItemArtist]? = nil,
          replayGainTrackGain: Double?, replayGainTrackPeak: Double?,
          replayGainAlbumGain: Double?, replayGainAlbumPeak: Double?) {
         self.id = id; self.title = title; self.artist = artist; self.artistId = artistId
@@ -120,6 +148,7 @@ struct NavidromeSong: Identifiable, Decodable, Hashable {
             self.genres = genres
         }
         self.explicitStatus = explicitStatus
+        self.artists = artists
         self.replayGainTrackGain = replayGainTrackGain; self.replayGainTrackPeak = replayGainTrackPeak
         self.replayGainAlbumGain = replayGainAlbumGain; self.replayGainAlbumPeak = replayGainAlbumPeak
     }
@@ -139,12 +168,30 @@ extension NavidromeSong {
         if let v = year       { d["year"] = v }
         if let v = genre      { d["genre"] = v }
         if !genres.isEmpty    { d["genres"] = genres }
+        if let v = artists, !v.isEmpty {
+            d["artists"] = v.map { ["id": $0.id, "name": $0.name] }
+        }
         return d
     }
 
     /// Deserialize from a Socket.IO dictionary.
     init?(fromDictionary d: [String: Any]) {
         guard let id = d["id"] as? String, !id.isEmpty else { return nil }
+        // OpenSubsonic `artists`: array de `{id, name}`. Reconstruimos solo si
+        // todos los items tienen ambos campos, si no, dejamos `nil` para que
+        // los call-sites caigan al fallback con `artistId` singular.
+        let parsedArtists: [ItemArtist]?
+        if let raw = d["artists"] as? [[String: Any]] {
+            let mapped = raw.compactMap { item -> ItemArtist? in
+                guard let aid = item["id"] as? String, !aid.isEmpty,
+                      let nm  = item["name"] as? String, !nm.isEmpty
+                else { return nil }
+                return ItemArtist(id: aid, name: nm)
+            }
+            parsedArtists = mapped.isEmpty ? nil : mapped
+        } else {
+            parsedArtists = nil
+        }
         self.init(
             id: id,
             title: d["title"] as? String ?? "",
@@ -159,6 +206,7 @@ extension NavidromeSong {
             genre: d["genre"] as? String,
             genres: d["genres"] as? [String] ?? [],
             explicitStatus: d["explicitStatus"] as? String,
+            artists: parsedArtists,
             replayGainTrackGain: d["replayGainTrackGain"] as? Double,
             replayGainTrackPeak: d["replayGainTrackPeak"] as? Double,
             replayGainAlbumGain: d["replayGainAlbumGain"] as? Double,
@@ -277,6 +325,21 @@ struct Search2Response: Decodable {
     let searchResult2: Search2Results?
 
     struct Search2Results: Decodable {
+        let artist: [NavidromeArtist]?
+        let album: [NavidromeAlbum]?
+        let song: [NavidromeSong]?
+    }
+}
+
+/// `search3.view` — variante con IDs no-legacy y soporte completo de OpenSubsonic
+/// extensions (incluye `song.artists[]`). Estructuralmente idéntica a `search2`,
+/// pero la usamos cuando necesitamos campos OpenSubsonic — `getArtistCollaborations`
+/// la consume para filtrar songs por `artists[].id`.
+struct Search3Response: Decodable {
+    let status: String
+    let searchResult3: Search3Results?
+
+    struct Search3Results: Decodable {
         let artist: [NavidromeArtist]?
         let album: [NavidromeAlbum]?
         let song: [NavidromeSong]?
