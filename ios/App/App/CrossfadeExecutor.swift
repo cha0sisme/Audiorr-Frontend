@@ -2092,9 +2092,20 @@ class CrossfadeExecutor {
                 let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, p))
                 let band0A = BiquadCoefficientCalculator.highpass(
                     frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
-                dspA.setCoefficients(
-                    band0: band0A, band1: .passthrough,
-                    band2: .passthrough, band3: .passthrough)
+                // Hv5-1: bands 1/2/3 = coefs estables del setup (idénticos a
+                // setupInitialEQ:1219-1242) en vez de .passthrough. Evita salto
+                // numérico en filterStartTime cuando startGain != 0 (lowshelfA,
+                // midScoopA, highShelfA con gain inicial no nulo).
+                let band1A: BiquadCoefficients = (useBassManagement ? preset.lowshelfA.map {
+                    BiquadCoefficientCalculator.lowShelf(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain)
+                } : nil) ?? .passthrough
+                let band2A: BiquadCoefficients = (useMidScoop ? preset.midScoopA.map {
+                    BiquadCoefficientCalculator.parametric(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain, bandwidth: $0.bandwidth)
+                } : nil) ?? .passthrough
+                let band3A: BiquadCoefficients = (useHighShelfCut ? preset.highShelfA.map {
+                    BiquadCoefficientCalculator.highShelf(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain)
+                } : nil) ?? .passthrough
+                dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
                 diagFreqA = freqA
                 return
             }
