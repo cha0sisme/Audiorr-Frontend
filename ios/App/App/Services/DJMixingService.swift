@@ -121,7 +121,7 @@ enum DJMixingService {
     /// `TransitionRecord` que se sube al backend para vincular ratings con
     /// cambios concretos del repo. Historial completo en
     /// `D:\Audiorr-shared\algorithm-versions.md`.
-    public static let kAlgorithmVersion: String = "v13.O.4"
+    public static let kAlgorithmVersion: String = "v13.O.5"
 
     /// SHA git corto del commit en el que se construyó esta build. Permite al
     /// backend distinguir "v13.O.2 antes del fix X" vs "v13.O.2 después del fix
@@ -130,7 +130,7 @@ enum DJMixingService {
     /// (clave `GitCommitSha` inyectada por Xcode Cloud via xcconfig). Mientras
     /// tanto se hardcodea — bumping este string en cada commit de algoritmo
     /// es trivial y no requiere infra extra.
-    public static let kBuildId: String = "v13O4-pending"
+    public static let kBuildId: String = "v13O5-pending"
 
     // MARK: - Set diversity (cooldowns)
 
@@ -812,7 +812,7 @@ enum DJMixingService {
         )
 
         // ── 6. Transition type — decided BEFORE anticipation so CUT can get its own tease ──
-        let transition = decideTransitionType(
+        var transition = decideTransitionType(
             currentAnalysis: safeCurrent,
             nextAnalysis: safeNext,
             profile: profile,
@@ -825,6 +825,47 @@ enum DJMixingService {
             outroInstrumental: preOutroInstrumental,
             introInstrumental: preIntroInstrumental
         )
+
+        // ── 6b. Hv5-3 (v13.O.5): DROP_MIX → BMB redirect para cluster mid-entry ──
+        //
+        // Coche-test v13.O.4 (N=98): subset DROP_MIX entry [5,15) mean 3.33
+        // (N=6 con r≤4: HELICOPTER→BOP, Berghain→The Time, Espresso→I Just
+        // Might, Kill Yourself→Teeth, THE zone→The Race, N95→NIP).
+        // DROP_MIX seco sin anticipation con entry mediano + BPM divergente
+        // suena a "B aparece de la nada al cargo de A en marcha".
+        //
+        // Cinturones para preservar oro:
+        //   - entry ∈ [5, 15): el cluster malo vive aquí. <5 es kick-roll
+        //     legítimo (oros r=10 Adan y Eva→Say So, r=9 Raindance→Too Much).
+        //     ≥15 incluye Won't Be Late→48 (entry=35.6, r=10, queja real
+        //     de filtros A — H1 lo cubre, no de tipo).
+        //   - bpmDiff ≥ 5: BPM-perfect match ya protegido por gate línea
+        //     ~3308 (bpmPerfectMatch → DROP_MIX seguro). Pero aún hay
+        //     bpmDiff=0 en cluster malo (HELICOPTER, Berghain) que ya no
+        //     llegan aquí. Este guard ataca pares con desfase rítmico real.
+        //   - src != punchVocalAvoidance: 5/5 PVA en DROP_MIX rated tienen
+        //     rating bueno (4/5 ≥9). PVA es señal protectora — la rama del
+        //     decisor que evita overlap vocal acierta.
+        //
+        // Si dispara: redirect a BMB (isBeatSynced verificado upstream).
+        // BMB hereda fade.duration (default switch línea ~896), corre
+        // PRE_PUNCH o anticipation A2 con tipo congelado .beatMatchBlend,
+        // chillRecipe en sección 8e si aplica.
+        //
+        // Bench Python: scripts/bench_v13O5_hv5_3.py sobre N=98 v13.O.4.
+        if transition.type == .dropMix
+            && entry.entryPoint >= 5.0
+            && entry.entryPoint < 15.0
+            && profile.bpmDiff >= 5.0
+            && entry.entrySource != .punchVocalAvoidance
+            && entry.isBeatSynced {
+            let oldReason = transition.reason
+            transition = TransitionTypeResult(
+                type: .beatMatchBlend,
+                reason: "Hv5-3 redirect: DROP_MIX→BMB (entry=\(String(format: "%.1f", entry.entryPoint))s, bpmDiff=\(String(format: "%.1f", profile.bpmDiff)), src=\(entry.entrySource.rawValue)) [old: \(oldReason)]"
+            )
+            print("[DJMixingService] 🔀 Hv5-3 redirect → BMB (entry mid-bucket sin BPM-grid)")
+        }
 
         // ── 6c. CUT entry snap to downbeat ──
         // Done AFTER the type is decided (we only snap CUT-family) and BEFORE
