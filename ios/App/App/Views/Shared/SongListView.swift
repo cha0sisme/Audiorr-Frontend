@@ -24,6 +24,10 @@ struct SongListView: View {
     @State private var navAlbum:  NavidromeAlbum?  = nil
     @State private var navArtist: NavidromeArtist? = nil
     @State private var addToPlaylistSong: NavidromeSong? = nil
+    /// Song cuyo menú "Ver artistas" (plural) está abierto. Vehiculiza la
+    /// `ViewArtistsSheet` — cuando es nil, la sheet está cerrada. Identifiable
+    /// para que `sheet(item:)` la dismissa/reabra automáticamente al cambiar.
+    @State private var viewArtistsSong: NavidromeSong? = nil
 
     private var isLight: Bool { palette.isPrimaryLight }
 
@@ -49,6 +53,16 @@ struct SongListView: View {
         .navigationDestination(item: $navArtist) { artist in ArtistDetailView(artist: artist) }
         .sheet(item: $addToPlaylistSong) { song in
             AddToPlaylistView(songId: song.id, songTitle: song.title)
+        }
+        // Sheet "Ver artistas": modal nativo iOS, lista los artistas de la
+        // song y al elegir uno hace push hacia ArtistDetailView reusando el
+        // mismo `navArtist` state que el caso singular.
+        .sheet(item: $viewArtistsSong) { song in
+            ViewArtistsSheet(
+                artists: song.artists ?? [],
+                songTitle: song.title,
+                onSelect: { artist in navArtist = artist }
+            )
         }
     }
 
@@ -109,14 +123,32 @@ struct SongListView: View {
             }
 
             // — Artist section
-            if showArtistInMenu, let artistId = song.artistId, !artistId.isEmpty {
-                let goArtist = UIAction(
-                    title: L.goToArtist,
-                    image: UIImage(systemName: "person.crop.circle")
-                ) { _ in
-                    navArtist = NavidromeArtist(id: artistId, name: song.artist, albumCount: nil)
+            // Multi-artist (OpenSubsonic): si la song trae 2+ artistas en
+            // `song.artists[]`, mostramos "Ir a los artistas" (plural) y al
+            // tap abrimos un sheet nativo con la lista. Si trae 1 (o el
+            // server no expone el array), queda "Ir al artista" (singular)
+            // que navega directo al `song.artistId`.
+            if showArtistInMenu {
+                let songArtists = song.artists ?? []
+                if songArtists.count > 1 {
+                    let goArtists = UIAction(
+                        title: L.goToArtists,
+                        image: UIImage(systemName: "person.2.crop.square.stack")
+                    ) { _ in
+                        DispatchQueue.main.async {
+                            viewArtistsSong = song
+                        }
+                    }
+                    sections.append(UIMenu(title: "", options: .displayInline, children: [goArtists]))
+                } else if let artistId = song.artistId, !artistId.isEmpty {
+                    let goArtist = UIAction(
+                        title: L.goToArtist,
+                        image: UIImage(systemName: "person.crop.circle")
+                    ) { _ in
+                        navArtist = NavidromeArtist(id: artistId, name: song.artist, albumCount: nil)
+                    }
+                    sections.append(UIMenu(title: "", options: .displayInline, children: [goArtist]))
                 }
-                sections.append(UIMenu(title: "", options: .displayInline, children: [goArtist]))
             }
 
             // — Add to playlist

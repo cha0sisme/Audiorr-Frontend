@@ -154,19 +154,26 @@ struct PersistableSong: Codable, Identifiable {
     /// JSON, lanza `keyNotFound`. Optional permite `decodeIfPresent` implícito,
     /// y consumidores leen `genres ?? []`.
     var genres: [String]?
+    /// OpenSubsonic `song.artists[]` — array completo de artistas de la pista
+    /// (incluye features). Optional por la misma razón que `genres`: queues
+    /// persistidas antes de añadirse este campo. Consumidores principales:
+    /// el menú contextual de NowPlaying ("Ver artistas" cuando count > 1).
+    var artists: [ItemArtist]?
 
     var isExplicit: Bool { explicitStatus == "explicit" }
 
     init(id: String, title: String, artist: String, album: String,
          albumId: String, artistId: String, coverArt: String, duration: Double,
          replayGainMultiplier: Float = 1.0, explicitStatus: String? = nil,
-         genres: [String]? = nil) {
+         genres: [String]? = nil,
+         artists: [ItemArtist]? = nil) {
         self.id = id; self.title = title; self.artist = artist
         self.album = album; self.albumId = albumId; self.artistId = artistId
         self.coverArt = coverArt; self.duration = duration
         self.replayGainMultiplier = replayGainMultiplier
         self.explicitStatus = explicitStatus
         self.genres = genres
+        self.artists = artists
     }
 
     init(from queue: QueueSong) {
@@ -181,6 +188,7 @@ struct PersistableSong: Codable, Identifiable {
         replayGainMultiplier = 1.0
         explicitStatus = nil
         genres = nil
+        artists = nil
     }
 
     init(from song: NavidromeSong) {
@@ -195,6 +203,7 @@ struct PersistableSong: Codable, Identifiable {
         replayGainMultiplier = song.replayGainMultiplier
         explicitStatus = song.explicitStatus
         genres = song.genres.isEmpty ? nil : song.genres
+        artists = song.artists
     }
 
     func toQueueSong() -> QueueSong {

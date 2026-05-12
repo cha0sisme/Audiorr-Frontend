@@ -57,6 +57,12 @@ final class NowPlayingState {
     var coverArt = ""
     var isExplicit = false
 
+    /// OpenSubsonic `song.artists[]` de la canción actual. Vacío si el server
+    /// no expone la extensión o si la song solo tiene un artista. El menú
+    /// 3-dots de NowPlaying lo lee para decidir entre "Ir al artista"
+    /// (singular, navega directo) y "Ir a los artistas" (plural, abre sheet).
+    var currentArtists: [ItemArtist] = []
+
     // -- Playback context (e.g. "playlist:abc", "album:xyz", "top-weekly") --
     var contextUri = ""
     var queue: [QueueSong] = []

@@ -1532,6 +1532,10 @@ final class QueueManager: AudioEngineDelegate {
             state.artistId = song.artistId
             state.coverArt = song.coverArt
             state.isExplicit = song.isExplicit
+            // Multi-artist OpenSubsonic: si la song trae 2+ artistas, el menú
+            // 3-dots del Now Playing ofrecerá "Ver artistas" (plural) en lugar
+            // de "Ir al artista" (singular). Vacío cuando viene `nil` o `[]`.
+            state.currentArtists = song.artists ?? []
             state.artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 300)?.absoluteString
             state.isVisible = true
             state.refreshBpm()
@@ -1664,6 +1668,7 @@ final class QueueManager: AudioEngineDelegate {
             state.duration = song.duration
             state.progress = savedPos
             state.playbackMode = currentPlaybackMode
+            state.currentArtists = song.artists ?? []
             state.refreshBpm()
         }
 
