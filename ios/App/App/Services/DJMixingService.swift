@@ -3211,13 +3211,12 @@ enum DJMixingService {
                         type = .vinylStop
                         reason = "BPMs incompatibles + energy drop \(String(format: "%.2f→%.2f", profile.energyA, profile.energyB))\(bpmNote) → VINYL_STOP"
                     } else {
-                        // Two unmixable tracks with vocals/punch. A 5–10s blend would
-                        // force them to share the mid-crossfade at near-equal volumes
-                        // (equal-power curve), and with incompatible tempos that sounds
-                        // like rhythmic mud. Use sequential handoff: A exits cleanly,
-                        // micro-respiro (~300ms post-P0 fix), B enters fresh.
-                        type = .cleanHandoff
-                        reason = "BPMs incompatibles (diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → CLEAN_HANDOFF (sin overlap)"
+                        // Hv5-4: CLEAN_HANDOFF retirado por dead-air audible. Caemos a
+                        // NATURAL_BLEND preset Gentle (highpass sutil en A, bass cut
+                        // suave, mid scoop). Equal-power + cero efectos DJ. Mejor
+                        // overlap suave que silencio entre tracks incompatibles.
+                        type = .naturalBlend
+                        reason = "Hv5-4: CLEAN_HANDOFF retirado (incompatible BPM diff=\(String(format: "%.1f", profile.bpmDiff)))\(bpmNote) → NB Gentle"
                     }
                 case .borderline:
                     // 12–18 BPM diff — too far for invisible beat-match but close enough
@@ -3404,22 +3403,17 @@ enum DJMixingService {
         }
 
         // ── Override: B abre con voz acapella / hablada ──
-        // Cosita #4 del DJ humano (audit v8 sesion 2, 2026-05-04): "voz hablada
-        // o acapella no se mezcla, se presenta". Crossfade sobre intro vocal
-        // suena horrible — silencio breve antes de la voz se siente profesional.
-        // Detectable: vocalStartTime de B muy temprano (<=1s, voz literal-
-        // inmediata o ad-lib en t=0..1) AND entry calculado tambien temprano
-        // (<3s, no estamos haciendo chorus promotion lejos) AND chorus B no
-        // es inmediato (>5s, descarta tracks que arrancan con chorus directo).
-        // Solo afecta a transiciones "blendy" — CUT, STEM_MIX, DROP_MIX,
-        // VINYL_STOP no se tocan (ya tienen su propio gesto).
+        // Hv5-4: override retirado. La "presentación" via CLEAN_HANDOFF generaba
+        // dead-air audible peor que el blend que reemplazaba. Dejamos que el tipo
+        // previo (BMB/NB/EQ_MIX/CROSSFADE) prevalezca — el overlap suave sobre
+        // intro vocal es preferible al silencio.
+        // (Detección de voz-acapella conservada como no-op por si se reusa.)
         if let next = nextAnalysis, next.hasError != true,
            let vsB = next.vocalStartTime, vsB <= 1.0,
            entryPoint < 3.0,
            next.chorusStartTime > 5.0,
            type == .crossfade || type == .beatMatchBlend || type == .naturalBlend || type == .eqMix {
-            type = .cleanHandoff
-            reason = "B abre con voz acapella/inmediata (vocalStart=\(String(format: "%.1f", vsB))s, chorus=\(String(format: "%.0f", next.chorusStartTime))s) → CLEAN_HANDOFF (presentar voz)"
+            reason = "\(reason) (Hv5-4: override voz-acapella retirado)"
         }
 
         // ── Safety: extreme BPM jump override ──
