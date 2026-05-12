@@ -3420,27 +3420,53 @@ enum DJMixingService {
             let bIntroVocalOverlap = next.hasIntroVocals || bHasVocalsInFade
 
             if bIntroVocalOverlap {
-                let safeOutroA = bufferADuration - fadeDuration
-
-                var aHasVocalsAtEnd = false
-                if current.hasOutroVocals {
-                    aHasVocalsAtEnd = true
-                } else if current.hasVocalEndData {
-                    aHasVocalsAtEnd = current.lastVocalTime > safeOutroA
-                } else if !current.speechSegments.isEmpty {
-                    aHasVocalsAtEnd = current.speechSegments.contains { $0.end > safeOutroA }
+                // v13.O.4 H5 — guard BPM-grid identical+synced: con BPMs
+                // idénticos y beat-sync activo, el overlap vocal queda
+                // absorbido por groove perfecto. El gate disparaba CUT en
+                // pares mixables (caso testigo Sprinter→Fake Love, bpmDiff=0,
+                // rachas de 4 CUTs seguidos coche-test v13.O.3). 21 CUTs
+                // (mean rating 2.9) llevaban "Vocal Trainwreck evitado".
+                let bpmGridPerfect = profile.bpmRelationship == .identical && isBeatSynced
+                if bpmGridPerfect {
+                    reason += " (vocal overlap absorbed: BPM-grid identical+synced)"
                 } else {
-                    aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA)
-                        && (current.vocalStartTime ?? 0) > 0
-                }
+                    let safeOutroA = bufferADuration - fadeDuration
 
-                if aHasVocalsAtEnd {
-                    let bInstrumentalWindow = vsB - entryPoint
-                    if bInstrumentalWindow > fadeDuration * 0.6 {
-                        reason += " (vocal overlap OK: B vocals after \(String(format: "%.0f", bInstrumentalWindow))s)"
+                    // v13.O.4 H5 — guard outroInstrumental autoritario.
+                    // `outroInstrumental` viene de detectOutroInstrumental
+                    // (señal multi-source ya validada en producción desde v8).
+                    // El fallback degenerado (rama else original) marcaba
+                    // aHasVocalsAtEnd=true por `outroStartTime` nil/0 +
+                    // vocalStart>0 — falso positivo en pistas con outro
+                    // instrumental real pero outroStartTime mal poblado.
+                    var aHasVocalsAtEnd = false
+                    if outroInstrumental {
+                        aHasVocalsAtEnd = false
+                    } else if current.hasOutroVocals {
+                        aHasVocalsAtEnd = true
+                    } else if current.hasVocalEndData {
+                        aHasVocalsAtEnd = current.lastVocalTime > safeOutroA
+                    } else if !current.speechSegments.isEmpty {
+                        aHasVocalsAtEnd = current.speechSegments.contains { $0.end > safeOutroA }
                     } else {
-                        type = .cut
-                        reason = "Vocal Trainwreck evitado → CUT forzado"
+                        aHasVocalsAtEnd = (current.outroStartTime <= 0 || current.outroStartTime > safeOutroA)
+                            && (current.vocalStartTime ?? 0) > 0
+                    }
+
+                    if aHasVocalsAtEnd {
+                        let bInstrumentalWindow = vsB - entryPoint
+                        if bInstrumentalWindow > fadeDuration * 0.6 {
+                            reason += " (vocal overlap OK: B vocals after \(String(format: "%.0f", bInstrumentalWindow))s)"
+                        } else if fadeDuration >= 6 && hasVocalOverlap {
+                            // v13.O.4 H5 — antes de degradar a CUT, intentar
+                            // EQ_MIX (mid-scoop preserva el fade separando
+                            // vocales por banda). Solo viable con fade≥6s.
+                            type = .eqMix
+                            reason = "Vocal Trainwreck → EQ_MIX (mid-scoop preserva fade)"
+                        } else {
+                            type = .cut
+                            reason = "Vocal Trainwreck evitado → CUT forzado"
+                        }
                     }
                 }
             }
