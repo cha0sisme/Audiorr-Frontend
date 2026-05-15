@@ -223,7 +223,8 @@ struct LoginView: View {
             }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                // Sesión `interactive`: el usuario está esperando el resultado del login.
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 struct PingOuter: Decodable { let subsonicResponse: PingInner
                     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
                 }

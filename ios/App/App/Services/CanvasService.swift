@@ -72,7 +72,9 @@ final class CanvasService {
 
         let endpoint = backendBase.appendingPathComponent("api/canvas/\(songId)")
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            // Sesión `interactive`: el vídeo de canvas es UI visible cuando
+            // el viewer está abierto.
+            let (data, response) = try await AudiorrNetwork.interactive.data(from: endpoint)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 return nil
             }

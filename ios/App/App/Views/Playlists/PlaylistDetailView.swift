@@ -882,7 +882,7 @@ final class PlaylistCoverCache: @unchecked Sendable {
                         try? await Task.sleep(nanoseconds: UInt64(attempt) * 800_000_000 - 200_000_000)
                     }
 
-                    guard let (data, resp) = try? await URLSession.shared.data(from: url),
+                    guard let (data, resp) = try? await AudiorrNetwork.background.data(from: url),
                           let http = resp as? HTTPURLResponse else {
                         continue  // network error → retry (or fall through if last attempt)
                     }

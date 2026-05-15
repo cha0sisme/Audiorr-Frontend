@@ -308,7 +308,7 @@ final class TransitionDiagnosticsBackend {
         decode: @escaping (Data) throws -> T
     ) async -> Result<T, DiagnosticsBackendError> {
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await AudiorrNetwork.background.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return .failure(.invalidResponse)
             }

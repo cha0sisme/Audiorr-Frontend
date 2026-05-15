@@ -1078,7 +1078,7 @@ private struct CachedCoverView: View {
                 let hash = PlaylistCoverCache.shared.contentHash(for: pid)
                 if BackendState.shared.isAvailable,
                    let backendURL = NavidromeService.shared.playlistBackendCoverURL(playlistId: pid, contentHash: hash),
-                   let (data, resp) = try? await URLSession.shared.data(from: backendURL),
+                   let (data, resp) = try? await AudiorrNetwork.background.data(from: backendURL),
                    let http = resp as? HTTPURLResponse, http.statusCode == 200,
                    let img = UIImage(data: data) {
                     PlaylistCoverCache.shared.setImage(img, for: pid)
@@ -1090,7 +1090,7 @@ private struct CachedCoverView: View {
             // Navidrome fallback
             guard let coverArt, !coverArt.isEmpty,
                   let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                   let img = UIImage(data: data) else { return }
             if let pid = playlistId {
                 PlaylistCoverCache.shared.setImage(img, for: pid)

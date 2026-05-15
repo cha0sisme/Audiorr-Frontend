@@ -692,7 +692,7 @@ final class UserProfileViewModel: ObservableObject {
             for (i, artist) in topArtists.enumerated() {
                 group.addTask {
                     guard let url = await api.artistImageURL(name: artist.artist),
-                          let (data, _) = try? await URLSession.shared.data(from: url),
+                          let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                           let img = UIImage(data: data) else { return (i, nil) }
                     return (i, img)
                 }

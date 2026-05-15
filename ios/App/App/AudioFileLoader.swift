@@ -165,7 +165,12 @@ class AudioFileLoader: @unchecked Sendable {
     // MARK: - Descarga interna
 
     private func startDownload(remoteURL: URL, songId: String, attempt: Int) {
-        let task = URLSession.shared.dataTask(with: remoteURL) { [weak self] data, response, error in
+        // v13.O.6 — sesión `audio` con prioridad alta. Bajo congestión (1 raya
+        // 5G) el streaming del audio que SUENA gana sobre cover/canvas/lyrics/
+        // grids. `waitsForConnectivity=false` en la sesión deja que los retries
+        // con backoff de este loader (1/2/4s) hagan fail-fast cuando la red
+        // desaparece, en vez de quedar colgada hasta el timeout de recurso.
+        let task = AudiorrNetwork.audio.dataTask(with: remoteURL) { [weak self] data, response, error in
             guard let self = self else { return }
 
             self.queue.async(flags: []) {
@@ -240,6 +245,7 @@ class AudioFileLoader: @unchecked Sendable {
         }
 
         activeDownloads[songId] = task
+        task.priority = URLSessionTask.highPriority
         task.resume()
         print("[AudioFileLoader] Starting download: \(songId) (attempt \(attempt + 1))")
     }

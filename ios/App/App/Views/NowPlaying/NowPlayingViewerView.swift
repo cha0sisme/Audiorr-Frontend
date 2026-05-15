@@ -548,7 +548,9 @@ struct NowPlayingViewerView: View {
         Task.detached(priority: .userInitiated) {
             var request = URLRequest(url: url)
             request.cachePolicy = .useProtocolCachePolicy
-            guard let (data, _) = try? await URLSession.shared.data(for: request),
+            // Sesión `interactive`: cover del viewer (2000px) — UI visible
+            // que el usuario está mirando ahora mismo.
+            guard let (data, _) = try? await AudiorrNetwork.interactive.data(for: request),
                   let image = UIImage(data: data) else { return }
             let palette = ColorExtractor.extract(from: image)
             let color = Color(palette.accent)

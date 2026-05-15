@@ -226,9 +226,10 @@ private struct MiniPlayerArtwork: View {
                 image = cached
                 return
             }
-            // Download and cache
+            // Download and cache. Sesión `interactive`: la MiniPlayer es
+            // UI visible permanente cuando hay reproducción activa.
             guard let urlStr = artworkUrl, let url = URL(string: urlStr),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let (data, _) = try? await AudiorrNetwork.interactive.data(from: url),
                   let img = UIImage(data: data) else { return }
             AlbumCoverCache.shared.setImage(img, for: coverArt)
             image = img

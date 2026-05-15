@@ -163,7 +163,7 @@ final class ScrobbleService {
         guard let url = URL(string: urlString) else { return false }
 
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await AudiorrNetwork.background.data(from: url)
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else { return false }
 

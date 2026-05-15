@@ -1946,9 +1946,10 @@ class AudioEngineManager {
                 self?.publishNowPlayingInfo()
             }
 
-            // Descargar artwork en background
+            // Descargar artwork en background (lock-screen / Control Center / CarPlay).
+            // Sesión `interactive`: UI visible que el sistema y el usuario esperan.
             if let urlStr = artworkUrl, let url = URL(string: urlStr) {
-                URLSession.shared.dataTask(with: url) { data, _, _ in
+                AudiorrNetwork.interactive.dataTask(with: url) { data, _, _ in
                     guard let data = data, let image = UIImage(data: data) else { return }
                     let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                     DispatchQueue.main.async { [weak self] in

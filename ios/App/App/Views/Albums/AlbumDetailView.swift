@@ -82,7 +82,7 @@ final class AlbumDetailViewModel: ObservableObject {
             return cached
         }
         guard let url = api.coverURL(id: initialAlbum.coverArt, size: 600) else { return nil }
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return nil }
         guard let img = UIImage(data: data) else { return nil }
         AlbumCoverCache.shared.setImage(img, for: initialAlbum.coverArt)
         return img

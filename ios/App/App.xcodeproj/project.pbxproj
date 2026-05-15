@@ -23,6 +23,7 @@
 		3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE092FA7000000000009 /* CanvasService.swift */; };
 		3400EE0C2FA700000000000B /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0B2FA700000000000B /* LyricsView.swift */; };
 		3400EE0E2FA700000000000D /* LyricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0D2FA700000000000D /* LyricsService.swift */; };
+		34AABB022FAC000000000002 /* AudiorrNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AABB012FAC000000000001 /* AudiorrNetwork.swift */; };
 		3400EE102FA700000000000F /* QueuePanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0F2FA700000000000F /* QueuePanelView.swift */; };
 		3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE112FA7000000000010 /* DevicePickerView.swift */; };
 		3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE132FA7000000000012 /* AddToPlaylistView.swift */; };
@@ -93,6 +94,7 @@
 		3400EE092FA7000000000009 /* CanvasService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasService.swift; sourceTree = "<group>"; };
 		3400EE0B2FA700000000000B /* LyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsView.swift; sourceTree = "<group>"; };
 		3400EE0D2FA700000000000D /* LyricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsService.swift; sourceTree = "<group>"; };
+		34AABB012FAC000000000001 /* AudiorrNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudiorrNetwork.swift; sourceTree = "<group>"; };
 		3400EE0F2FA700000000000F /* QueuePanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuePanelView.swift; sourceTree = "<group>"; };
 		3400EE112FA7000000000010 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		3400EE132FA7000000000012 /* AddToPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToPlaylistView.swift; sourceTree = "<group>"; };
@@ -223,6 +225,7 @@
 				3400DD002FA6000000000001 /* NowPlayingState.swift */,
 				3400EE092FA7000000000009 /* CanvasService.swift */,
 				3400EE0D2FA700000000000D /* LyricsService.swift */,
+				34AABB012FAC000000000001 /* AudiorrNetwork.swift */,
 				3400FF002FA8000000000001 /* BackendService.swift */,
 				B1100283D77DD3FFD287F4ED /* LocalizationManager.swift */,
 				3400FF022FA8000000000002 /* PersistenceService.swift */,
@@ -488,6 +491,7 @@
 				3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */,
 				3400EE0C2FA700000000000B /* LyricsView.swift in Sources */,
 				3400EE0E2FA700000000000D /* LyricsService.swift in Sources */,
+				34AABB022FAC000000000002 /* AudiorrNetwork.swift in Sources */,
 				3400EE102FA700000000000F /* QueuePanelView.swift in Sources */,
 				3400EE122FA7000000000011 /* DevicePickerView.swift in Sources */,
 				3400EE142FA7000000000013 /* AddToPlaylistView.swift in Sources */,

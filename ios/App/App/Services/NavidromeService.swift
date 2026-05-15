@@ -201,7 +201,10 @@ final class NavidromeService: ObservableObject {
         request.httpMethod = "GET"
         request.timeoutInterval = 2
 
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        // Sesión `interactive`: BackendState consume este check para decidir
+        // qué UI mostrar (banners offline, secciones del Home, etc.). Debe ser
+        // rápido y no quedar bajo prioridad de bulk.
+        guard let (data, response) = try? await AudiorrNetwork.interactive.data(for: request),
               let http = response as? HTTPURLResponse,
               http.statusCode == 200 else {
             return .networkError
@@ -232,7 +235,7 @@ final class NavidromeService: ObservableObject {
     func getHomepageLayout() async -> [PlaylistSection] {
         guard let base = backendURL(),
               let url = URL(string: "\(base)/api/settings/homepage_layout") else { return [] }
-        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return [] }
         struct Response: Decodable { let value: [PlaylistSection]? }
         return (try? JSONDecoder().decode(Response.self, from: data))?.value ?? []
     }
@@ -242,7 +245,7 @@ final class NavidromeService: ObservableObject {
     func getPlaylists() async throws -> [NavidromePlaylist] {
         guard let base = baseURL() else { return [] }
         let url = URL(string: "\(base)/rest/getPlaylists.view?\(authQuery())")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(PlaylistsResponse.self, from: data)
         guard response.status == "ok" else { return [] }
         return response.playlists?.playlist ?? []
@@ -251,7 +254,7 @@ final class NavidromeService: ObservableObject {
     func getPlaylistSongs(playlistId: String) async throws -> (playlist: NavidromePlaylist?, songs: [NavidromeSong]) {
         guard let base = baseURL() else { return (nil, []) }
         let url = URL(string: "\(base)/rest/getPlaylist.view?\(authQuery())&id=\(playlistId)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(PlaylistDetailResponse.self, from: data)
         guard response.status == "ok", let detail = response.playlist else { return (nil, []) }
         let playlist = NavidromePlaylist(
@@ -266,7 +269,7 @@ final class NavidromeService: ObservableObject {
     func addSongToPlaylist(playlistId: String, songId: String) async throws {
         guard let base = baseURL() else { return }
         let url = URL(string: "\(base)/rest/updatePlaylist.view?\(authQuery())&playlistId=\(playlistId)&songIdToAdd=\(songId)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
         guard response.status == "ok" else {
             throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to add song to playlist"])
@@ -278,7 +281,7 @@ final class NavidromeService: ObservableObject {
         guard let base = baseURL() else { return nil }
         let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
         let url = URL(string: "\(base)/rest/createPlaylist.view?\(authQuery())&name=\(encodedName)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(CreatePlaylistResponse.self, from: data)
         guard response.status == "ok" else { return nil }
         return response.playlist?.id
@@ -288,7 +291,7 @@ final class NavidromeService: ObservableObject {
     func deletePlaylist(playlistId: String) async throws {
         guard let base = baseURL() else { return }
         let url = URL(string: "\(base)/rest/deletePlaylist.view?\(authQuery())&id=\(playlistId)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
         guard response.status == "ok" else {
             throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete playlist"])
@@ -330,7 +333,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/getArtists.view?\(authQuery())"
         guard let url = URL(string: urlStr) else { return [] }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(ArtistsResponse.self, from: data),
               response.status == "ok"
         else { return [] }
@@ -353,7 +356,7 @@ final class NavidromeService: ObservableObject {
         }
         guard let url = URL(string: urlStr) else { return [] }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(AlbumListResponse.self, from: data),
               response.status == "ok"
         else { return [] }
@@ -366,7 +369,7 @@ final class NavidromeService: ObservableObject {
     func getArtistDetail(artistId: String) async throws -> (artist: NavidromeArtist?, albums: [NavidromeAlbum]) {
         guard let base = baseURL() else { return (nil, []) }
         let url = URL(string: "\(base)/rest/getArtist.view?\(authQuery())&id=\(artistId)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(ArtistDetailResponse.self, from: data)
         guard response.status == "ok", let d = response.artist else { return (nil, []) }
         let artist = NavidromeArtist(id: d.id, name: d.name, albumCount: d.albumCount)
@@ -379,7 +382,7 @@ final class NavidromeService: ObservableObject {
         guard let base = baseURL() else { return nil }
         let urlStr = "\(base)/rest/getSong.view?\(authQuery())&id=\(id)"
         guard let url = URL(string: urlStr),
-              let (data, _) = try? await URLSession.shared.data(from: url),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(GetSongResponse.self, from: data),
               response.status == "ok"
         else { return nil }
@@ -391,7 +394,7 @@ final class NavidromeService: ObservableObject {
     func getAlbumDetail(albumId: String) async throws -> (album: NavidromeAlbum?, songs: [NavidromeSong], recordLabels: [RecordLabel]) {
         guard let base = baseURL() else { return (nil, [], []) }
         let url = URL(string: "\(base)/rest/getAlbum.view?\(authQuery())&id=\(albumId)")!
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(AlbumDetailResponse.self, from: data)
         guard response.status == "ok", let d = response.album else { return (nil, [], []) }
         let album = NavidromeAlbum(
@@ -412,7 +415,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/getAlbumInfo2.view?\(authQuery())&id=\(albumId)"
         guard let url = URL(string: urlStr) else { return nil }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(AlbumInfoResponse.self, from: data),
               response.status == "ok",
               let notes = response.albumInfo?.notes,
@@ -434,7 +437,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/search2.view?\(authQuery())&query=\(q)&artistCount=\(artistCount)&albumCount=\(albumCount)&songCount=\(songCount)"
         guard let url = URL(string: urlStr) else { return SearchResults() }
 
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(Search2Response.self, from: data)
         guard response.status == "ok", let r = response.searchResult2 else { return SearchResults() }
 
@@ -456,7 +459,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/getArtistInfo2.view?\(authQuery())&id=\(artistId)"
         guard let url = URL(string: urlStr) else { return nil }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(ArtistInfoResponse.self, from: data),
               response.status == "ok",
               let info = response.artistInfo2
@@ -480,7 +483,7 @@ final class NavidromeService: ObservableObject {
         var topSongs: [NavidromeSong] = []
         let topURLStr = "\(base)/rest/getTopSongs.view?\(authQuery())&artist=\(q)&count=\(count)"
         if let url = URL(string: topURLStr),
-           let (data, _) = try? await URLSession.shared.data(from: url),
+           let (data, _) = try? await AudiorrNetwork.background.data(from: url),
            let response = try? JSONDecoder.decodeSubsonic(TopSongsResponse.self, from: data),
            response.status == "ok" {
             topSongs = response.topSongs?.song ?? []
@@ -492,7 +495,7 @@ final class NavidromeService: ObservableObject {
         let searchURL = "\(base)/rest/search2.view?\(authQuery())&query=\(q)&artistCount=0&albumCount=0&songCount=\(count * 3)"
         var fallbackSongs: [NavidromeSong] = []
         if let url = URL(string: searchURL),
-           let (data, _) = try? await URLSession.shared.data(from: url),
+           let (data, _) = try? await AudiorrNetwork.background.data(from: url),
            let response = try? JSONDecoder.decodeSubsonic(Search2Response.self, from: data),
            response.status == "ok" {
             let lower = artistName.lowercased()
@@ -541,7 +544,7 @@ final class NavidromeService: ObservableObject {
         let q = artistName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? artistName
         let urlStr = "\(base)/rest/search3.view?\(authQuery())&query=\(q)&artistCount=0&albumCount=0&songCount=500"
         guard let url = URL(string: urlStr),
-              let (data, _) = try? await URLSession.shared.data(from: url),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(Search3Response.self, from: data),
               response.status == "ok"
         else { return [] }
@@ -652,7 +655,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/getAlbumList2.view?\(authQuery())&type=byYear&fromYear=\(fromYear)&toYear=\(toYear)&size=\(size)"
         guard let url = URL(string: urlStr) else { return [] }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(AlbumListResponse.self, from: data),
               response.status == "ok"
         else { return [] }
@@ -708,7 +711,7 @@ final class NavidromeService: ObservableObject {
               let request = backendRequest(url: url)
         else { return [] }
 
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return [] }
         return (try? JSONDecoder().decode([TopWeeklySong].self, from: data)) ?? []
     }
 
@@ -723,7 +726,7 @@ final class NavidromeService: ObservableObject {
               let request = backendRequest(url: url)
         else { return [] }
 
-        guard let (data, resp) = try? await URLSession.shared.data(for: request) else {
+        guard let (data, resp) = try? await AudiorrNetwork.background.data(for: request) else {
             print("[NavidromeService] getRecentContexts: request failed")
             return []
         }
@@ -763,7 +766,7 @@ final class NavidromeService: ObservableObject {
         else { return [] }
 
         struct Response: Decodable { let mixes: [DailyMix] }
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return [] }
         return (try? JSONDecoder().decode(Response.self, from: data))?.mixes ?? []
     }
 
@@ -775,7 +778,7 @@ final class NavidromeService: ObservableObject {
         else { return nil }
 
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return nil }
         return try? JSONDecoder().decode(GenerateMixesResult.self, from: data)
     }
 
@@ -809,7 +812,7 @@ final class NavidromeService: ObservableObject {
         if let url = URL(string: "\(base)/api/smart-playlists"),
            let request = backendRequest(url: url) {
             do {
-                let (data, _) = try await URLSession.shared.data(for: request)
+                let (data, _) = try await AudiorrNetwork.background.data(for: request)
                 if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let playlists = dict["playlists"] as? [[String: Any]] {
                     var withHash = 0
@@ -962,7 +965,7 @@ final class NavidromeService: ObservableObject {
         }
         request.timeoutInterval = 10
 
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
+        guard let (_, response) = try? await AudiorrNetwork.background.data(for: request),
               let http = response as? HTTPURLResponse else {
             return .failed
         }
@@ -1000,7 +1003,7 @@ final class NavidromeService: ObservableObject {
               let url = URL(string: "\(base)/api/artist/image?name=\(encoded)")
         else { return nil }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let imageUrl = dict["imageUrl"] as? String,
               let result = URL(string: imageUrl)
@@ -1021,7 +1024,7 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/getArtistInfo2.view?\(authQuery())&id=\(artistId)"
         guard let url = URL(string: urlStr) else { return nil }
 
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
               let response = try? JSONDecoder.decodeSubsonic(ArtistInfoResponse.self, from: data),
               response.status == "ok"
         else {

@@ -218,7 +218,8 @@ final class LyricsService {
         do {
             var request = URLRequest(url: url)
             request.setValue("Audiorr/1.0", forHTTPHeaderField: "User-Agent")
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // Sesión `interactive`: el usuario abrió el viewer y espera letras.
+            let (data, response) = try await AudiorrNetwork.interactive.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 

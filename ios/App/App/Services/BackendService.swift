@@ -5,7 +5,9 @@ import Foundation
 final class BackendService {
 
     static let shared = BackendService()
-    private let session = URLSession.shared
+    // Sesión `background`: cliente del backend Audiorr (catálogo, settings, etc).
+    // Bajo congestión cede a audio + interactive.
+    private let session = AudiorrNetwork.background
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 

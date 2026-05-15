@@ -188,7 +188,7 @@ final class ArtistImageCache: @unchecked Sendable {
         if let cached = image(for: artistId) { return cached }
         let cache = self
         return await coordinator.download(artistId: artistId) {
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
+            guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                   let img = UIImage(data: data) else { return nil }
             cache.setImage(img, for: artistId)
             return img

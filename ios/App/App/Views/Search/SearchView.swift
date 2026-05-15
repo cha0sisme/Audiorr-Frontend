@@ -378,7 +378,7 @@ private struct ArtistSearchRow: View {
                 return
             }
 
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
+            guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                   let img = UIImage(data: data) else {
                 didLoad = true
                 return

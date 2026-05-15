@@ -114,7 +114,7 @@ struct AlbumCardView: View {
             if attempt > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
             }
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
+            guard let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                   let img = UIImage(data: data) else { continue }
             AlbumCoverCache.shared.setImage(img, for: album.coverArt)
             coverImage = img
@@ -302,7 +302,7 @@ struct CachedCoverThumbnail: View {
                 return
             }
             guard let url = NavidromeService.shared.coverURL(id: coverArt, size: Int(size * 2)),
-                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let (data, _) = try? await AudiorrNetwork.background.data(from: url),
                   let img = UIImage(data: data) else { return }
             AlbumCoverCache.shared.setImage(img, for: coverArt)
             image = img

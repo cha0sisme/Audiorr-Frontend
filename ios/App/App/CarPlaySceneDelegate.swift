@@ -104,7 +104,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
         guard let url = URL(string: urlStr) else { return }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
 
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let response = json["subsonic-response"] as? [String: Any],
@@ -164,7 +164,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 if backendAvailable, let backendUrl = NavidromeService.shared.backendURL() {
                     let coverUrlStr = "\(backendUrl)/api/playlists/\(id)/cover.png"
                     if let coverUrl = URL(string: coverUrlStr) {
-                        URLSession.shared.dataTask(with: coverUrl) { [weak self] data, response, _ in
+                        AudiorrNetwork.interactive.dataTask(with: coverUrl) { [weak self] data, response, _ in
                             if (response as? HTTPURLResponse)?.statusCode == 200,
                                let data, let image = UIImage(data: data) {
                                 DispatchQueue.main.async { item.setImage(image) }
@@ -289,7 +289,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                     }
                     let coverUrlStr = "\(backendUrl)/api/playlists/\(id)/cover.png"
                     if let coverUrl = URL(string: coverUrlStr) {
-                        URLSession.shared.dataTask(with: coverUrl) { data, response, _ in
+                        AudiorrNetwork.interactive.dataTask(with: coverUrl) { data, response, _ in
                             if (response as? HTTPURLResponse)?.statusCode == 200,
                                let data, let image = UIImage(data: data) {
                                 DispatchQueue.main.async { item.setImage(image) }
@@ -399,13 +399,13 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
         guard backendAvailable, let backendUrl = NavidromeService.shared.backendURL() else { return nil }
         let urlStr = "\(backendUrl)/api/stats/recent-contexts?username=\(creds.username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
         guard let url = URL(string: urlStr) else { return nil }
-        return (try? await URLSession.shared.data(from: url))?.0
+        return (try? await AudiorrNetwork.interactive.data(from: url))?.0
     }
 
     private func fetchHomeLatestAlbumsData(creds: NavidromeCredentials) async -> Data? {
         let urlStr = "\(creds.serverUrl)/rest/getAlbumList2.view?\(authQuery())&type=newest&size=15"
         guard let url = URL(string: urlStr) else { return nil }
-        return (try? await URLSession.shared.data(from: url))?.0
+        return (try? await AudiorrNetwork.interactive.data(from: url))?.0
     }
 
     // MARK: - Offline Content
@@ -544,7 +544,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             completion(nil)
             return
         }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
+        AudiorrNetwork.interactive.dataTask(with: url) { data, _, _ in
             guard let data, let image = UIImage(data: data) else {
                 completion(nil)
                 return
@@ -851,7 +851,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let artistsObj = response["artists"] as? [String: Any] else { return }
@@ -920,7 +920,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let albumList = response["albumList2"] as? [String: Any] else { return }
@@ -978,7 +978,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let genresObj = response["genres"] as? [String: Any] else { return }
@@ -1038,7 +1038,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let albumList = response["albumList2"] as? [String: Any] else { return }
@@ -1096,7 +1096,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let albumList = response["albumList2"] as? [String: Any] else { return }
@@ -1159,7 +1159,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             guard let url = URL(string: urlStr) else { return }
 
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
+                let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let response = json["subsonic-response"] as? [String: Any],
                       let artistObj = response["artist"] as? [String: Any] else { return }
