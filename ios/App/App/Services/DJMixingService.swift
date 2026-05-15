@@ -1020,6 +1020,17 @@ enum DJMixingService {
             // anticipation can run up to 4s before that, so 7s is the sensible
             // ceiling. Below 3s the type is already CUT by another path.
             effectiveFadeDuration = max(3.0, min(7.0, fade.duration))
+        case .sequential:
+            // v14.13 — SEQUENTIAL pisa el adaptive (5–15s) y clampa a 50ms total.
+            // La curva en CrossfadeExecutor ya estaba diseñada para un solape
+            // ultracorto de 50ms (cos²/sin² complementarios), pero heredar un
+            // fadeDuration de 10s hacía que B reprodujera silenciada desde
+            // frame 0 durante 9.95s y solo sonara los últimos 50ms — el director
+            // percibía "B empieza por la mitad" porque al sonar ya estaba en
+            // t=10s del archivo. Con fadeDuration=50ms, el trigger end-based
+            // (QueueManager) dispara casi al final de A y B suena desde su
+            // muestra 0 inmediatamente.
+            effectiveFadeDuration = 0.050
         case .fadeOutACutB:
             // When the energy-crash override fired (high-energy A into instrumental
             // low-energy B), the original fade may be short (~3s) because of the

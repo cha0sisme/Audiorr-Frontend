@@ -1199,6 +1199,20 @@ final class QueueManager: AudioEngineDelegate {
                     triggerTime = idealTrigger
                 }
 
+                // v14.13 — SEQUENTIAL: ignorar outroStart y disparar end-based.
+                // La promesa de SEQUENTIAL es "A llega a su final natural, B
+                // empieza desde el principio". Si el trigger fuese outroStart
+                // (-30s del final típico), A se desvanecería de inmediato en 50ms
+                // y quedaría silencio durante los 30s restantes hasta el final
+                // natural — exactamente lo opuesto al gesto. El endBasedTrigger
+                // (effectiveDuration - fadeDur - 1 = ~1.05s antes del fin con
+                // fadeDur=50ms del v14.13) hace que A llegue completa y B entre
+                // justo al final.
+                if crossfadeResult.transitionType == .sequential {
+                    triggerTime = endBasedTrigger
+                    print("[QueueManager] 🔄 v14.13 SEQUENTIAL trigger override → end-based \(String(format: "%.1f", endBasedTrigger))s")
+                }
+
                 // Safety: if trigger + fade doesn't fit, fall back to end-based
                 if triggerTime + fadeDur > effectiveDuration + 1 {
                     triggerTime = endBasedTrigger
