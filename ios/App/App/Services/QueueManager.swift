@@ -1055,6 +1055,13 @@ final class QueueManager: AudioEngineDelegate {
                     // Mismo patrón MainActor que `genreCapApplied`.
                     TransitionDiagnostics.shared.entryFinalCapApplied = crossfadeResult.entryFinalCapApplied
                     TransitionDiagnostics.shared.anticipationReason = crossfadeResult.anticipationReason
+                    // v13.O.6 (F4) — telemetría filtros aditiva. Propaga
+                    // valores que solo se conocen en `calculateCrossfadeConfig`
+                    // (curva RMS de A, energía outro). Los campos del preset y
+                    // gates pre-roll los setea `CrossfadeExecutor` en init.
+                    TransitionDiagnostics.shared.rmsTailCurveA_last = crossfadeResult.rmsTailCurveA_last
+                    TransitionDiagnostics.shared.rmsTailSlopeA = crossfadeResult.rmsTailSlopeA
+                    TransitionDiagnostics.shared.outroEnergyA = crossfadeResult.outroEnergyA
                 }
 
                 // ── Trailing silence on A ──

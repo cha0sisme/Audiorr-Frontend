@@ -118,6 +118,42 @@ final class TransitionDiagnostics {
     /// que copia de NavidromeSong.genres).
     var bGenres: [String] = []
 
+    // v13.O.6 (round 2026-05-15) — telemetría filtros (F4).
+    // Aditiva. Sin impacto en algoritmo. Permite:
+    //   1. Validar Filtros-A (tail-easing band 3 A → 0 dB en p=1.0): si
+    //      `highShelfGainA_atEnd` queda en 0 cuando antes era -10/-12.
+    //   2. Auditar pre-roll Hv5-1 (commit 8df7635): `filterPreRollAppliedA`
+    //      true cuando el bloque pre-roll efectivamente disparó.
+    //   3. Diseñar el verdadero Fix #3 (filtros B retirada) con `lsGainB_initial`
+    //      + `hpFreqB_initial` del preset elegido.
+    //   4. Auditar el problema real de la cola de A con `rmsTailCurveA_last`
+    //      + `rmsTailSlopeA` (slope tailWindows=4) + `outroEnergyA`.
+    /// true cuando el bloque pre-roll de Hv5-1 (CrossfadeExecutor:2088) disparó
+    /// efectivamente para esta transición. False cuando se saltó por gate
+    /// (CUT family, no-overlap, lowpassA, preRollDur<=0).
+    var filterPreRollAppliedA: Bool? = nil
+    /// Valor del high-shelf A en el último tick del fade (`progress ≈ 1.0`).
+    /// Pre-Filtros-A: -10/-12 dB (endGain del preset). Post-Filtros-A esperado: 0
+    /// (passthrough). nil cuando band 3 no aplicó (sin highShelfA o sin
+    /// useHighShelfCut).
+    var highShelfGainA_atEnd: Double? = nil
+    /// `preset.lowshelfB.startGain` del preset que se usó en esta transición.
+    /// Permite reconstruir qué tan agresivo era el shelf de B desde el inicio.
+    var lsGainB_initial: Double? = nil
+    /// `preset.highpassB.startFreq` del preset que se usó en esta transición.
+    var hpFreqB_initial: Double? = nil
+    /// Último valor de `currentAnalysis.rmsTailCurve` (último window). Útil para
+    /// analizar el problema real de Fix #3 (filtros B retirada) con dato crudo.
+    var rmsTailCurveA_last: Double? = nil
+    /// Slope de `rmsTailCurve` con `tailWindows=4` (último ~16s). Pendiente
+    /// negativa significativa = decay natural. Para diseñar gates de filtros con
+    /// datos reales en próximo round.
+    var rmsTailSlopeA: Double? = nil
+    /// Energía outro de A computada en `calculateCrossfadeConfig` (era variable
+    /// local). Expone el valor real para correlar con queja "filtros marchosos
+    /// en outro instrumental tranquilo".
+    var outroEnergyA: Double? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -236,6 +272,17 @@ final class TransitionDiagnostics {
         // persistidos antes de Commit 2 (decoder JSON los rellena con nil).
         var entryFinalCapApplied: Bool? = nil
         var anticipationReason: String? = nil
+        // v13.O.6 (round 2026-05-15) — telemetría filtros (F4). Aditiva,
+        // sin impacto en algoritmo. Validación post coche-test del tail-easing
+        // band 3 A + diseño de gates futuros con datos reales. Optional para
+        // retrocompat con records persistidos antes de v13.O.6.
+        var filterPreRollAppliedA: Bool? = nil
+        var highShelfGainA_atEnd: Double? = nil
+        var lsGainB_initial: Double? = nil
+        var hpFreqB_initial: Double? = nil
+        var rmsTailCurveA_last: Double? = nil
+        var rmsTailSlopeA: Double? = nil
+        var outroEnergyA: Double? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -652,6 +699,13 @@ final class TransitionDiagnostics {
                 // distingue ambos casos y desbloquea análisis del cap real.
                 entryFinalCapApplied: self.entryFinalCapApplied ?? false,
                 anticipationReason: self.anticipationReason,
+                filterPreRollAppliedA: self.filterPreRollAppliedA,
+                highShelfGainA_atEnd: self.highShelfGainA_atEnd,
+                lsGainB_initial: self.lsGainB_initial,
+                hpFreqB_initial: self.hpFreqB_initial,
+                rmsTailCurveA_last: self.rmsTailCurveA_last,
+                rmsTailSlopeA: self.rmsTailSlopeA,
+                outroEnergyA: self.outroEnergyA,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

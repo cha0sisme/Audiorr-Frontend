@@ -484,6 +484,19 @@ enum DJMixingService {
         /// pre-clamp <=50, no se evaluó. true = capado. false = >50 pero exempt
         /// drop-driven. Propagado al MainActor mismo patrón que `genreCapApplied`.
         let entryFinalCapApplied: Bool?
+        // v13.O.6 (round 2026-05-15, F4) — telemetría filtros aditiva.
+        // Pasada al MainActor en `QueueManager` igual que `genreCapApplied`.
+        /// Último valor de `currentAnalysis.rmsTailCurve` (último window). nil
+        /// si el backend no proveyó la curva.
+        let rmsTailCurveA_last: Double?
+        /// Slope de `rmsTailCurve` con `tailWindows=4` (último ~16s). nil si
+        /// no hay datos suficientes (curva inexistente o <4 puntos).
+        let rmsTailSlopeA: Double?
+        /// Energía outro de A en `[0..1]` calculada por el bloque `noRealOutro`.
+        /// Era variable local; ahora se expone para analizar correlaciones con
+        /// quejas sobre filtros marcados en outros tranquilos. nil cuando no
+        /// había datos suficientes para evaluar (sin outro, track corto, etc.).
+        let outroEnergyA: Double?
     }
 
     // MARK: - Build Transition Profile
@@ -719,11 +732,17 @@ enum DJMixingService {
         // Detect the no-real-outro condition and (a) cap entry to keep the
         // trigger close to A's actual end, and (b) tell decideAnticipation to
         // suppress the anticipation tease (further pre-mutes A).
-        let noRealOutro: Bool = {
+        // v13.O.6 (F4): el cálculo de `outroEnergyA` se extrae a un tuple
+        // (noRealOutro, outroEnergyA) para exponer el valor a telemetría —
+        // antes era variable local dentro del closure y se perdía. Misma
+        // lógica que la versión previa: outroEnergyA queda nil cuando los
+        // guards iniciales no permiten evaluar (sin outro real, track corto,
+        // sin OutroData).
+        let noRealOutroEval: (flag: Bool, outroEnergy: Double?) = {
             guard let cur = safeCurrent, cur.hasError != true,
-                  cur.hasOutroData, bufferADuration > 30 else { return false }
+                  cur.hasOutroData, bufferADuration > 30 else { return (false, nil) }
             let outroDur = bufferADuration - cur.outroStartTime
-            guard outroDur < 4 else { return false }
+            guard outroDur < 4 else { return (false, nil) }
             // Confirm with energy: short outro window + still-energetic =
             // groove vivo, not a 3-second decay. energyOutro is preferred when
             // available; energy global is the fallback.
@@ -744,8 +763,10 @@ enum DJMixingService {
                 // Don't assume bug: respect the data and treat as quiet outro.
                 outroEnergy = primary
             }
-            return outroEnergy > 0.15
+            return (outroEnergy > 0.15, outroEnergy)
         }()
+        let noRealOutro: Bool = noRealOutroEval.flag
+        let outroEnergyAForTelemetry: Double? = noRealOutroEval.outroEnergy
 
         if noRealOutro && entry.entryPoint > 8.0 {
             let capped = 8.0
@@ -1430,7 +1451,11 @@ enum DJMixingService {
             downbeatDensityB20s: tier4Telemetry.downbeatDensityB20s,
             chillRecipeApplied: isChillContext,
             genreCapApplied: entry.genreCapApplied,
-            entryFinalCapApplied: entry.entryFinalCapApplied
+            entryFinalCapApplied: entry.entryFinalCapApplied,
+            // v13.O.6 (F4) — telemetría filtros aditiva.
+            rmsTailCurveA_last: rmsTailCurveAForAnticipation?.last,
+            rmsTailSlopeA: Self.deriveSlope(from: rmsTailCurveAForAnticipation, tailWindows: 4),
+            outroEnergyA: outroEnergyAForTelemetry
         )
     }
 

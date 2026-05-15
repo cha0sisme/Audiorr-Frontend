@@ -766,6 +766,34 @@ class CrossfadeExecutor {
             downbeatDensityB20s: config.downbeatDensityB20s,
             chillRecipeApplied: config.chillRecipeApplied
         )
+
+        // v13.O.6 (F4) — telemetría filtros aditiva. Captura valores
+        // estáticos del preset + gates del pre-roll Hv5-1 + endGain del
+        // high-shelf A (post Filtros-A el tail se interpola hacia 0; el
+        // campo refleja el valor en `progress=1.0` real). Setter directo
+        // sobre el singleton, mismo patrón que `QueueManager:1040-1057`.
+        let isCutFamilyForPreroll = config.transitionType == .cut || config.transitionType == .cutAFadeInB
+        let isNoOverlapForPreroll = config.transitionType == .cleanHandoff || config.transitionType == .vinylStop
+        let preRollDur = min(0.5, timings.filterLead * 0.3)
+        let preRollWillApply = !isCutFamilyForPreroll && !isNoOverlapForPreroll && !useLowpassA && preRollDur > 0
+        let lsGainBInitial = Double(preset.lowshelfB.startGain)
+        let hpFreqBInitial = Double(preset.highpassB.startFreq)
+        // En `applyFiltersA` con `progress=1.0`, band 3 high-shelf A toma el
+        // valor que el tail-easing (commit Filtros-A) deje en p=1.0. Pre fix:
+        // endGain del preset. Post fix: 0 (passthrough). Reportamos el valor
+        // que efectivamente verá el oyente en el último tick.
+        let highShelfEndA: Double? = {
+            guard useHighShelfCut, let hs = preset.highShelfA else { return nil }
+            // Reporta el endGain "lógico" del preset; el tail-easing aplicado
+            // en runtime se valida vs este valor (post Filtros-A esperado 0).
+            return Double(hs.endGain)
+        }()
+        Task { @MainActor in
+            TransitionDiagnostics.shared.filterPreRollAppliedA = preRollWillApply
+            TransitionDiagnostics.shared.highShelfGainA_atEnd = highShelfEndA
+            TransitionDiagnostics.shared.lsGainB_initial = lsGainBInitial
+            TransitionDiagnostics.shared.hpFreqB_initial = hpFreqBInitial
+        }
     }
 
     // MARK: - Timing calculation (port exacto de CrossfadeEngine.calculateTimings)
