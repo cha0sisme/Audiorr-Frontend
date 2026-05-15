@@ -2,10 +2,15 @@ import AVFoundation
 
 /// Fetches and parses synced/plain lyrics for a song.
 ///
-/// Priority:
-///   1. Embedded lyrics from audio file metadata (ID3 USLT, Vorbis Comments)
-///   2. LRCLib API (synced lyrics preferred, plain as fallback)
-///   3. Navidrome getLyrics.view API
+/// Política (gated por `BackendState.isAvailable`):
+///   - Embedded sincronizado (USLT/SYLT/iTunes lyrics LRC) → siempre se prefiere.
+///   - Si embedded no es sync y backend disponible → LRCLib (solo si devuelve sync).
+///   - Si backend no disponible → fallback a embedded plano (mejor que nada offline).
+///   - Online sin sync (ni embedded ni LRCLib) → vacío. No se muestran letras planas
+///     cuando hay backend porque hemos decidido que "no nos interesan letras sin sync".
+///
+/// No se consulta Navidrome porque su API `getLyrics.view` solo expone texto plano
+/// sin timestamps.
 @MainActor
 final class LyricsService {
     static let shared = LyricsService()
@@ -22,7 +27,7 @@ final class LyricsService {
         let source: Source
 
         enum Source: String {
-            case embedded, lrclib, navidrome
+            case embedded, lrclib
         }
 
         static let empty = LyricsResult(lines: [], isSynced: false, source: .embedded)
@@ -68,60 +73,45 @@ final class LyricsService {
     // MARK: - Fetch chain
 
     private func doFetch(songId: String, title: String, artist: String) async -> LyricsResult {
-        print("[LyricsService] doFetch: songId=\(songId) title='\(title)' artist='\(artist)'")
+        let backendUp = BackendState.shared.isAvailable
+        print("[LyricsService] doFetch: songId=\(songId) title='\(title)' artist='\(artist)' backendUp=\(backendUp)")
 
-        // Fire all three sources in parallel. LRCLib is awaited first for the
-        // fast-path return; embedded + Navidrome run concurrently and are
-        // typically already finished by the time we reach their awaits below.
-        // If LRCLib synced wins, the async let tasks are cancelled implicitly
-        // at scope exit (URLSession + AVAsset both honour Task cancellation).
-        async let embeddedTask: LyricsResult? = fetchEmbeddedWithTimeout(songId: songId)
-        async let navidromeTask: LyricsResult? = fetchNavidrome(title: title, artist: artist)
-        let lrclib = await fetchLRCLib(title: title, artist: artist)
-
-        // Fast path: LRCLib synced wins immediately
-        if let lrclib, lrclib.isSynced {
-            print("[LyricsService] ✓ Found LRCLib synced lyrics: \(lrclib.lines.count) lines")
-            return lrclib
-        }
-
-        // Otherwise wait for the parallel fetches (typically already done)
-        let embedded = await embeddedTask
-        let navidrome = await navidromeTask
-
+        // Embedded siempre. AVAsset.load(.metadata) puede colgarse en streams
+        // remotos lentos, así que el helper aplica un timeout de 3s.
+        let embedded = await fetchEmbeddedWithTimeout(songId: songId)
         if let embedded {
-            print("[LyricsService] Found embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
+            print("[LyricsService] Embedded: \(embedded.lines.count) lines, synced=\(embedded.isSynced)")
+        } else {
+            print("[LyricsService] Embedded: ausente")
         }
 
-        // Same priority order as before:
-
-        // 1. Embedded synced + multi-line (good quality)
+        // 1. Embedded sync de calidad (≥2 líneas) → gana siempre, evita red.
         if let embedded, embedded.isSynced, embedded.lines.count > 1 {
-            print("[LyricsService] ✓ Using embedded lyrics (good quality)")
+            print("[LyricsService] ✓ Embedded sync")
             return embedded
         }
 
-        // 2. LRCLib plain lyrics
-        if let lrclib {
-            print("[LyricsService] ✓ Found LRCLib lyrics: \(lrclib.lines.count) lines, synced=\(lrclib.isSynced)")
-            return lrclib
+        // 2. Backend disponible → LRCLib. Solo aceptamos sync. Si LRCLib
+        //    devuelve plano o 404, online se queda en vacío (decisión de
+        //    producto: sin sync no interesa cuando hay alternativa).
+        if backendUp {
+            if let lrclib = await fetchLRCLib(title: title, artist: artist), lrclib.isSynced {
+                print("[LyricsService] ✓ LRCLib sync")
+                return lrclib
+            }
+            print("[LyricsService] ✗ LRCLib sin sync o 404 — vacío (online)")
+            return .empty
         }
-        print("[LyricsService] ✗ No LRCLib lyrics")
 
-        // 3. Navidrome getLyrics
-        if let navidrome {
-            print("[LyricsService] ✓ Found Navidrome lyrics: \(navidrome.lines.count) lines")
-            return navidrome
-        }
-        print("[LyricsService] ✗ No Navidrome lyrics")
-
-        // 4. Embedded low quality fallback
+        // 3. Offline: aceptamos embedded plano como fallback degradado.
+        //    Mejor mostrar texto sin auto-scroll que no mostrar nada cuando
+        //    no hay otra fuente disponible.
         if let embedded {
-            print("[LyricsService] ✓ Falling back to embedded lyrics (low quality)")
+            print("[LyricsService] ✓ Embedded \(embedded.isSynced ? "sync corto" : "plain") (offline fallback)")
             return embedded
         }
 
-        print("[LyricsService] ✗ No lyrics found — returning empty")
+        print("[LyricsService] ✗ Sin letras")
         return .empty
     }
 
@@ -253,47 +243,6 @@ final class LyricsService {
         } catch {
             // Network error — skip
         }
-        return nil
-    }
-
-    // MARK: - 3. Navidrome getLyrics
-
-    private func fetchNavidrome(title: String, artist: String) async -> LyricsResult? {
-        guard !title.isEmpty,
-              let creds = NavidromeService.shared.credentials,
-              let token = creds.token,
-              let base = URL(string: creds.serverUrl) else { return nil }
-
-        let u = creds.username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? creds.username
-        let p = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
-        let encodedArtist = artist.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? artist
-        let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
-
-        let urlStr = "\(base)/rest/getLyrics.view?u=\(u)&p=\(p)&v=1.16.0&c=audiorr&f=json&artist=\(encodedArtist)&title=\(encodedTitle)"
-        guard let url = URL(string: urlStr) else { return nil }
-
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let subsonicResponse = json["subsonic-response"] as? [String: Any],
-                  let lyrics = subsonicResponse["lyrics"] as? [String: Any],
-                  let text = lyrics["value"] as? String, !text.isEmpty
-            else { return nil }
-
-            let parsed = parseLRC(text)
-            if !parsed.isEmpty {
-                return LyricsResult(lines: parsed, isSynced: true, source: .navidrome)
-            }
-
-            let lines = text.components(separatedBy: .newlines)
-                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                .enumerated()
-                .map { LyricLine(id: $0.offset, time: -1, text: $0.element) }
-            if !lines.isEmpty {
-                return LyricsResult(lines: lines, isSynced: false, source: .navidrome)
-            }
-        } catch {}
         return nil
     }
 
