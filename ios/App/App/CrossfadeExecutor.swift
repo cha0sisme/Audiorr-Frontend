@@ -1254,28 +1254,29 @@ class CrossfadeExecutor {
         // ningun filter movement, lo cual es lo correcto para fades cortos.
         let isCutTransition = config.transitionType == .cut || config.transitionType == .cutAFadeInB
 
-        let band0A: BiquadCoefficients
-        if isCutTransition {
-            band0A = .passthrough
-            diagFreqA = 0
-        } else if useLowpassA, let lpA = preset.lowpassA {
-            band0A = BiquadCoefficientCalculator.lowpass(frequency: lpA.startFreq, sampleRate: sampleRate, Q: lpA.q)
-            diagFreqA = lpA.startFreq
-        } else {
-            band0A = BiquadCoefficientCalculator.highpass(frequency: preset.highpassA.startFreq, sampleRate: sampleRate, Q: preset.highpassA.q)
-            diagFreqA = preset.highpassA.startFreq
-        }
+        // v14.04 (R-C): band 0 highpass/lowpass A inicial delegado al manager.
+        let band0Init = DSPFilterManager.band0CoefficientA_initial(
+            isCutTransition: isCutTransition,
+            useLowpassA: useLowpassA,
+            highpassPreset: preset.highpassA,
+            lowpassPreset: preset.lowpassA,
+            sampleRate: sampleRate
+        )
+        let band0A = band0Init.coefficient
+        diagFreqA = band0Init.freq
 
-        let band1A: BiquadCoefficients
-        if isCutTransition {
-            band1A = .passthrough
-            diagLsGainA = 0
-        } else if useBassManagement, let lsA = preset.lowshelfA {
-            band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsA.startGain)
-            diagLsGainA = lsA.startGain
-        } else {
-            band1A = .passthrough
-        }
+        // v14.04 (R-C): band 1 lowshelf A inicial (path normal) delegado al
+        // manager. La rama bassKill conserva su lógica legacy en applyFiltersA
+        // hasta v14.05; el coeficiente inicial es el mismo en ambos paths
+        // (startGain del preset).
+        let band1Init = DSPFilterManager.band1CoefficientA_initial(
+            isCutTransition: isCutTransition,
+            useBassManagement: useBassManagement,
+            preset: preset.lowshelfA,
+            sampleRate: sampleRate
+        )
+        let band1A = band1Init.coefficient
+        diagLsGainA = band1Init.gain
 
         let band2A: BiquadCoefficients
         if !isCutTransition, useMidScoop, let ms = preset.midScoopA {
@@ -2187,12 +2188,17 @@ class CrossfadeExecutor {
                 let band0A = BiquadCoefficientCalculator.highpass(
                     frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
                 // Hv5-1: bands 1/2/3 = coefs estables del setup (idénticos a
-                // setupInitialEQ:1219-1242) en vez de .passthrough. Evita salto
-                // numérico en filterStartTime cuando startGain != 0 (lowshelfA,
+                // setupInitialEQ) en vez de .passthrough. Evita salto numérico
+                // en filterStartTime cuando startGain != 0 (lowshelfA,
                 // midScoopA, highShelfA con gain inicial no nulo).
-                let band1A: BiquadCoefficients = (useBassManagement ? preset.lowshelfA.map {
-                    BiquadCoefficientCalculator.lowShelf(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain)
-                } : nil) ?? .passthrough
+                // v14.04 (R-C): band 1 delegado a DSPFilterManager.
+                let band1Pre = DSPFilterManager.band1CoefficientA_initial(
+                    isCutTransition: false,
+                    useBassManagement: useBassManagement,
+                    preset: preset.lowshelfA,
+                    sampleRate: sampleRate
+                )
+                let band1A = band1Pre.coefficient
                 let band2A: BiquadCoefficients = (useMidScoop ? preset.midScoopA.map {
                     BiquadCoefficientCalculator.parametric(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain, bandwidth: $0.bandwidth)
                 } : nil) ?? .passthrough
@@ -2281,112 +2287,66 @@ class CrossfadeExecutor {
         let effectiveBassSwapTime = max(bassSwapTime, rampStart)
 
         // ── Band 0: Lowpass (energy-down) OR highpass (normal) ──
-        // v13.O.3 (audit 2026-05-11): linInterp → expInterp REACTIVADO en band 0.
-        //
-        // Contexto histórico: v11 desactivó expInterp porque "aceleraba al final
-        // del sweep" — pero eso era con pivot=0.60. El mismo audit v8 movió el
-        // pivot a 0.40 (líneas 2097-2106) y el contexto matemático se invirtió:
-        // con pivot=0.40 + linInterp, el oído humano (logarítmico, octavas)
-        // percibe 3.32 octavas en el 40% inicial y solo 1 octava en el 60%
-        // final (preset Normal 400→4000→8000Hz). El 76.85% del trabajo
-        // perceptual queda concentrado en el primer 40% del fade, justo
-        // cuando A todavía suena fuerte — exactamente el síntoma "filtros
-        // de golpe" del coche-test v13.O.2 (20+ menciones del director).
-        //
-        // expInterp = a·(b/a)^t distribuye octavas linealmente en log-Hz:
-        // cada segundo del fade aporta octavas_totales/segundos constante.
-        // Sweep uniforme → "perilla del DJ moviéndose suave de principio a
-        // fin". Aplicado a band 0 únicamente (band 1/2/3 ya están en dB que
-        // es logarítmico). La bell de Q (qProgress temporal) sigue ortogonal,
-        // centrada en 0.55 con sus propias dimensiones.
-        var freqA: Float
-        let band0A: BiquadCoefficients
-        if useLowpassA, let lpA = preset.lowpassA {
-            let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
-            if t < pivotTime {
-                let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = expInterp(lpA.startFreq, midFreq, min(1, p))
-            } else {
-                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = expInterp(midFreq, lpA.endFreq, min(1, p))
-            }
-            band0A = BiquadCoefficientCalculator.lowpass(frequency: freqA, sampleRate: sampleRate, Q: lpA.q)
-        } else {
-            if t < pivotTime {
-                let p = Float((t - rampStart) / (pivotTime - rampStart))
-                freqA = expInterp(preset.highpassA.startFreq, preset.highpassA.midFreq, min(1, p))
-            } else {
-                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                freqA = expInterp(preset.highpassA.midFreq, preset.highpassA.endFreq, min(1, p))
-            }
-            // Dynamic Q Resonance: bell-shaped Q curve that peaks mid-crossfade.
-            // Creates the classic DJ "sweeping filter" resonance at the cutoff frequency.
-            // Q rises from the preset's base Q to a peak (3.5) and back down.
-            // Hard-clamped at 4.0 to prevent filter instability/self-oscillation.
-            //
-            // v9.5 (audit 2026-05-05): cuando rampStart esta rebased a cutStart
-            // (CUT con hold), totalFilterDur cae de ~7s a ~3s. La bell de width
-            // 0.30 se comprime: el peak Q dura ~0.9s en vez de ~2.1s y se siente
-            // como "blink" en vez de "barrido". En CUT ampliamos width a 0.45
-            // para que el peak vuelva a durar ~1.4s, manteniendo el caracter del
-            // efecto en la ventana cutDuration mas corta.
-            let qValue: Float
-            if useDynamicQ, totalFilterDur > 0 {
-                let qProgress = Float((t - rampStart) / totalFilterDur)
-                // Gaussian bell: center at 55% of crossfade, width adapts to ramp scope —
-                // 0.30 cuando la ventana es full crossfade (~7s+); 0.45 cuando es CUT-local
-                // (~3s) para evitar el "blink" causado por la ventana comprimida.
-                let bellCenter: Float = 0.55
-                let isCutLocalRamp = config.transitionType == .cut || config.transitionType == .cutAFadeInB
-                let bellWidth: Float = isCutLocalRamp ? 0.45 : 0.30
-                let exponent = -powf((qProgress - bellCenter) / bellWidth, 2) / 2.0
-                // Clamp exponent to avoid expf underflow on extreme values
-                let bellValue = expf(max(-10, exponent))
-                let baseQ = preset.highpassA.q
-                let peakQ: Float = 3.5
-                qValue = min(4.0, baseQ + (peakQ - baseQ) * bellValue)
-            } else {
-                qValue = preset.highpassA.q
-            }
-            diagQA = qValue
-            band0A = BiquadCoefficientCalculator.highpass(frequency: freqA, sampleRate: sampleRate, Q: qValue)
-        }
-        diagFreqA = freqA
+        // v14.04 (R-C): lógica completa (sweep log-uniforme expInterp con
+        // pivot 0.40 + Q dinámica gaussiana bell center 0.55 / width adapta
+        // a CUT-local) migrada a DSPFilterManager.band0CoefficientA. La
+        // rama legacy que vivía aquí ha sido eliminada. Único punto de
+        // cálculo de band 0 A en todo el subsistema.
+        let band0Run = DSPFilterManager.band0CoefficientA(
+            at: t,
+            transitionType: config.transitionType,
+            useLowpassA: useLowpassA,
+            useDynamicQ: useDynamicQ,
+            highpassPreset: preset.highpassA,
+            lowpassPreset: preset.lowpassA,
+            rampStart: rampStart,
+            rampEnd: rampEnd,
+            pivotTime: pivotTime,
+            totalFilterDur: totalFilterDur,
+            sampleRate: sampleRate
+        )
+        let band0A = band0Run.coefficient
+        diagFreqA = band0Run.freq
+        diagQA = band0Run.qValue
 
         // ── Band 1: Bass swap lowshelf (or Bass Kill) ──
+        // v14.04 (R-C): path normal (rama else de bassKill) migrado a
+        // DSPFilterManager.band1CoefficientA_normal. La rama bassKill
+        // conserva su lógica legacy aquí hasta v14.05, donde se deprecará
+        // la curva -60/100ms en favor de cosSquared 0→-16dB.
         var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
-            var lsGain: Float
             if useBassKill {
-                // Bass Kill: hold at natural level, then instant cut at bassSwapTime.
-                // 100ms anti-click ramp — imperceptible but prevents clicks/pops
-                // from abrupt coefficient changes in the biquad delay line.
+                // Bass Kill legacy: hold at natural level, then instant cut at
+                // bassSwapTime via 100ms ramp. Se deprecará en v14.05.
                 let killRampDuration: Double = 0.1
-                let killDepth: Float = -60.0  // effectively silence below shelf freq
+                let killDepth: Float = -60.0
+                let lsGain: Float
                 if t < bassSwapTime {
-                    lsGain = lsA.startGain  // 0dB — full bass until the kill
+                    lsGain = lsA.startGain
                 } else if t < bassSwapTime + killRampDuration {
                     let rampP = Float((t - bassSwapTime) / killRampDuration)
                     lsGain = linInterp(lsA.startGain, killDepth, rampP)
                 } else {
-                    lsGain = killDepth  // -60dB — bass is dead
+                    lsGain = killDepth
                 }
+                diagLsGainA = lsGain
+                band1A = BiquadCoefficientCalculator.lowShelf(
+                    frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain
+                )
             } else {
-                // Standard gradual bass swap
-                let scaledMidGain = lsA.midGain * danceabilityBassScale
-                let scaledEndGain = lsA.endGain * danceabilityBassScale
-                if t < effectiveBassSwapTime {
-                    let preDur = effectiveBassSwapTime - rampStart
-                    let preP = preDur > 0 ? Float((t - rampStart) / preDur) : 1.0
-                    lsGain = linInterp(lsA.startGain, scaledMidGain, preP)
-                } else {
-                    let postDur = rampEnd - effectiveBassSwapTime
-                    let postP = postDur > 0 ? Float((t - effectiveBassSwapTime) / postDur) : 1.0
-                    lsGain = linInterp(scaledMidGain, scaledEndGain, postP)
-                }
+                let band1Run = DSPFilterManager.band1CoefficientA_normal(
+                    at: t,
+                    lsA: lsA,
+                    danceabilityBassScale: danceabilityBassScale,
+                    rampStart: rampStart,
+                    rampEnd: rampEnd,
+                    effectiveBassSwapTime: effectiveBassSwapTime,
+                    sampleRate: sampleRate
+                )
+                band1A = band1Run.coefficient
+                diagLsGainA = band1Run.gain
             }
-            diagLsGainA = lsGain
-            band1A = BiquadCoefficientCalculator.lowShelf(frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain)
         }
 
         // ── Band 2: Mid scoop ──

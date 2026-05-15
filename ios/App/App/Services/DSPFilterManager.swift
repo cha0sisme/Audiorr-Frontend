@@ -176,4 +176,192 @@ final class DSPFilterManager {
             frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain
         )
     }
+
+    // MARK: - Helpers internos (replicas inline-expandidas de linInterp/expInterp
+    // del executor, que son private func de instancia y no son accesibles aquí).
+
+    private static func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float {
+        let clamped = min(1, max(0, t))
+        return a + (b - a) * clamped
+    }
+
+    private static func expLerp(_ a: Float, _ b: Float, _ t: Float) -> Float {
+        let safeA = max(a, 0.001)
+        let safeB = max(b, 0.001)
+        let clamped = min(1, max(0, t))
+        return safeA * powf(safeB / safeA, clamped)
+    }
+
+    // MARK: - Band 0 — Highpass A / Lowpass A (energy-down)
+
+    /// Coeficiente inicial de band 0 A. Usado por `setupInitialEQ`.
+    /// En transiciones CUT/CUT_A_FADE_IN_B la banda arranca passthrough
+    /// (el sweep cut-local se siembra desde `applyFiltersA`). En energy-down
+    /// presets usa lowpass; el resto usa highpass.
+    /// Migrado en v14.04 desde CrossfadeExecutor.setupInitialEQ.
+    static func band0CoefficientA_initial(
+        isCutTransition: Bool,
+        useLowpassA: Bool,
+        highpassPreset: CrossfadeExecutor.FilterPreset.Highpass,
+        lowpassPreset: CrossfadeExecutor.FilterPreset.Lowpass?,
+        sampleRate: Double
+    ) -> (coefficient: BiquadCoefficients, freq: Float) {
+        if isCutTransition {
+            return (.passthrough, 0)
+        }
+        if useLowpassA, let lpA = lowpassPreset {
+            return (
+                BiquadCoefficientCalculator.lowpass(
+                    frequency: lpA.startFreq, sampleRate: sampleRate, Q: lpA.q
+                ),
+                lpA.startFreq
+            )
+        }
+        return (
+            BiquadCoefficientCalculator.highpass(
+                frequency: highpassPreset.startFreq, sampleRate: sampleRate, Q: highpassPreset.q
+            ),
+            highpassPreset.startFreq
+        )
+    }
+
+    /// Coeficiente runtime band 0 A durante el fade.
+    /// Implementa sweep log-uniforme (`expInterp`) con pivot en `pivotTime`
+    /// y Q dinámica gaussiana opcional centrada en `qProgress=0.55` cuando
+    /// el path es highpass. En energy-down (lowpass) la Q queda fija al
+    /// valor del preset (sin bell). Devuelve también `freq` y `qValue` para
+    /// telemetría (diagFreqA, diagQA).
+    /// Migrado en v14.04 desde CrossfadeExecutor.applyFiltersA banda 0.
+    static func band0CoefficientA(
+        at t: Double,
+        transitionType: CrossfadeExecutor.TransitionType,
+        useLowpassA: Bool,
+        useDynamicQ: Bool,
+        highpassPreset: CrossfadeExecutor.FilterPreset.Highpass,
+        lowpassPreset: CrossfadeExecutor.FilterPreset.Lowpass?,
+        rampStart: Double,
+        rampEnd: Double,
+        pivotTime: Double,
+        totalFilterDur: Double,
+        sampleRate: Double
+    ) -> (coefficient: BiquadCoefficients, freq: Float, qValue: Float) {
+        if useLowpassA, let lpA = lowpassPreset {
+            let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
+            let freq: Float
+            if t < pivotTime {
+                let denom = pivotTime - rampStart
+                let p = Float(denom > 0 ? (t - rampStart) / denom : 1.0)
+                freq = expLerp(lpA.startFreq, midFreq, p)
+            } else {
+                let denom = rampEnd - pivotTime
+                let p = Float(denom > 0 ? (t - pivotTime) / denom : 1.0)
+                freq = expLerp(midFreq, lpA.endFreq, p)
+            }
+            return (
+                BiquadCoefficientCalculator.lowpass(
+                    frequency: freq, sampleRate: sampleRate, Q: lpA.q
+                ),
+                freq,
+                lpA.q
+            )
+        }
+
+        // Highpass path con Q dinámica gaussiana opcional.
+        let freq: Float
+        if t < pivotTime {
+            let denom = pivotTime - rampStart
+            let p = Float(denom > 0 ? (t - rampStart) / denom : 1.0)
+            freq = expLerp(highpassPreset.startFreq, highpassPreset.midFreq, p)
+        } else {
+            let denom = rampEnd - pivotTime
+            let p = Float(denom > 0 ? (t - pivotTime) / denom : 1.0)
+            freq = expLerp(highpassPreset.midFreq, highpassPreset.endFreq, p)
+        }
+
+        let qValue: Float
+        if useDynamicQ, totalFilterDur > 0 {
+            // Bell gaussiana — center 0.55, width adapta a CUT-local (ventana
+            // ~3s) vs full crossfade (~7s+) para evitar "blink" en ventana
+            // comprimida. v9.5 audit 2026-05-05.
+            let qProgress = Float((t - rampStart) / totalFilterDur)
+            let isCutLocalRamp = transitionType == .cut || transitionType == .cutAFadeInB
+            let bellCenter: Float = 0.55
+            let bellWidth: Float = isCutLocalRamp ? 0.45 : 0.30
+            let exponent = -powf((qProgress - bellCenter) / bellWidth, 2) / 2.0
+            let bellValue = expf(max(-10, exponent))
+            let baseQ = highpassPreset.q
+            let peakQ: Float = 3.5
+            qValue = min(4.0, baseQ + (peakQ - baseQ) * bellValue)
+        } else {
+            qValue = highpassPreset.q
+        }
+
+        return (
+            BiquadCoefficientCalculator.highpass(
+                frequency: freq, sampleRate: sampleRate, Q: qValue
+            ),
+            freq,
+            qValue
+        )
+    }
+
+    // MARK: - Band 1 — Lowshelf A (path normal sin bassKill)
+
+    /// Coeficiente inicial de band 1 A (lowshelf normal, sin bassKill).
+    /// Usado por `setupInitialEQ`. La rama bassKill mantiene su lógica
+    /// legacy en CrossfadeExecutor hasta v14.05.
+    /// Migrado en v14.04 desde CrossfadeExecutor.setupInitialEQ.
+    static func band1CoefficientA_initial(
+        isCutTransition: Bool,
+        useBassManagement: Bool,
+        preset: CrossfadeExecutor.FilterPreset.Lowshelf?,
+        sampleRate: Double
+    ) -> (coefficient: BiquadCoefficients, gain: Float) {
+        if isCutTransition {
+            return (.passthrough, 0)
+        }
+        guard useBassManagement, let lsA = preset else {
+            return (.passthrough, 0)
+        }
+        return (
+            BiquadCoefficientCalculator.lowShelf(
+                frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsA.startGain
+            ),
+            lsA.startGain
+        )
+    }
+
+    /// Coeficiente runtime band 1 A para el path normal de bass swap
+    /// (rama `else` de bassKill). Implementa linInterp con scaling por
+    /// danceability en dos segmentos: pre-bassSwapTime y post-bassSwapTime.
+    /// La rama bassKill se mantiene en legacy hasta v14.05.
+    /// Migrado en v14.04 desde CrossfadeExecutor.applyFiltersA banda 1.
+    static func band1CoefficientA_normal(
+        at t: Double,
+        lsA: CrossfadeExecutor.FilterPreset.Lowshelf,
+        danceabilityBassScale: Float,
+        rampStart: Double,
+        rampEnd: Double,
+        effectiveBassSwapTime: Double,
+        sampleRate: Double
+    ) -> (coefficient: BiquadCoefficients, gain: Float) {
+        let scaledMidGain = lsA.midGain * danceabilityBassScale
+        let scaledEndGain = lsA.endGain * danceabilityBassScale
+        let lsGain: Float
+        if t < effectiveBassSwapTime {
+            let preDur = effectiveBassSwapTime - rampStart
+            let preP = Float(preDur > 0 ? (t - rampStart) / preDur : 1.0)
+            lsGain = lerp(lsA.startGain, scaledMidGain, preP)
+        } else {
+            let postDur = rampEnd - effectiveBassSwapTime
+            let postP = Float(postDur > 0 ? (t - effectiveBassSwapTime) / postDur : 1.0)
+            lsGain = lerp(scaledMidGain, scaledEndGain, postP)
+        }
+        return (
+            BiquadCoefficientCalculator.lowShelf(
+                frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain
+            ),
+            lsGain
+        )
+    }
 }
