@@ -751,10 +751,21 @@ final class NavidromeService: ObservableObject {
             pool = await getAlbumList(type: "newest", size: desiredSize)
         }
 
-        // Filter by year and sort newest first
+        // Filter by year and sort newest first. Tiebreaker por `created`
+        // (timestamp ISO 8601 de cuándo se añadió a la biblioteca) cuando
+        // `year` es igual entre álbumes — sin esto, varios álbumes del año
+        // en curso quedaban en orden arbitrario del server. Replica el sort
+        // de Audiorr-web getAlbumsByYear: (year desc, created desc).
         let filtered = pool
             .filter { ($0.year ?? 0) >= fromYear }
-            .sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+            .sorted { a, b in
+                let yearA = a.year ?? 0
+                let yearB = b.year ?? 0
+                if yearA != yearB { return yearA > yearB }
+                // ISO 8601 lexicográfico == cronológico, así que `>` ordena
+                // del más reciente al más antiguo.
+                return (a.created ?? "") > (b.created ?? "")
+            }
         let result = Array(filtered.prefix(size))
         cacheSet(cacheKey, value: result)
         return result

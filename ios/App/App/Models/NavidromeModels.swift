@@ -225,8 +225,35 @@ struct NavidromeAlbum: Identifiable, Decodable, Hashable {
     let year: Int?
     let genre: String?
     let explicitStatus: String?
+    /// ISO 8601 timestamp de cuándo se añadió a la biblioteca Navidrome.
+    /// Tiebreaker cronológico cuando `year` es igual entre álbumes (sort de
+    /// "Lanzamientos recientes" lo necesita para devolver lo más nuevo primero
+    /// cuando todos son del año actual). Opcional para compatibilidad con
+    /// construcciones manuales antiguas (HomeView, SongListView, contexts).
+    let created: String?
 
     var isExplicit: Bool { explicitStatus == "explicit" }
+
+    /// Init explícito que mantiene compatibilidad con los callsites que
+    /// construyen `NavidromeAlbum` sin `created` (HomeView contexts, SongListView,
+    /// NavidromeService.getAlbumDetail). El campo se decodifica automáticamente
+    /// desde Subsonic cuando viene en el JSON.
+    init(
+        id: String, name: String, artist: String, coverArt: String?,
+        songCount: Int?, duration: Int?, year: Int?, genre: String?,
+        explicitStatus: String?, created: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.artist = artist
+        self.coverArt = coverArt
+        self.songCount = songCount
+        self.duration = duration
+        self.year = year
+        self.genre = genre
+        self.explicitStatus = explicitStatus
+        self.created = created
+    }
 }
 
 struct NavidromeArtist: Identifiable, Decodable, Hashable {
