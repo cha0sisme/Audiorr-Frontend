@@ -595,24 +595,37 @@ final class NavidromeService: ObservableObject {
         return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     }
 
-    /// Playlists artist-focused: SOLO Editorial o "This is …". Replica
-    /// `findPlaylistsByArtist` de Audiorr-web.
+    /// Playlists artist-focused.
     ///
-    /// Orden de salida:
-    ///   1. "This is {artistName}" oficial — siempre primero si existe (sin
-    ///      necesidad de descargar entries: match por nombre).
-    ///   2. Editoriales que contienen al artista, en su orden original de
+    /// Comportamiento gated por `BackendState.isAvailable`:
+    ///
+    /// CON backend Audiorr disponible — replica `findPlaylistsByArtist` de
+    /// Audiorr-web. Filtra solo Editorial (`[Editorial]` en comment, lo
+    /// marca el backend al sincronizar) y "This is …". Orden de salida:
+    ///   1. "This is {artistName}" oficial — siempre primero si existe.
+    ///   2. Editoriales que contienen al artista, en orden original de
     ///      Navidrome.
     ///   3. Otras "This is X" donde el artista aparece como feature.
     ///
-    /// Cambio respecto a la versión previa: antes escaneábamos CUALQUIER
-    /// playlist con un track del artista. Ahora restringimos a curated/
-    /// editoriales/This-is, igual que la web — más rápido y más relevante.
+    /// SIN backend Audiorr — el tag `[Editorial]` no existe (lo crea el
+    /// backend) y las "This is X" llegan solo si el usuario las creó
+    /// manualmente. Para no dejar la sección vacía, caemos al
+    /// comportamiento previo: escanea CUALQUIER playlist no smart/daily-mix
+    /// y devuelve las que contienen al artista en orden Navidrome.
     func getPlaylistsByArtist(artistName: String) async -> [NavidromePlaylist] {
         guard !artistName.isEmpty, let all = try? await getPlaylists() else { return [] }
         let target = artistName.lowercased().trimmingCharacters(in: .whitespaces)
+        let backendUp = await MainActor.run { BackendState.shared.isAvailable }
 
-        // Bucket separation: oficial, editorial, otras "This is".
+        return backendUp
+            ? await getPlaylistsByArtistCurated(all: all, target: target)
+            : await getPlaylistsByArtistAnyMatch(all: all, target: target)
+    }
+
+    /// Lógica con backend: solo Editorial/This-is + "This is {artist}" primero.
+    private func getPlaylistsByArtistCurated(
+        all: [NavidromePlaylist], target: String
+    ) async -> [NavidromePlaylist] {
         var officialThisIs: [NavidromePlaylist] = []
         var otherThisIs: [NavidromePlaylist] = []
         var editorialCandidates: [NavidromePlaylist] = []
@@ -673,6 +686,40 @@ final class NavidromeService: ObservableObject {
         }
 
         return officialThisIs + editorialMatches + otherThisIsMatches
+    }
+
+    /// Lógica sin backend: escanea cualquier playlist (excluyendo smart +
+    /// daily-mix) y devuelve las que contienen al artista, en orden Navidrome.
+    /// Comportamiento previo al cambio "This is X primero".
+    private func getPlaylistsByArtistAnyMatch(
+        all: [NavidromePlaylist], target: String
+    ) async -> [NavidromePlaylist] {
+        let candidates = all.filter { pl in
+            let name = pl.name.lowercased()
+            let comment = pl.comment ?? ""
+            return !comment.contains("Smart Playlist")
+                && !name.contains("mix diario")
+                && !comment.lowercased().contains("mix diario")
+        }
+
+        return await withTaskGroup(of: (Int, NavidromePlaylist?).self) { group in
+            for (idx, pl) in candidates.enumerated() {
+                group.addTask {
+                    guard let (_, songs) = try? await NavidromeService.shared.getPlaylistSongs(playlistId: pl.id) else {
+                        return (idx, nil)
+                    }
+                    let match = songs.contains { song in
+                        Self.artistMatches(needle: target, in: song.artist.lowercased())
+                    }
+                    return (idx, match ? pl : nil)
+                }
+            }
+            var results: [(Int, NavidromePlaylist)] = []
+            for await (idx, pl) in group {
+                if let pl { results.append((idx, pl)) }
+            }
+            return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+        }
     }
 
     /// Detecta playlist editorial — `[Editorial]` en comment.
