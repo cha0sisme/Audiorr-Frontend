@@ -2180,25 +2180,56 @@ class CrossfadeExecutor {
             || config.transitionType == .vinylStop
             || config.transitionType == .sequential
         let preRollDur = min(0.5, timings.filterLead * 0.3)
-        if !isCutFamily && !isNoOverlap && !useLowpassA && preRollDur > 0 {
-            let preRollStart = timings.filterStartTime - preRollDur
+        let preRollActive = !isCutFamily && !isNoOverlap && !useLowpassA && preRollDur > 0
+        let preRollStart = timings.filterStartTime - preRollDur
+
+        // v14.11 — bassKill A arranca con la ventana pre-roll en vez de en
+        // filterStartTime. Antes la cosSquared 0→-16dB tenía rampStart =
+        // filterStartTime y p=0 hasta ese instante; el director percibía el
+        // bass-kill como "de repente, no se adelanta poco a poco" en BMB/EQ
+        // (log-analyst v14, 9 quotes verbatim). Adelantar el rampStart a
+        // preRollStart hace que durante los ~500ms de pre-roll band 1 ya
+        // empiece a perder graves suavemente, alineado con el sweep de band 0
+        // que ya vivía en esta ventana. Continuidad garantizada porque la
+        // cosSquared se evalúa con el mismo (rampStart, rampEnd) en ambas ramas.
+        let bassKillRampStartOverride: Double? = (preRollActive && useBassKill)
+            ? preRollStart
+            : nil
+
+        if preRollActive {
             if t >= preRollStart && t < timings.filterStartTime {
                 let p = Float((t - preRollStart) / preRollDur)
                 let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, p))
                 let band0A = BiquadCoefficientCalculator.highpass(
                     frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
-                // Hv5-1: bands 1/2/3 = coefs estables del setup (idénticos a
-                // setupInitialEQ) en vez de .passthrough. Evita salto numérico
-                // en filterStartTime cuando startGain != 0 (lowshelfA,
-                // midScoopA, highShelfA con gain inicial no nulo).
-                // v14.04 (R-C): band 1 delegado a DSPFilterManager.
-                let band1Pre = DSPFilterManager.band1CoefficientA_initial(
-                    isCutTransition: false,
-                    useBassManagement: useBassManagement,
-                    preset: preset.lowshelfA,
-                    sampleRate: sampleRate
-                )
-                let band1A = band1Pre.coefficient
+                // v14.11 — band 1 ahora rampea bassKill desde preRollStart si
+                // useBassKill. Antes quedaba en initial (lsA.startGain) durante
+                // la ventana de pre-roll, dejando el filtro de graves dormido
+                // y produciendo la queja "no se adelanta". Si !useBassKill,
+                // se mantiene la rama legacy initial (Hv5-1: coefs estables
+                // idénticos a setupInitialEQ — evita salto numérico cuando
+                // startGain != 0 en lowshelf/midScoop/highShelf).
+                let band1A: BiquadCoefficients
+                if useBassKill, let lsA = preset.lowshelfA, let bkStart = bassKillRampStartOverride {
+                    let band1Run = DSPFilterManager.band1CoefficientA_bassKill(
+                        at: t,
+                        lsA: lsA,
+                        rampStart: bkStart,
+                        rampEnd: timings.transitionEndTime,
+                        sampleRate: sampleRate
+                    )
+                    band1A = band1Run.coefficient
+                    diagLsGainA = band1Run.gain
+                } else {
+                    // v14.04 (R-C): band 1 delegado a DSPFilterManager.
+                    let band1Pre = DSPFilterManager.band1CoefficientA_initial(
+                        isCutTransition: false,
+                        useBassManagement: useBassManagement,
+                        preset: preset.lowshelfA,
+                        sampleRate: sampleRate
+                    )
+                    band1A = band1Pre.coefficient
+                }
                 let band2A: BiquadCoefficients = (useMidScoop ? preset.midScoopA.map {
                     BiquadCoefficientCalculator.parametric(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain, bandwidth: $0.bandwidth)
                 } : nil) ?? .passthrough
@@ -2320,10 +2351,15 @@ class CrossfadeExecutor {
         var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
             if useBassKill {
+                // v14.11 — usa rampStart adelantado al pre-roll si está activo.
+                // Continuidad: el pre-roll branch (líneas ~2200) evalúa la misma
+                // cosSquared con el mismo (rampStart, rampEnd), así que la curva
+                // que ve el oyente es una sola sin discontinuidad en filterStartTime.
+                let bkRampStart = bassKillRampStartOverride ?? rampStart
                 let band1Run = DSPFilterManager.band1CoefficientA_bassKill(
                     at: t,
                     lsA: lsA,
-                    rampStart: rampStart,
+                    rampStart: bkRampStart,
                     rampEnd: rampEnd,
                     sampleRate: sampleRate
                 )
