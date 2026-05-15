@@ -93,6 +93,18 @@ final class ConnectService {
             return
         }
 
+        // Audiorr Connect requiere el backend Audiorr (auth + hub Socket.IO viven
+        // ahí). Sin backend disponible, antes entrábamos en `authenticate()`,
+        // fallaba el POST y `scheduleReconnect` reintentaba con backoff 5-60s
+        // indefinidamente — red intermitente sostenida que contribuye al
+        // Adaptive Power Mode de iOS. En lugar de eso, observamos `BackendState`
+        // y arrancamos solo cuando el backend vuelva a estar disponible.
+        guard BackendState.shared.isAvailable else {
+            print("[Connect] Backend Audiorr no disponible — connect() suprimido (observer rearmado)")
+            observeBackendForReconnect()
+            return
+        }
+
         isConnecting = true
 
         Task {
@@ -277,16 +289,40 @@ final class ConnectService {
 
     private var lastBroadcastTime: Date = .distantPast
 
+    /// Progress broadcast cadence (segundos). Antes era 1s — al ser el único
+    /// dispositivo del hub, eso generaba red continua suficiente para que iOS
+    /// activase el Adaptive Power Mode. 5s es suficiente para que un controlador
+    /// remoto vea la barra de progreso aproximadamente sincronizada (los eventos
+    /// "significantes" play/pause/song change siguen llegando instantáneamente).
+    private let progressBroadcastInterval: TimeInterval = 5.0
+
+    /// ¿Hay algún otro dispositivo en el hub aparte de nosotros?
+    /// `connectedDevices` se popula con el evento `devices_list` que envía el hub;
+    /// cada entrada lleva `isThisDevice` para distinguir el propio.
+    private var hasRemoteListeners: Bool {
+        connectedDevices.contains(where: { !$0.isThisDevice })
+    }
+
     /// Broadcast on significant events (song change, play/pause). Throttle progress-only updates.
+    ///
+    /// Gating:
+    /// - Eventos significantes (`significantChange == true`): se emiten siempre.
+    ///   Son raros (play/pause/song change) y útiles para reconectar dispositivos
+    ///   que entran al hub tarde sin perder estado.
+    /// - Progress ticks (`significantChange == false`): se emiten SOLO si hay otro
+    ///   dispositivo escuchando en el hub. Sin esto, cuando éramos el único device
+    ///   conectado emitíamos un broadcast por segundo "al vacío" — red continua
+    ///   sostenida que dispara el Adaptive Power Mode de iOS.
     func broadcastStateIfNeeded(significantChange: Bool = false) {
         guard isConnected else { return }
         if significantChange {
             lastBroadcastTime = Date()
             broadcastPlaybackState(includeQueue: true)
         } else {
-            // Throttle progress-only to every 1 second (no queue payload)
+            // Sin oyentes remotos no merece la pena gastar TCP cada N segundos.
+            guard hasRemoteListeners else { return }
             let now = Date()
-            if now.timeIntervalSince(lastBroadcastTime) >= 1.0 {
+            if now.timeIntervalSince(lastBroadcastTime) >= progressBroadcastInterval {
                 lastBroadcastTime = now
                 broadcastPlaybackState(includeQueue: false)
             }
@@ -802,6 +838,26 @@ final class ConnectService {
             Task { @MainActor in
                 self?.reconnectTimer = nil
                 self?.connect()
+            }
+        }
+    }
+
+    /// Observa cuando el backend pase de no disponible → disponible para
+    /// retomar el ciclo de conexión sin pollear. Usa el mismo patrón one-shot
+    /// que el resto del repo (`withObservationTracking` + rearm en cada cambio).
+    private func observeBackendForReconnect() {
+        withObservationTracking {
+            _ = BackendState.shared.isAvailable
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if BackendState.shared.isAvailable {
+                    print("[Connect] Backend disponible — reintentando connect()")
+                    self.connect()
+                } else {
+                    // Sigue sin estar — rearmamos el observer.
+                    self.observeBackendForReconnect()
+                }
             }
         }
     }
