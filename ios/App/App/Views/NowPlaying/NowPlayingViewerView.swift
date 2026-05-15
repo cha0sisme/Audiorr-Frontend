@@ -217,7 +217,7 @@ struct NowPlayingViewerView: View {
         }
         // Sheet "Ver artistas" — modal nativo iOS con la lista de
         // `song.artists[]`. Al elegir uno, encadenamos el mismo flow que el
-        // "Ir al artista" singular: `pendingNavigation` + cerrar el viewer
+        // "Ver artista" singular: `pendingNavigation` + cerrar el viewer
         // para que ContentView haga el push hacia ArtistDetailView.
         .sheet(isPresented: $showViewArtists) {
             ViewArtistsSheet(
@@ -297,10 +297,10 @@ struct NowPlayingViewerView: View {
             }
 
             // Multi-artist (OpenSubsonic): si la song actual viene con 2+
-            // entradas en `currentArtists`, ofrecemos "Ir a los artistas"
+            // entradas en `currentArtists`, ofrecemos "Ver artistas"
             // (plural) y al tap abrimos el sheet `ViewArtistsSheet`. Si solo
-            // hay 1 (o el server no expone el array), queda el singular
-            // navegando directo al `state.artistId`.
+            // hay 1 (o el server no expone el array), queda "Ver artista"
+            // (singular) navegando directo al `state.artistId`.
             if state.currentArtists.count > 1 {
                 navActions.append(UIAction(
                     title: L.goToArtists,

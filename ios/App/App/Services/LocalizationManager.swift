@@ -102,11 +102,11 @@ enum L {
     static var playNext: String { isEn ? "Play next" : "Reproducir a continuación" }
     static var addToQueue: String { isEn ? "Add to queue" : "Añadir a la cola" }
     static var goToAlbum: String { isEn ? "Go to album" : "Ir al álbum" }
-    static var goToArtist: String { isEn ? "Go to artist" : "Ir al artista" }
+    static var goToArtist: String { isEn ? "View artist" : "Ver artista" }
     /// Plural: cuando la song tiene >1 entrada en `song.artists[]` (OpenSubsonic),
-    /// el menú contextual pasa de "Ir al artista" a "Ir a los artistas" y abre
+    /// el menú contextual pasa de "Ver artista" a "Ver artistas" y abre
     /// una sheet con la lista. El usuario elige cuál abrir.
-    static var goToArtists: String { isEn ? "Go to artists" : "Ir a los artistas" }
+    static var goToArtists: String { isEn ? "View artists" : "Ver artistas" }
     /// Título del sheet `ViewArtistsSheet` (modal nativo iOS) que lista los
     /// artistas de la canción.
     static var artistsSheetTitle: String { isEn ? "Artists" : "Artistas" }

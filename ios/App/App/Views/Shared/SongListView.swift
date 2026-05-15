@@ -124,9 +124,9 @@ struct SongListView: View {
 
             // — Artist section
             // Multi-artist (OpenSubsonic): si la song trae 2+ artistas en
-            // `song.artists[]`, mostramos "Ir a los artistas" (plural) y al
+            // `song.artists[]`, mostramos "Ver artistas" (plural) y al
             // tap abrimos un sheet nativo con la lista. Si trae 1 (o el
-            // server no expone el array), queda "Ir al artista" (singular)
+            // server no expone el array), queda "Ver artista" (singular)
             // que navega directo al `song.artistId`.
             if showArtistInMenu {
                 let songArtists = song.artists ?? []
