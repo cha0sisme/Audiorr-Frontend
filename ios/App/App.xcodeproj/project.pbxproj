@@ -78,6 +78,7 @@
 		CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA11CA22CA33CA44CA55CA11 /* CarPlaySceneDelegate.swift */; };
 		DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */; };
 		DBB02AE80E614DAFAD79E48A /* BiquadCoefficientCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D8B455C82ED45E8823B51E2 /* BiquadCoefficientCalculator.swift */; };
+		FF14DF14DF14DF14DF14DF11 /* DSPFilterManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF14DF14DF14DF14DF14DF12 /* DSPFilterManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -156,6 +157,7 @@
 		DA11DA22DA33DA44DA55DA11 /* MainSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainSceneDelegate.swift; sourceTree = "<group>"; };
 		E32679434F1D4DAA8FAE63C7 /* BiquadCoefficients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadCoefficients.swift; sourceTree = "<group>"; };
 		EF29A26B9EDB46C9A3187286 /* BiquadDSPNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiquadDSPNode.swift; sourceTree = "<group>"; };
+		FF14DF14DF14DF14DF14DF12 /* DSPFilterManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DSPFilterManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -241,6 +243,7 @@
 				3400FF0A2FA800000000000A /* AnalysisCacheService.swift */,
 				3400FF0C2FA800000000000C /* SmartMixManager.swift */,
 				3400FF042FA8000000000004 /* DJMixingService.swift */,
+				FF14DF14DF14DF14DF14DF12 /* DSPFilterManager.swift */,
 				3400FF0E2FA800000000000E /* ConnectService.swift */,
 				3400FF422FA8000000000042 /* TransitionDiagnostics.swift */,
 				3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */,
@@ -450,6 +453,7 @@
 				AA11BB22CC33DD44EE55FF12 /* AudioFileLoader.swift in Sources */,
 				342286C12F90D07300785736 /* AppTheme.swift in Sources */,
 				AA11BB22CC33DD44EE55FF16 /* CrossfadeExecutor.swift in Sources */,
+				FF14DF14DF14DF14DF14DF11 /* DSPFilterManager.swift in Sources */,
 				342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */,
 				3400AA012FA1000000000001 /* ArtistsView.swift in Sources */,
 				342286D12F920A0000785736 /* CredentialsStore.swift in Sources */,
