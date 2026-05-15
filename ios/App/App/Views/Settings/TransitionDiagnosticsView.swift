@@ -947,6 +947,7 @@ private struct TransitionRow: View {
         case "DROP_MIX":         return .pink
         case "CLEAN_HANDOFF":    return .gray
         case "VINYL_STOP":       return .indigo
+        case "SEQUENTIAL":       return .teal
         default:                 return .secondary
         }
     }
@@ -1408,6 +1409,7 @@ struct TransitionDetailSheet: View {
         case "DROP_MIX":         return .pink
         case "CLEAN_HANDOFF":    return .gray
         case "VINYL_STOP":       return .indigo
+        case "SEQUENTIAL":       return .teal
         default:                 return .secondary
         }
     }
@@ -1734,6 +1736,7 @@ struct TransitionActiveView: View {
         case "DROP_MIX":         return .pink
         case "CLEAN_HANDOFF":    return .gray
         case "VINYL_STOP":       return .indigo
+        case "SEQUENTIAL":       return .teal
         default:                 return .secondary
         }
     }
