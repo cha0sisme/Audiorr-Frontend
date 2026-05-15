@@ -154,6 +154,28 @@ final class TransitionDiagnostics {
     /// en outro instrumental tranquilo".
     var outroEnergyA: Double? = nil
 
+    // v14.12 (round 2026-05-15) — telemetría bassKill A. Aditiva. Permite
+    // reconstruir la curva cosSquared real de v14.05+v14.11 muestreada en 3
+    // puntos clave del fade, sin necesidad de instrumentar el tick. Si la
+    // curva esperada (0 → ~−0.8 dB → −16 dB) no se cumple, hay bug en
+    // band1CoefficientA_bassKill o en el cableado de rampStart.
+    /// Gain (dB) del bassKill A evaluado en t=rampStart. Esperado ≈ 0.0 con la
+    /// cosSquared. Diverge si hay step inicial en la fórmula.
+    var bassKillGainA_atRampStart: Double? = nil
+    /// Gain (dB) en t=volumeFadeStartTime. Mide cuánto bajó el bass durante el
+    /// filterLead (la "ventana de adelanto"). Audita si v14.11 realmente
+    /// adelantó la entrada del filtro (esperado ≈ −0.5 a −2.0 dB; si ≈ 0.0
+    /// el pre-roll no está enganchando).
+    var bassKillGainA_atVolumeFadeStart: Double? = nil
+    /// Gain (dB) en t=transitionEndTime − 0.05. Esperado ≈ −16.0 (target
+    /// `bassKillTargetDepth`). Diverge si rampEnd no llega a p=1.0.
+    var bassKillGainA_atSwap: Double? = nil
+    /// Distinto de `filterPreRollAppliedA` (gate estático). Este se marca true
+    /// SOLO si el branch pre-roll de `applyFiltersA` se ejecuta al menos una
+    /// vez en runtime — detecta el caso edge en que el gate dice "habilitado"
+    /// pero el primer tick de filterTimer cayó después de filterStartTime.
+    var filterPreRollEffectiveA: Bool? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -283,6 +305,11 @@ final class TransitionDiagnostics {
         var rmsTailCurveA_last: Double? = nil
         var rmsTailSlopeA: Double? = nil
         var outroEnergyA: Double? = nil
+        // v14.12 — telemetría bassKill A (4 campos aditivos).
+        var bassKillGainA_atRampStart: Double? = nil
+        var bassKillGainA_atVolumeFadeStart: Double? = nil
+        var bassKillGainA_atSwap: Double? = nil
+        var filterPreRollEffectiveA: Bool? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -706,6 +733,10 @@ final class TransitionDiagnostics {
                 rmsTailCurveA_last: self.rmsTailCurveA_last,
                 rmsTailSlopeA: self.rmsTailSlopeA,
                 outroEnergyA: self.outroEnergyA,
+                bassKillGainA_atRampStart: self.bassKillGainA_atRampStart,
+                bassKillGainA_atVolumeFadeStart: self.bassKillGainA_atVolumeFadeStart,
+                bassKillGainA_atSwap: self.bassKillGainA_atSwap,
+                filterPreRollEffectiveA: self.filterPreRollEffectiveA,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

@@ -806,11 +806,46 @@ class CrossfadeExecutor {
             // en runtime se valida vs este valor (post Filtros-A esperado 0).
             return Double(hs.endGain)
         }()
+        // v14.12 — telemetría bassKill A: muestreo de la cosSquared 0→-16dB en
+        // 3 puntos clave del fade. Permite auditar la curva real sin instrumentar
+        // el tick. Solo se pueblan cuando useBassKill y hay lowshelfA; en otros
+        // casos quedan nil (campos optional, decoder retrocompat).
+        let bkRampStart: Double = preRollWillApply
+            ? timings.filterStartTime - preRollDur
+            : timings.filterStartTime
+        let bkRampEnd: Double = timings.transitionEndTime
+        let bkGains: (atRampStart: Double?, atVolumeFadeStart: Double?, atSwap: Double?) = {
+            guard useBassKill, let lsA = preset.lowshelfA, bkRampEnd > bkRampStart else {
+                return (nil, nil, nil)
+            }
+            let g0 = DSPFilterManager.band1CoefficientA_bassKill(
+                at: bkRampStart, lsA: lsA, rampStart: bkRampStart,
+                rampEnd: bkRampEnd, sampleRate: sampleRate
+            ).gain
+            let g1 = DSPFilterManager.band1CoefficientA_bassKill(
+                at: timings.volumeFadeStartTime, lsA: lsA, rampStart: bkRampStart,
+                rampEnd: bkRampEnd, sampleRate: sampleRate
+            ).gain
+            let g2 = DSPFilterManager.band1CoefficientA_bassKill(
+                at: bkRampEnd - 0.05, lsA: lsA, rampStart: bkRampStart,
+                rampEnd: bkRampEnd, sampleRate: sampleRate
+            ).gain
+            return (Double(g0), Double(g1), Double(g2))
+        }()
+
         Task { @MainActor in
             TransitionDiagnostics.shared.filterPreRollAppliedA = preRollWillApply
             TransitionDiagnostics.shared.highShelfGainA_atEnd = highShelfEndA
             TransitionDiagnostics.shared.lsGainB_initial = lsGainBInitial
             TransitionDiagnostics.shared.hpFreqB_initial = hpFreqBInitial
+            TransitionDiagnostics.shared.bassKillGainA_atRampStart = bkGains.atRampStart
+            TransitionDiagnostics.shared.bassKillGainA_atVolumeFadeStart = bkGains.atVolumeFadeStart
+            TransitionDiagnostics.shared.bassKillGainA_atSwap = bkGains.atSwap
+            // filterPreRollEffectiveA se setea desde el pre-roll branch en runtime
+            // (no estático: detecta si el primer tick efectivamente cayó dentro
+            // de la ventana). Inicializado a false para distinguir "no ejecutado"
+            // de "no aplicable" (que queda nil porque el campo es Optional).
+            TransitionDiagnostics.shared.filterPreRollEffectiveA = preRollWillApply ? false : nil
         }
     }
 
@@ -2241,6 +2276,11 @@ class CrossfadeExecutor {
                 )
                 dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
                 diagFreqA = freqA
+                // v14.12 — marcador runtime: el pre-roll branch ejecutó al menos
+                // una vez. Distinto del gate estático filterPreRollAppliedA.
+                Task { @MainActor in
+                    TransitionDiagnostics.shared.filterPreRollEffectiveA = true
+                }
                 return
             }
         }
