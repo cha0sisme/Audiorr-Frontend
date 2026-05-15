@@ -2423,19 +2423,19 @@ class CrossfadeExecutor {
                 hpFreq = preset.highpassB.endFreq
                 lsGain = preset.lowshelfB.endGain
             }
-            // Bass Kill override: even with anticipation, B's bass must stay held
-            // until the kill moment. Without this, anticipation gradually opens B's
-            // lowshelf while A still has full bass → bass pile-up before the kill.
+            // v14.08 (R-C): Bass Kill override delegado a DSPFilterManager.
+            // Reemplaza la curva 100 ms lineal por cosSquared smooth sobre
+            // [bassSwapTime, fadeInEndTime]. Simétrico al fix bassKill A v14.05.
+            // Sin pile-up porque A baja a -16 dB en cosSquared en la misma ventana.
             if useBassKill {
-                let killRampDuration: Double = 0.1
-                if t < bassSwapTime {
-                    lsGain = preset.lowshelfB.startGain
-                } else if t < bassSwapTime + killRampDuration {
-                    let rampP = Float((t - bassSwapTime) / killRampDuration)
-                    lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, rampP)
-                } else {
-                    lsGain = preset.lowshelfB.endGain
-                }
+                let band1Run = DSPFilterManager.band1CoefficientB_bassKill(
+                    at: t,
+                    lsB: preset.lowshelfB,
+                    bassSwapTime: bassSwapTime,
+                    fadeInEndTime: timings.fadeInEndTime,
+                    sampleRate: sampleRate
+                )
+                lsGain = band1Run.gain
             }
         } else {
             guard t >= timings.fadeInStartTime else { return }
@@ -2449,19 +2449,17 @@ class CrossfadeExecutor {
             hpFreq = expInterp(preset.highpassB.startFreq, preset.highpassB.endFreq, p)
             if useBassManagement {
                 if useBassKill {
-                    // Bass Kill coordination: B keeps bass filtered (startGain, e.g. -8dB)
-                    // until bassSwapTime, then opens instantly via same 100ms ramp.
-                    // This prevents bass pile-up: A has full bass + B with partial bass
-                    // would create excess low-end before the kill moment.
-                    let killRampDuration: Double = 0.1
-                    if t < bassSwapTime {
-                        lsGain = preset.lowshelfB.startGain  // held filtered
-                    } else if t < bassSwapTime + killRampDuration {
-                        let rampP = Float((t - bassSwapTime) / killRampDuration)
-                        lsGain = linInterp(preset.lowshelfB.startGain, preset.lowshelfB.endGain, rampP)
-                    } else {
-                        lsGain = preset.lowshelfB.endGain  // 0dB — B bass fully open
-                    }
+                    // v14.08 (R-C): bassKill B delegado al manager (cosSquared
+                    // smooth sobre [bassSwapTime, fadeInEndTime] en vez de
+                    // 100 ms lineales).
+                    let band1Run = DSPFilterManager.band1CoefficientB_bassKill(
+                        at: t,
+                        lsB: preset.lowshelfB,
+                        bassSwapTime: bassSwapTime,
+                        fadeInEndTime: timings.fadeInEndTime,
+                        sampleRate: sampleRate
+                    )
+                    lsGain = band1Run.gain
                 } else {
                     let bassDur = bassSwapTime - timings.fadeInStartTime
                     let bassP = bassDur > 0 ? Float(min(1, (t - timings.fadeInStartTime) / bassDur)) : 1.0
