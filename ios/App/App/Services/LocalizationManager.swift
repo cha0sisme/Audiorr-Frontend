@@ -177,6 +177,9 @@ enum L {
              : "Solo se busca en canciones descargadas. Sin resultados para «\(query)»."
     }
     static var artist: String { isEn ? "Artist" : "Artista" }
+    static var song: String { isEn ? "Song" : "Canción" }
+    static var topResult: String { isEn ? "Top result" : "Mejor coincidencia" }
+    static var all: String { isEn ? "All" : "Todo" }
 
     // MARK: - NowPlaying / MiniPlayer
 

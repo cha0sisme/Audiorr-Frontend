@@ -437,7 +437,9 @@ final class NavidromeService: ObservableObject {
         let urlStr = "\(base)/rest/search2.view?\(authQuery())&query=\(q)&artistCount=\(artistCount)&albumCount=\(albumCount)&songCount=\(songCount)"
         guard let url = URL(string: urlStr) else { return SearchResults() }
 
-        let (data, _) = try await AudiorrNetwork.background.data(from: url)
+        // Sesión `interactive`: el usuario está escribiendo y esperando resultados.
+        // No queremos que la búsqueda vaya por la cola de `background` con grids.
+        let (data, _) = try await AudiorrNetwork.interactive.data(from: url)
         let response = try JSONDecoder.decodeSubsonic(Search2Response.self, from: data)
         guard response.status == "ok", let r = response.searchResult2 else { return SearchResults() }
 
