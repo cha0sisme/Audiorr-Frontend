@@ -569,8 +569,10 @@ enum DJMixingService {
 
         // BPM confidence: both songs must have confidence ≥ 0.5 AND valid BPM data for trusted decisions.
         // When untrusted, time-stretch, beat sync, and bass kill should be conservative.
-        let confA = currentAnalysis?.bpmConfidence ?? 1.0
-        let confB = nextAnalysis?.bpmConfidence ?? 1.0
+        // Fallback 0.5 (no 1.0): si el backend no devolvió confidence, asumimos
+        // el límite mínimo confiable en lugar de confianza máxima injustificada.
+        let confA = currentAnalysis?.bpmConfidence ?? 0.5
+        let confB = nextAnalysis?.bpmConfidence ?? 0.5
         let hasBeatDataA = bA > 20 && bA < 300
         let hasBeatDataB = bB > 20 && bB < 300
         let trusted = confA >= 0.5 && confB >= 0.5 && hasBeatDataA && hasBeatDataB

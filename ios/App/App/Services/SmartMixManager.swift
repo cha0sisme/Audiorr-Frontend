@@ -198,7 +198,10 @@ final class SmartMixManager {
         var fadeOutDuration: Double? { analysis?.fadeOutDuration }
 
         // ── BPM confidence ──
-        var bpmConfidence: Double { analysis?.bpmConfidence ?? 1.0 }
+        // Fallback 0.5 (no 1.0): si el backend no devuelve confianza, no
+        // podemos asumir confianza máxima — sería penalizar el bpmDiff a tope
+        // sobre datos no validados. Cierra bug #4 de la auditoría.
+        var bpmConfidence: Double { analysis?.bpmConfidence ?? 0.5 }
         var bpmEssentia: Double? { analysis?.bpmEssentia }
 
         /// BPM normalized to the DJ-standard 70-140 range.
