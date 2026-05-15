@@ -59,6 +59,7 @@
 		342286D02F910FCA00785736 /* ArtistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286CE2F910FCA00785736 /* ArtistDetailView.swift */; };
 		342286D12F920A0000785736 /* CredentialsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D02F920A0000785736 /* CredentialsStore.swift */; };
 		342286D32F91756800785736 /* SongListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D12F91756800785736 /* SongListView.swift */; };
+		342286E12FA8000000000001 /* ViewArtistsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286E02FA8000000000001 /* ViewArtistsSheet.swift */; };
 		342286D32F920B0000785736 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342286D22F920B0000785736 /* LoginView.swift */; };
 		3499AA022F91756800785736 /* HorizontalScrollSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA012F91756800785736 /* HorizontalScrollSection.swift */; };
 		3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA032F91756800785736 /* SeeAllGridView.swift */; };
@@ -130,6 +131,7 @@
 		342286CE2F910FCA00785736 /* ArtistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistDetailView.swift; sourceTree = "<group>"; };
 		342286D02F920A0000785736 /* CredentialsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialsStore.swift; sourceTree = "<group>"; };
 		342286D12F91756800785736 /* SongListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SongListView.swift; sourceTree = "<group>"; };
+		342286E02FA8000000000001 /* ViewArtistsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewArtistsSheet.swift; sourceTree = "<group>"; };
 		342286D22F920B0000785736 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		349110652F7BA76900342F6B /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		3499AA012F91756800785736 /* HorizontalScrollSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HorizontalScrollSection.swift; sourceTree = "<group>"; };
@@ -285,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				342286D12F91756800785736 /* SongListView.swift */,
+				342286E02FA8000000000001 /* ViewArtistsSheet.swift */,
 				3499AA012F91756800785736 /* HorizontalScrollSection.swift */,
 				3499AA032F91756800785736 /* SeeAllGridView.swift */,
 				3499AA052F91756800785736 /* PlaylistCardView.swift */,
@@ -454,6 +457,7 @@
 				3400BB012FA2000000000001 /* SettingsView.swift in Sources */,
 				342286CD2F90DC3200785736 /* AlbumDetailView.swift in Sources */,
 				342286D32F91756800785736 /* SongListView.swift in Sources */,
+				342286E12FA8000000000001 /* ViewArtistsSheet.swift in Sources */,
 				3499AA022F91756800785736 /* HorizontalScrollSection.swift in Sources */,
 				3499AA042F91756800785736 /* SeeAllGridView.swift in Sources */,
 				3499AA062F91756800785736 /* PlaylistCardView.swift in Sources */,

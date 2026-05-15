@@ -313,7 +313,7 @@ final class SearchViewModel: ObservableObject {
         artists: [NavidromeArtist],
         songs: [(s: NavidromeSong, score: Int)],
         albums: [NavidromeAlbum],
-        playlists: ArraySlice<NavidromePlaylist>
+        playlists: [NavidromePlaylist]
     ) -> TopResultItem? {
         // Mejor candidato de cada tipo.
         let bestArtist: (item: TopResultItem, score: Int)? = artists.first.map {

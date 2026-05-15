@@ -739,7 +739,7 @@ final class SmartMixManager {
 
     // MARK: - Camelot Key Helpers
 
-    private static let keyToCamelot: [String: String] = [
+    nonisolated private static let keyToCamelot: [String: String] = [
         // Majors (sharp notation)
         "B": "1B", "F#": "2B", "C#": "3B", "G#": "4B", "D#": "5B", "A#": "6B",
         "F": "7B", "C": "8B", "G": "9B", "D": "10B", "A": "11B", "E": "12B",
@@ -756,7 +756,7 @@ final class SmartMixManager {
     /// Normaliza variantes que el backend puede emitir: sufijos " major"/" minor",
     /// minúsculas, espacios sobrantes. Cierra bug #5 de la auditoría
     /// (fallos silenciosos cuando la string no coincide exactamente con la tabla).
-    private static func camelotKey(_ key: String?) -> String? {
+    nonisolated private static func camelotKey(_ key: String?) -> String? {
         guard let raw = key else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         if let direct = keyToCamelot[trimmed] { return direct }
