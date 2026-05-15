@@ -2581,9 +2581,49 @@ enum DJMixingService {
             reasons.append("hi-shelf: energia A=\(String(format: "%.2f", profile.energyA)) B=\(String(format: "%.2f", profile.energyB))")
         }
 
+        // v13.O.6 (F1) — gate género: el high-shelf cut quita brillo de
+        // hi-hats y voces. En Hip-Hop, R&B, Reggaeton, Trap, Drill y géneros
+        // derivados el hi-hat es la firma del groove — el shelf lo enturbia y
+        // arruina la transición.
+        //
+        // Métrica de soporte (catálogo del director, v13.O.5 rated):
+        //   useHighShelfCut=true mean 3.85 (N=26) vs false mean 5.43 (N=174)
+        //   delta -1.58. Cobertura set: 184/200 canciones rated.
+        //
+        // Override: si CUALQUIERA de los dos lados (A o B) cae en el set,
+        // se fuerza `useHighShelf = false`. Mejor preservar groove de ambos
+        // (incluso si solo uno es del set) que recortar brillo asimétrico.
+        if useHighShelf {
+            let aGenres = currentAnalysis?.genres ?? []
+            let bGenres = nextAnalysis?.genres ?? []
+            let aHit = aGenres.contains(where: highShelfDisabledGenres.contains)
+            let bHit = bGenres.contains(where: highShelfDisabledGenres.contains)
+            if aHit || bHit {
+                useHighShelf = false
+                let side = aHit && bHit ? "A+B" : (aHit ? "A" : "B")
+                reasons.append("hi-shelf OFF [genero \(side): hi-hat groove]")
+            }
+        }
+
         let reason = reasons.isEmpty ? "DJ filters OFF" : "DJ filters ON: \(reasons.joined(separator: ", "))"
         return DJFilterResult(useMidScoop: useMidScoop, useHighShelfCut: useHighShelf, reason: reason)
     }
+
+    // v13.O.6 (F1) — set de géneros donde el high-shelf cut hace más daño
+    // que beneficio. Hi-hat = firma del groove en estas familias; cortar
+    // brillo en 7-8kHz enturbia la firma.
+    //
+    // Set verificado empíricamente contra el catálogo del director:
+    // cobertura 184/200 canciones rated v13.O.5. Capitalización exacta a la
+    // que viene en NavidromeSong.genres (case-sensitive).
+    private static let highShelfDisabledGenres: Set<String> = [
+        "Hip-Hop", "Alternative Hip-Hop", "Latin Hip-Hop", "Experimental Hip-Hop",
+        "Rap", "UK Rap", "Punk Rap", "Progressive Rap", "Emo Rap",
+        "Contemporary R&B", "Latin R&B", "Neo Soul", "Urban Contemporary",
+        "Reggaeton", "Dancehall",
+        "Trap", "Trap Music", "Latin Trap", "Emo Trap",
+        "Drill", "UK Drill", "Plugg", "Grime", "Type Beat"
+    ]
 
     // MARK: - DJ Effects Decision (Bass Kill + Dynamic Q)
 
