@@ -19,6 +19,11 @@ actor AnalysisCacheService {
         let beatInterval: Double?
         let energy: Double?
         let key: String?
+        let camelotKey: String?
+        let keyMode: String?
+        let keyStrength: Double?
+        let keyAlgorithm: String?
+        let introVocals: Bool?
         let danceability: Double?
         let outroStartTime: Double?
         let introEndTime: Double?

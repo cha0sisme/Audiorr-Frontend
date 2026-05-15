@@ -162,6 +162,11 @@ final class SmartMixManager {
         var bpm: Double { analysis?.bpm ?? 120 }
         var energy: Double { analysis?.energy ?? 0.5 }
         var key: String? { analysis?.key }
+        /// Camelot key — prefiere el campo directo del backend (`camelotKey`),
+        /// con fallback a traducción local de `key` vía `keyToCamelot`.
+        /// Cierra parcialmente el bug #1+#2 de la auditoría: ya no dependemos
+        /// solo de una tabla local que falla silenciosamente.
+        var camelotKey: String? { analysis?.camelotKey ?? SmartMixManager.camelotKey(analysis?.key) }
         var danceability: Double { analysis?.danceability ?? 0.5 }
 
         // ── Energy profile (3-part) ──
@@ -411,8 +416,8 @@ final class SmartMixManager {
         let energyB = b.energy
 
         // ── 1. Key penalty — delegates to DJMixingService ──
-        let camelotA = Self.camelotKey(a.key)
-        let camelotB = Self.camelotKey(b.key)
+        let camelotA = a.camelotKey
+        let camelotB = b.camelotKey
         let harmonic = DJMixingService.harmonicPenalty(keyA: camelotA, keyB: camelotB)
         var keyPenalty: Double
         switch harmonic.compatibility {
@@ -429,7 +434,7 @@ final class SmartMixManager {
         // Key fatigue: penalize repeating the same key 3+ times in recent history
         var keyFatiguePenalty: Double = 0
         if history.count >= 3, let kB = camelotB {
-            let recentKeys = history.suffix(3).compactMap { Self.camelotKey($0.key) }
+            let recentKeys = history.suffix(3).compactMap { $0.camelotKey }
             if recentKeys.filter({ $0 == kB }).count >= 2 { keyFatiguePenalty = 8 }
         }
 
