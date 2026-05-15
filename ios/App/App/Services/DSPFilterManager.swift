@@ -124,7 +124,7 @@ final class DSPFilterManager {
     static func highShelfCoefficientA_initial(
         useHighShelfCut: Bool,
         preset: CrossfadeExecutor.FilterPreset.HighShelfCut?,
-        sampleRate: Double
+        sampleRate: Float
     ) -> BiquadCoefficients {
         guard useHighShelfCut, let hs = preset else { return .passthrough }
         return BiquadCoefficientCalculator.highShelf(
@@ -146,7 +146,7 @@ final class DSPFilterManager {
         rampEnd: Double,
         pivotTime: Double,
         totalFilterDur: Double,
-        sampleRate: Double
+        sampleRate: Float
     ) -> BiquadCoefficients {
         guard useHighShelfCut, let hs = preset else { return .passthrough }
 
@@ -204,7 +204,7 @@ final class DSPFilterManager {
         useLowpassA: Bool,
         highpassPreset: CrossfadeExecutor.FilterPreset.Highpass,
         lowpassPreset: CrossfadeExecutor.FilterPreset.Lowpass?,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, freq: Float) {
         if isCutTransition {
             return (.passthrough, 0)
@@ -243,7 +243,7 @@ final class DSPFilterManager {
         rampEnd: Double,
         pivotTime: Double,
         totalFilterDur: Double,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, freq: Float, qValue: Float) {
         if useLowpassA, let lpA = lowpassPreset {
             let midFreq = lpA.startFreq * 0.7 + lpA.endFreq * 0.3
@@ -315,7 +315,7 @@ final class DSPFilterManager {
         isCutTransition: Bool,
         useBassManagement: Bool,
         preset: CrossfadeExecutor.FilterPreset.Lowshelf?,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, gain: Float) {
         if isCutTransition {
             return (.passthrough, 0)
@@ -351,7 +351,7 @@ final class DSPFilterManager {
         lsA: CrossfadeExecutor.FilterPreset.Lowshelf,
         rampStart: Double,
         rampEnd: Double,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, gain: Float) {
         let totalDur = rampEnd - rampStart
         guard totalDur > 0 else {
@@ -395,7 +395,7 @@ final class DSPFilterManager {
         lsB: CrossfadeExecutor.FilterPreset.Lowshelf,
         bassSwapTime: Double,
         fadeInEndTime: Double,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, gain: Float) {
         let lsGain: Float
         if t < bassSwapTime {
@@ -430,7 +430,7 @@ final class DSPFilterManager {
         rampStart: Double,
         rampEnd: Double,
         effectiveBassSwapTime: Double,
-        sampleRate: Double
+        sampleRate: Float
     ) -> (coefficient: BiquadCoefficients, gain: Float) {
         let scaledMidGain = lsA.midGain * danceabilityBassScale
         let scaledEndGain = lsA.endGain * danceabilityBassScale
