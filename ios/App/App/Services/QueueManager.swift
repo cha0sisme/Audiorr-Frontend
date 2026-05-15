@@ -542,6 +542,21 @@ final class QueueManager: AudioEngineDelegate {
                         songId: next.id, title: next.title, artist: next.artist
                     )
                 }
+
+                // Pre-warm el cover 2000px de la siguiente canción en URLCache,
+                // así el viewer puede mostrarlo sincronizado con el cambio de
+                // título tras el swap (síntoma: cover de la anterior persistía
+                // varios segundos mientras descargaba). Gateado por viewer
+                // abierto para no malgastar red cuando el usuario no lo ve.
+                // No se toca la resolución (2000px, idéntica a la del viewer).
+                if NowPlayingState.shared.viewerIsOpen,
+                   let coverURL = NavidromeService.shared.coverURL(id: next.coverArt, size: 2000) {
+                    Task.detached(priority: .utility) {
+                        var request = URLRequest(url: coverURL)
+                        request.cachePolicy = .useProtocolCachePolicy
+                        _ = try? await AudiorrNetwork.interactive.data(for: request)
+                    }
+                }
             }
         }
     }

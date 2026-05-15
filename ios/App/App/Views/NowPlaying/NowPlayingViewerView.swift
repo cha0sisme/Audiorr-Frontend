@@ -25,6 +25,7 @@ struct NowPlayingViewerView: View {
     // Full-res artwork loaded manually (bypasses AsyncImage cache)
     @State private var fullArtworkImage: UIImage?
     @State private var lastLoadedCoverArt: String?
+    @State private var artworkTask: Task<Void, Never>?
 
     // Accent color extracted from artwork
     @State private var accentColor: Color = .white
@@ -522,6 +523,17 @@ struct NowPlayingViewerView: View {
     private func loadArtwork() {
         let currentCoverArt = state.coverArt
 
+        // Si el coverArt cambió respecto al anterior, limpiamos el cover viejo
+        // antes de empezar la descarga del nuevo. Sin esto se ve el cover de
+        // la canción anterior con el título de la nueva durante la ventana de
+        // descarga (síntoma reportado bajo cobertura limitada). Mejor placeholder
+        // neutro que cover incorrecto.
+        if currentCoverArt != lastLoadedCoverArt {
+            artworkTask?.cancel()
+            fullArtworkImage = nil
+            lastExtractedUrl = nil
+        }
+
         // 1. Try high-res via NavidromeService if coverArt ID is available
         if !currentCoverArt.isEmpty, currentCoverArt != lastLoadedCoverArt {
             lastLoadedCoverArt = currentCoverArt
@@ -545,15 +557,18 @@ struct NowPlayingViewerView: View {
         guard urlStr != lastExtractedUrl else { return }
         lastExtractedUrl = urlStr
 
-        Task.detached(priority: .userInitiated) {
+        artworkTask?.cancel()
+        artworkTask = Task.detached(priority: .userInitiated) {
             var request = URLRequest(url: url)
             request.cachePolicy = .useProtocolCachePolicy
             // Sesión `interactive`: cover del viewer (2000px) — UI visible
             // que el usuario está mirando ahora mismo.
             guard let (data, _) = try? await AudiorrNetwork.interactive.data(for: request),
+                  !Task.isCancelled,
                   let image = UIImage(data: data) else { return }
             let palette = ColorExtractor.extract(from: image)
             let color = Color(palette.accent)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 fullArtworkImage = image
                 withAnimation(.easeInOut(duration: 0.4)) {
