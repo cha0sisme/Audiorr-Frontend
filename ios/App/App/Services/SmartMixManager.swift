@@ -175,7 +175,10 @@ final class SmartMixManager {
         var energyMain: Double { energyProfile?.main ?? energy }
         var energyOutro: Double { energyProfile?.outro ?? energy }
         var hasOutroVocals: Bool { energyProfile?.outroVocals ?? false }
-        var hasIntroVocals: Bool { energyProfile?.introVocals ?? false }
+        /// Prioriza `analysis.introVocals` top-level (campo nuevo del backend);
+        /// fallback al anidado `energyProfile.introVocals` para JSON antiguos.
+        /// Cierra bug #3 detectado en auditoría (top-level introVocals ignorado).
+        var hasIntroVocals: Bool { analysis?.introVocals ?? energyProfile?.introVocals ?? false }
 
         // ── Structural boundaries ──
         var outroStartTime: Double? { analysis?.outroStartTime }
