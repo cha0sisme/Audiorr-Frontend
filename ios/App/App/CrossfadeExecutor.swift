@@ -2309,31 +2309,26 @@ class CrossfadeExecutor {
         diagFreqA = band0Run.freq
         diagQA = band0Run.qValue
 
-        // ── Band 1: Bass swap lowshelf (or Bass Kill) ──
-        // v14.04 (R-C): path normal (rama else de bassKill) migrado a
-        // DSPFilterManager.band1CoefficientA_normal. La rama bassKill
-        // conserva su lógica legacy aquí hasta v14.05, donde se deprecará
-        // la curva -60/100ms en favor de cosSquared 0→-16dB.
+        // ── Band 1: Bass swap lowshelf (con o sin Bass Kill) ──
+        // v14.05 (R-C): la rama bassKill legacy (-60 dB en 100 ms lineales tras
+        // bassSwapTime) ha sido eliminada. La curva v13.O.6 producía el snap
+        // perceptual reportado como "filtros de repente" en transiciones con
+        // cola viva (rmsTailCurveA_last > 0.30 → mean rating 3.75 vs 6.33 con
+        // cola baja, log-analyst N=16 v13.O.6). Reemplazo: cosSquared 0 → -16
+        // dB sobre todo el fade — mismo gesto DJ de bass-swap pero sin onset
+        // abrupto (sec 2.10 del diseño v14, bloqueante #2 devils-advocate).
         var band1A: BiquadCoefficients = .passthrough
         if useBassManagement, let lsA = preset.lowshelfA {
             if useBassKill {
-                // Bass Kill legacy: hold at natural level, then instant cut at
-                // bassSwapTime via 100ms ramp. Se deprecará en v14.05.
-                let killRampDuration: Double = 0.1
-                let killDepth: Float = -60.0
-                let lsGain: Float
-                if t < bassSwapTime {
-                    lsGain = lsA.startGain
-                } else if t < bassSwapTime + killRampDuration {
-                    let rampP = Float((t - bassSwapTime) / killRampDuration)
-                    lsGain = linInterp(lsA.startGain, killDepth, rampP)
-                } else {
-                    lsGain = killDepth
-                }
-                diagLsGainA = lsGain
-                band1A = BiquadCoefficientCalculator.lowShelf(
-                    frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain
+                let band1Run = DSPFilterManager.band1CoefficientA_bassKill(
+                    at: t,
+                    lsA: lsA,
+                    rampStart: rampStart,
+                    rampEnd: rampEnd,
+                    sampleRate: sampleRate
                 )
+                band1A = band1Run.coefficient
+                diagLsGainA = band1Run.gain
             } else {
                 let band1Run = DSPFilterManager.band1CoefficientA_normal(
                     at: t,

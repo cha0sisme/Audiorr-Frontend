@@ -331,10 +331,52 @@ final class DSPFilterManager {
         )
     }
 
+    /// Profundidad final del bass-swap A cuando `useBassKill=true` (v14.05).
+    /// Reemplaza el `killDepth = -60 dB` del legacy v13.O.6, que el director
+    /// percibía como "filtros de repente" en transiciones con cola viva.
+    /// -16 dB corresponde a la atenuación que sigue marcando el gesto DJ
+    /// (-12 dB es perceptible como swap, -18 dB ya degrada los bajos
+    /// audibles fuera del shelf), preservando contenido sub-200 Hz suficiente
+    /// para que B abra a 0 dB sin pile-up entre progress 0.5-0.85.
+    static let bassKillTargetDepth: Float = -16.0
+
+    /// Coeficiente runtime band 1 A cuando `useBassKill=true` (v14.05).
+    /// Reemplaza la curva legacy "hold + 100 ms lineal a -60 dB" por una
+    /// rampa cosSquared 0 → -16 dB sobre TODO el fade (sin gesto seco).
+    /// Mantiene la firma del gate DJ pero sin el snap perceptual.
+    /// Fórmula: gain(p) = sin²(p · π/2) · target, con p = (t − rampStart) /
+    /// (rampEnd − rampStart). p=0 → 0 dB, p=1 → target.
+    static func band1CoefficientA_bassKill(
+        at t: Double,
+        lsA: CrossfadeExecutor.FilterPreset.Lowshelf,
+        rampStart: Double,
+        rampEnd: Double,
+        sampleRate: Double
+    ) -> (coefficient: BiquadCoefficients, gain: Float) {
+        let totalDur = rampEnd - rampStart
+        guard totalDur > 0 else {
+            return (
+                BiquadCoefficientCalculator.lowShelf(
+                    frequency: lsA.frequency, sampleRate: sampleRate, gainDB: 0
+                ),
+                0
+            )
+        }
+        let p = Float(min(1, max(0, (t - rampStart) / totalDur)))
+        let angle = p * .pi / 2
+        let sinSq = sinf(angle) * sinf(angle)
+        let lsGain = sinSq * bassKillTargetDepth
+        return (
+            BiquadCoefficientCalculator.lowShelf(
+                frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain
+            ),
+            lsGain
+        )
+    }
+
     /// Coeficiente runtime band 1 A para el path normal de bass swap
     /// (rama `else` de bassKill). Implementa linInterp con scaling por
     /// danceability en dos segmentos: pre-bassSwapTime y post-bassSwapTime.
-    /// La rama bassKill se mantiene en legacy hasta v14.05.
     /// Migrado en v14.04 desde CrossfadeExecutor.applyFiltersA banda 1.
     static func band1CoefficientA_normal(
         at t: Double,
