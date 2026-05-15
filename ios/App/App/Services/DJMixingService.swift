@@ -3599,6 +3599,32 @@ enum DJMixingService {
             }
         }
 
+        // v13.O.6 (F5b) — retirar DROP_MIX y STEM_MIX del decisor → SEQUENTIAL.
+        //
+        // Métrica de soporte (v13.O.5 rated):
+        //   DROP_MIX: N=42, mean 3.07, 0 diamonds, 71.4% cola r≤3. Tipo más
+        //             dañino del dataset; patrón consistente cross-sesión.
+        //   STEM_MIX: N=4, mean 4.50 (cayó desde 10.00 en v13.O.4). N pequeña
+        //             pero todas las quejas coherentes — dispara filtros
+        //             agresivos sin justificación musical en el catálogo del
+        //             usuario.
+        //
+        // Redirect a SEQUENTIAL: A llega a su final natural, B arranca completo,
+        // solape 50ms inaudible. Mejor cero transición que una mala.
+        //
+        // Patrón defensivo (igual que Hv5-4 retiró CLEAN_HANDOFF): los branches
+        // residuales `case .dropMix` / `.stemMix` arriba y los switches
+        // exhaustivos en el resto del codebase quedan intactos — futura
+        // reintroducción posible si datos lo justifican. Esta capa solo cambia
+        // el tipo final pasado al executor.
+        if type == .dropMix {
+            type = .sequential
+            reason = "[F5b retirar DROP_MIX → SEQUENTIAL] " + reason
+        } else if type == .stemMix {
+            type = .sequential
+            reason = "[F5b retirar STEM_MIX → SEQUENTIAL] " + reason
+        }
+
         // Record the final type for cooldown bookkeeping. Done at the end so the
         // safety overrides above (polirritmia, vocal trainwreck) are also tracked.
         recordTransition(type)
