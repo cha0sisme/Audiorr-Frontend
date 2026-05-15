@@ -36,6 +36,22 @@ struct BiquadCoefficients {
         let eps: Float = 1e-6
         return abs(b0 - 1) < eps && abs(b1) < eps && abs(b2) < eps && abs(a1) < eps && abs(a2) < eps
     }
+
+    /// Linear interpolation between two coefficient sets.
+    /// t=0 → a, t=1 → b. Used by the kernel's reset() fade-out to smooth
+    /// the transition from an active filter back to passthrough over a few
+    /// render buffers, avoiding a discrete step that would click audibly
+    /// if the upstream mixer's volume hasn't fully ramped to 0 yet.
+    static func lerp(_ a: BiquadCoefficients, _ b: BiquadCoefficients, _ t: Float) -> BiquadCoefficients {
+        let u = 1 - t
+        return BiquadCoefficients(
+            b0: a.b0 * u + b.b0 * t,
+            b1: a.b1 * u + b.b1 * t,
+            b2: a.b2 * u + b.b2 * t,
+            a1: a.a1 * u + b.a1 * t,
+            a2: a.a2 * u + b.a2 * t
+        )
+    }
 }
 
 /// Delay line state for a single biquad stage (Direct Form II Transposed).

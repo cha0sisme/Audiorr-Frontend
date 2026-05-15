@@ -43,6 +43,19 @@ final class BiquadDSPKernel {
     /// Flag for render thread to zero delay lines on next process() call.
     private var needsStateReset = false
 
+    /// v14.10 — Frame counter for the reset() fade-out. While > 0 the render
+    /// thread interpolates coefficients from `fadeoutStartCoefs` toward
+    /// passthrough instead of taking a discrete step. Set by reset() under lock,
+    /// decremented by process() under trylock. When it reaches 0 the kernel
+    /// snaps to true passthrough and marks `needsStateReset`.
+    private var fadeoutFramesRemaining: Int = 0
+    private var fadeoutStartCoefs: [BiquadCoefficients] = Array(repeating: .passthrough, count: filterCount)
+    /// 512 frames ≈ 10.7 ms @ 48 kHz / 11.6 ms @ 44.1 kHz. Short enough to feel
+    /// instant from a timing standpoint, long enough to span 2-3 render buffers
+    /// at typical 256-frame I/O sizes — the discrete step that produced the
+    /// "bug de filtros" click is broken into 2-3 small steps instead of 1 big one.
+    private static let fadeoutFramesTotal: Int = 512
+
     /// Lock for coefficient access. The render thread uses trylock (non-blocking).
     private var lock = os_unfair_lock()
 
@@ -84,6 +97,11 @@ final class BiquadDSPKernel {
         pendingCoefficients[2] = band2
         pendingCoefficients[3] = band3
         hasPending = true
+        // v14.10 — an explicit coefficient update cancels any reset() fade-out in
+        // flight. Covers the edge case where the next crossfade's setupInitialEQ
+        // lands before the previous fade has fully drained. The new coefficients
+        // take precedence; the half-faded state is dropped.
+        fadeoutFramesRemaining = 0
         os_unfair_lock_unlock(&lock)
     }
 
@@ -100,7 +118,25 @@ final class BiquadDSPKernel {
 
         // Try to pick up pending coefficients (non-blocking)
         if os_unfair_lock_trylock(&lock) {
-            if hasPending {
+            if fadeoutFramesRemaining > 0 {
+                // v14.10 — reset() in flight: interpolate coefs toward passthrough.
+                // progress at END of this buffer (so the first buffer of the fade
+                // already moves; the last one lands exactly on passthrough).
+                let framesInThisBuffer = min(Int(frameCount), fadeoutFramesRemaining)
+                let total = Self.fadeoutFramesTotal
+                let progressEnd = Float(total - (fadeoutFramesRemaining - framesInThisBuffer)) / Float(total)
+                for i in 0..<Self.filterCount {
+                    coefficients[i] = BiquadCoefficients.lerp(fadeoutStartCoefs[i], .passthrough, progressEnd)
+                }
+                fadeoutFramesRemaining -= framesInThisBuffer
+                if fadeoutFramesRemaining <= 0 {
+                    for i in 0..<Self.filterCount {
+                        coefficients[i] = .passthrough
+                    }
+                    fadeoutFramesRemaining = 0
+                    needsStateReset = true
+                }
+            } else if hasPending {
                 coefficients[0] = pendingCoefficients[0]
                 coefficients[1] = pendingCoefficients[1]
                 coefficients[2] = pendingCoefficients[2]
@@ -112,8 +148,9 @@ final class BiquadDSPKernel {
             os_unfair_lock_unlock(&lock)
 
             // Zero delay lines on the render thread — safe because only
-            // the render thread reads/writes state. Coefficients are already
-            // passthrough (set by reset()), so the loop below will skip all stages.
+            // the render thread reads/writes state. By the time `shouldReset`
+            // is true, coefficients are already passthrough (the fade-out
+            // branch above set them so before raising the flag).
             if shouldReset {
                 for stage in 0..<Self.filterCount {
                     for ch in 0..<Self.maxChannels {
@@ -157,22 +194,29 @@ final class BiquadDSPKernel {
 
     // MARK: - Reset
 
-    /// Reset all filter state to clean passthrough. Instant and guaranteed.
-    /// Safe to call from any thread (acquires lock for coefficients, then
-    /// the render thread will see passthrough and skip processing).
+    /// Reset all filter state to clean passthrough.
+    ///
+    /// v14.10 — Two-phase fade-out to avoid the discrete coefficient step that
+    /// produced an audible click when this was called from `completeCrossfade`
+    /// while the upstream mixer's outputVolume had not yet propagated to 0 on
+    /// the render thread. We snapshot the active coefficients as the fade
+    /// starting point and let the render thread interpolate toward passthrough
+    /// over `fadeoutFramesTotal` frames. The delay-line zeroing (`needsStateReset`)
+    /// happens at the end of the fade, when coefficients are truly passthrough.
+    ///
+    /// Safe to call from any thread (acquires lock briefly).
     func reset() {
         os_unfair_lock_lock(&lock)
         for i in 0..<Self.filterCount {
-            coefficients[i] = .passthrough
+            fadeoutStartCoefs[i] = coefficients[i]
             pendingCoefficients[i] = .passthrough
         }
+        // pending is redundant with the fade — the fade itself ends in passthrough
         hasPending = false
-        // Signal render thread to zero delay lines on its next process() call.
+        fadeoutFramesRemaining = Self.fadeoutFramesTotal
+        // needsStateReset will be raised by process() when the fade completes.
         // State arrays are owned exclusively by the render thread — writing them
-        // from another thread would be a data race. The render thread will see
-        // passthrough coefficients immediately (skipping all processing) and zero
-        // the delay lines when it picks up this flag via trylock.
-        needsStateReset = true
+        // from another thread would be a data race.
         os_unfair_lock_unlock(&lock)
     }
 
