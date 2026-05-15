@@ -64,6 +64,12 @@ class CrossfadeExecutor {
         /// dramatic energy crashes or incompatible BPMs with a big drop.
         /// Mirrors DJMixingService.TransitionType.vinylStop — rawValues must match.
         case vinylStop = "VINYL_STOP"
+        /// Sequential handoff (v13.O.6, F5a). A plays natural until `progress=1 - 50ms/dur`,
+        /// then cos² descends; B mirrors with sin² over the same 50ms. No filter
+        /// automation runs (applyFiltersA/B early-return for this case). Invariante
+        /// swap path preservada: `gainForPlayerA(progress=1.0) = cos²(π/2) = 0`.
+        /// Mirrors DJMixingService.TransitionType.sequential — rawValues must match.
+        case sequential = "SEQUENTIAL"
     }
 
     struct Config {
@@ -534,13 +540,16 @@ class CrossfadeExecutor {
             basePreset = Self.presetStemMix
         } else if config.transitionType == .naturalBlend
                   || config.transitionType == .cleanHandoff
-                  || config.transitionType == .vinylStop {
+                  || config.transitionType == .vinylStop
+                  || config.transitionType == .sequential {
             // Natural blend = invisible transition with subtle spectral separation.
-            // Clean handoff / Vinyl stop = sequential A→silence→B (or rate-ramp→
-            // silence→B). Filters bypassed at runtime (skipBFilters=true +
-            // applyFiltersA early return) so the preset choice here only seeds
-            // initial coefficients, which never get exercised. The vinyl-stop
-            // gesture is the rate ramp; we don't add filter sweeps on top.
+            // Clean handoff / Vinyl stop / Sequential = sequential A→silence→B
+            // (o solape 50ms en SEQUENTIAL). Filters bypassed at runtime
+            // (skipBFilters=true + applyFiltersA early return) so the preset
+            // choice here only seeds initial coefficients, which never get
+            // exercised. The vinyl-stop gesture is the rate ramp; we don't add
+            // filter sweeps on top. SEQUENTIAL (v13.O.6): A toca limpia hasta
+            // su endTime natural — el preset es defensivo, nunca aplica.
             basePreset = Self.presetGentle
         } else if config.needsAnticipation {
             basePreset = Self.presetAnticipation
@@ -567,7 +576,9 @@ class CrossfadeExecutor {
             switch config.transitionType {
             case .crossfade, .eqMix, .beatMatchBlend, .naturalBlend, .fadeOutACutB, .cutAFadeInB, .cut:
                 return config.isIntroInstrumental && !config.skipBFilters
-            case .stemMix, .dropMix, .cleanHandoff, .vinylStop:
+            case .stemMix, .dropMix, .cleanHandoff, .vinylStop, .sequential:
+                // v13.O.6 (F5a) SEQUENTIAL — sin filtros de B, sin pre-roll;
+                // el solape de 50ms no deja tiempo para sweep audible.
                 return false
             }
         }()
@@ -717,6 +728,7 @@ class CrossfadeExecutor {
         else if config.transitionType == .naturalBlend { presetName = "gentle" }
         else if config.transitionType == .cleanHandoff { presetName = "clean-handoff" }
         else if config.transitionType == .vinylStop { presetName = "vinyl-stop" }
+        else if config.transitionType == .sequential { presetName = "sequential" }
         else if config.needsAnticipation { presetName = "anticipation" }
         else if preset.lowpassA != nil { presetName = "energy-down" }
         else if config.useAggressiveFilters { presetName = "aggressive" }
@@ -773,7 +785,9 @@ class CrossfadeExecutor {
         // campo refleja el valor en `progress=1.0` real). Setter directo
         // sobre el singleton, mismo patrón que `QueueManager:1040-1057`.
         let isCutFamilyForPreroll = config.transitionType == .cut || config.transitionType == .cutAFadeInB
-        let isNoOverlapForPreroll = config.transitionType == .cleanHandoff || config.transitionType == .vinylStop
+        let isNoOverlapForPreroll = config.transitionType == .cleanHandoff
+            || config.transitionType == .vinylStop
+            || config.transitionType == .sequential
         let preRollDur = min(0.5, timings.filterLead * 0.3)
         let preRollWillApply = !isCutFamilyForPreroll && !isNoOverlapForPreroll && !useLowpassA && preRollDur > 0
         let lsGainBInitial = Double(preset.lowshelfB.startGain)
@@ -801,13 +815,17 @@ class CrossfadeExecutor {
     static func calculateTimings(config: Config) -> Timings {
         let now = CACurrentMediaTime()
 
-        // CLEAN_HANDOFF / VINYL_STOP: zero filterLead so A's volume drop and rate
-        // ramp start immediately at trigger. Otherwise filterLead would let A play
-        // at full volume for ~0.7s before the fade-out begins, padding the
-        // transition with unintended music and pushing B's entry beyond the user's
-        // perceived "transition moment".
+        // CLEAN_HANDOFF / VINYL_STOP / SEQUENTIAL: zero filterLead so A's volume
+        // drop and rate ramp start immediately at trigger. Otherwise filterLead
+        // would let A play at full volume for ~0.7s before the fade-out begins,
+        // padding the transition with unintended music and pushing B's entry
+        // beyond the user's perceived "transition moment". SEQUENTIAL (v13.O.6)
+        // necesita filterLead=0 para que `volumeFadeStartTime == fadeInStartTime`
+        // y el cos²/sin² de A y B compartan exactamente la misma ventana.
         let filterLead: Double
-        if config.transitionType == .cleanHandoff || config.transitionType == .vinylStop {
+        if config.transitionType == .cleanHandoff
+            || config.transitionType == .vinylStop
+            || config.transitionType == .sequential {
             filterLead = 0
         } else {
             // v13.O.3: extendido de min(1.5, * 0.2) → min(2.5, * 0.35). El sweep
@@ -1630,6 +1648,29 @@ class CrossfadeExecutor {
                 return maxVolumeA * cosf(angle) * cosf(angle)
             }
             return 0
+
+        case .sequential:
+            // v13.O.6 (F5a) — A toca a volumen pleno hasta los últimos 50ms
+            // del fade; ahí desciende cos² para dejar paso a B (sin²) en
+            // perfecto complemento de potencia constante (sin²+cos²=1). El
+            // solape es ultracorto: anti-click puro, no transición — el
+            // listener percibe el final natural de A y la entrada natural de B
+            // pegados sin gap audible.
+            //
+            // `progress` aquí está normalizado sobre `duration = transitionEnd -
+            // volumeFadeStart` (mismo denominador que el resto de cases). La
+            // ventana de solape se reescala sobre `progress`, NO sobre
+            // `fadeDuration` global del usuario. En `progress=1.0` (t==transEnd)
+            // → p=1, cos²(π/2)=0. Invariante swap path preservada.
+            //
+            // Fallback robusto: si `duration <= 0.050` (fade ultracorto), el
+            // solape simplemente cubre el fade entero (clamp en max(0, ...)).
+            let solapeWindow: Double = 0.050  // 50ms
+            let solapeStart = max(0, 1.0 - solapeWindow / duration)
+            if progress < solapeStart { return maxVolumeA }
+            let p = Float((progress - solapeStart) / (1.0 - solapeStart))
+            let angle = p * .pi / 2.0
+            return maxVolumeA * cosf(angle) * cosf(angle)
         }
     }
 
@@ -1925,6 +1966,23 @@ class CrossfadeExecutor {
             let angle = rampP * .pi / 2.0
             let sinSq = sinf(angle) * sinf(angle)
             return maxVolumeB * sinSq
+
+        case .sequential:
+            // v13.O.6 (F5a) — B silente durante casi todo el fade (A toca a
+            // pleno); en los últimos 50ms entra con sin² para complementar
+            // exactamente la caída cos² de A. `progress` aquí está normalizado
+            // sobre `fadeInDuration = fadeInEndTime - fadeInStartTime`. Con
+            // `filterLead=0` (forzado en `calculateTimings` para .sequential),
+            // `fadeInStartTime == volumeFadeStartTime` y `fadeInDuration ==
+            // (transitionEndTime - volumeFadeStartTime) == duration de A`.
+            // Las dos curvas comparten ventana → sin²+cos²=1 → potencia
+            // constante en el solape. Anti-click puro.
+            let solapeWindow: Double = 0.050  // 50ms
+            let solapeStart = max(0, 1.0 - solapeWindow / fadeInDuration)
+            if progress < solapeStart { return 0 }
+            let p = Float((progress - solapeStart) / (1.0 - solapeStart))
+            let angle = p * .pi / 2.0
+            return maxVolumeB * sinf(angle) * sinf(angle)
         }
     }
 
@@ -2111,7 +2169,9 @@ class CrossfadeExecutor {
         // (sin overlap), lowpass A (EnergyDown — lowpass 20Hz silenciaría
         // toda la banda audible, semántica invertida).
         let isCutFamily = config.transitionType == .cut || config.transitionType == .cutAFadeInB
-        let isNoOverlap = config.transitionType == .cleanHandoff || config.transitionType == .vinylStop
+        let isNoOverlap = config.transitionType == .cleanHandoff
+            || config.transitionType == .vinylStop
+            || config.transitionType == .sequential
         let preRollDur = min(0.5, timings.filterLead * 0.3)
         if !isCutFamily && !isNoOverlap && !useLowpassA && preRollDur > 0 {
             let preRollStart = timings.filterStartTime - preRollDur
@@ -2174,13 +2234,18 @@ class CrossfadeExecutor {
             rampStart = cutStart
         }
 
-        // CLEAN_HANDOFF / VINYL_STOP: A and B never overlap, so spectral shaping
-        // serves no purpose. The volume curve (and rate ramp for vinyl-stop) does
-        // all the work. Skipping filter automation also avoids the audible "swept"
+        // CLEAN_HANDOFF / VINYL_STOP / SEQUENTIAL: A and B never overlap (or el
+        // solape es ultracorto 50ms en SEQUENTIAL), so spectral shaping serves
+        // no purpose. The volume curve (and rate ramp for vinyl-stop) does all
+        // the work. Skipping filter automation also avoids the audible "swept"
         // character that would otherwise bleed into A's outro and contradict the
         // "clean radio handoff" intent — and for vinyl-stop, layering a filter
-        // sweep on top of a spin-down sounds gimmicky.
-        if config.transitionType == .cleanHandoff || config.transitionType == .vinylStop {
+        // sweep on top of a spin-down sounds gimmicky. SEQUENTIAL (v13.O.6) es
+        // un fallback que respeta el material original: A toca limpia hasta su
+        // endTime natural, cualquier filtrado mancharía esa promesa.
+        if config.transitionType == .cleanHandoff
+            || config.transitionType == .vinylStop
+            || config.transitionType == .sequential {
             return
         }
 
@@ -2378,6 +2443,11 @@ class CrossfadeExecutor {
 
     private func applyFiltersB(at t: Double) {
         guard !config.skipBFilters else { return }
+        // v13.O.6 (F5a) SEQUENTIAL: B entra solo en los últimos 50ms con sin²
+        // puro — sin filtro espectral. Cualquier sweep en esa ventana sería
+        // inaudible (50ms es ~3 ciclos de 60Hz) o tracker artifact. Mejor
+        // dejar el material crudo.
+        if config.transitionType == .sequential { return }
 
         var hpFreq: Float
         var lsGain: Float

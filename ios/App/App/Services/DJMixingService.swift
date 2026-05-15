@@ -220,6 +220,13 @@ enum DJMixingService {
         /// enters in seco. Reads as a deliberate DJ gesture for big mood / tempo
         /// drops. Cooldown: max 1 every 6 transitions (avoid making it a tic).
         case vinylStop = "VINYL_STOP"
+        /// Sequential handoff (v13.O.6, F5a). A plays to its natural endTime;
+        /// B enters with a 50ms cos²/sin² overlap to dodge clicks. No filter
+        /// pre-roll, no EQ_MIX, no spectral shaping. Honest fallback when a
+        /// pairing isn't blendable — the listener hears the end of A and the
+        /// start of B with an inaudible seam. Will be the redirect target of
+        /// retired DROP_MIX / STEM_MIX in F5b.
+        case sequential = "SEQUENTIAL"
     }
 
     struct MixModeConfig {
@@ -1151,6 +1158,7 @@ enum DJMixingService {
             || transition.type == .dropMix
             || transition.type == .cleanHandoff
             || transition.type == .vinylStop
+            || transition.type == .sequential
             || anticipation.isPrePunch
             || isShortCut
         if anticipation.isPrePunch {
@@ -2677,8 +2685,9 @@ enum DJMixingService {
         switch transitionType {
         case .eqMix, .beatMatchBlend, .crossfade, .cutAFadeInB, .fadeOutACutB:
             bassKillCompatibleType = true
-        case .cut, .naturalBlend, .cleanHandoff, .stemMix, .dropMix, .vinylStop:
+        case .cut, .naturalBlend, .cleanHandoff, .stemMix, .dropMix, .vinylStop, .sequential:
             // CLEAN_HANDOFF: A and B never overlap, no bass conflict to manage.
+            // SEQUENTIAL: 50ms solape, A toca natural — sin bass kill posible.
             // STEM_MIX: the stem swap IS the moment — A drops to stems, B enters
             //   on vocals/mids. Adding a hard bass kill on top muddies the
             //   intentional bass-less holding pattern of stem mix.
@@ -2918,6 +2927,14 @@ enum DJMixingService {
         if transitionType == .vinylStop {
             return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
                                       reason: "Sin anticipacion: VINYL_STOP — gesto de A primero")
+        }
+
+        // SEQUENTIAL (v13.O.6, F5a): A toca natural hasta su endTime; el tease
+        // pre-mute alteraría el final natural prometido. B entra completa en el
+        // solape de 50ms, no necesita lead-in.
+        if transitionType == .sequential {
+            return AnticipationResult(needsAnticipation: false, anticipationTime: 0,
+                                      reason: "Sin anticipacion: SEQUENTIAL — A termina natural")
         }
 
         // CUT-specific: tease B filtered before the hard swap — this is how DJs
@@ -3603,7 +3620,9 @@ enum DJMixingService {
         transitionType: TransitionType
     ) -> TimeStretchResult {
         switch transitionType {
-        case .cut, .cutAFadeInB, .fadeOutACutB, .cleanHandoff:
+        case .cut, .cutAFadeInB, .fadeOutACutB, .cleanHandoff, .sequential:
+            // SEQUENTIAL (v13.O.6, F5a) — A toca natural hasta su endTime; el
+            // time-stretch alteraría la firma rítmica/tonal del material.
             return TimeStretchResult(useTimeStretch: false, rateA: 1.0, rateB: 1.0,
                                      reason: "No stretch: transicion tipo cut/handoff")
         case .vinylStop:
