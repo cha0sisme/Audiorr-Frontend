@@ -740,17 +740,41 @@ final class SmartMixManager {
     // MARK: - Camelot Key Helpers
 
     private static let keyToCamelot: [String: String] = [
+        // Majors (sharp notation)
         "B": "1B", "F#": "2B", "C#": "3B", "G#": "4B", "D#": "5B", "A#": "6B",
         "F": "7B", "C": "8B", "G": "9B", "D": "10B", "A": "11B", "E": "12B",
+        // Minors (sharp notation)
         "G#m": "1A", "D#m": "2A", "A#m": "3A", "Fm": "4A", "Cm": "5A", "Gm": "6A",
         "Dm": "7A", "Am": "8A", "Em": "9A", "Bm": "10A", "F#m": "11A", "C#m": "12A",
+        // Majors (flat notation — enarmonías)
         "Gb": "2B", "Db": "3B", "Ab": "4B", "Eb": "5B", "Bb": "6B",
-        "Ebm": "2A", "Bbm": "3A",
+        // Minors (flat notation — enarmonías) — completas
+        "Abm": "1A", "Ebm": "2A", "Bbm": "3A", "Dbm": "12A", "Gbm": "11A",
     ]
 
+    /// Devuelve la Camelot key correspondiente a la key del backend.
+    /// Normaliza variantes que el backend puede emitir: sufijos " major"/" minor",
+    /// minúsculas, espacios sobrantes. Cierra bug #5 de la auditoría
+    /// (fallos silenciosos cuando la string no coincide exactamente con la tabla).
     private static func camelotKey(_ key: String?) -> String? {
-        guard let key else { return nil }
-        return keyToCamelot[key]
+        guard let raw = key else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        if let direct = keyToCamelot[trimmed] { return direct }
+        // Normaliza "C major", "c minor", "C Major", etc. a "C" / "Cm"
+        let lower = trimmed.lowercased()
+        if lower.hasSuffix(" minor") {
+            let root = String(trimmed.dropLast(6)).trimmingCharacters(in: .whitespaces)
+            let normalized = root.prefix(1).uppercased() + root.dropFirst() + "m"
+            return keyToCamelot[normalized]
+        }
+        if lower.hasSuffix(" major") {
+            let root = String(trimmed.dropLast(6)).trimmingCharacters(in: .whitespaces)
+            let normalized = root.prefix(1).uppercased() + root.dropFirst()
+            return keyToCamelot[normalized]
+        }
+        // Último intento: capitalizar primera letra (resuelve "c", "f#m", etc.)
+        let cap = trimmed.prefix(1).uppercased() + trimmed.dropFirst()
+        return keyToCamelot[cap]
     }
 
     // MARK: - Cache Signature (#9 — robust hash of all song IDs)
