@@ -114,4 +114,66 @@ final class DSPFilterManager {
             presetName: "v14.01-scaffold"
         )
     }
+
+    // MARK: - Migrated band logic (R-C: lógica única, sin double-application)
+
+    /// Coeficiente inicial de band 3 (high-shelf A). Usado por
+    /// `setupInitialEQ` y por el pre-roll path (Hv5-1) de
+    /// `applyFiltersA`. Migrado en v14.02 desde CrossfadeExecutor
+    /// — la rama band3 en esos puntos llama a esta función única.
+    static func highShelfCoefficientA_initial(
+        useHighShelfCut: Bool,
+        preset: CrossfadeExecutor.FilterPreset.HighShelfCut?,
+        sampleRate: Double
+    ) -> BiquadCoefficients {
+        guard useHighShelfCut, let hs = preset else { return .passthrough }
+        return BiquadCoefficientCalculator.highShelf(
+            frequency: hs.frequency, sampleRate: sampleRate, gainDB: hs.startGain
+        )
+    }
+
+    /// Coeficiente runtime band 3 (high-shelf A) durante el fade.
+    /// Implementa pivot + tail-easing 10% hacia 0 dB en el último
+    /// frame del fade (curva v13.O.6 "Filtros-A", commit `e2db8a6`).
+    /// Migrado en v14.02 desde CrossfadeExecutor `applyFiltersA`.
+    /// Invariante swap path preservada: no toca volumen ni rate,
+    /// solo el coeficiente del shelf.
+    static func highShelfCoefficientA(
+        at t: Double,
+        useHighShelfCut: Bool,
+        preset: CrossfadeExecutor.FilterPreset.HighShelfCut?,
+        rampStart: Double,
+        rampEnd: Double,
+        pivotTime: Double,
+        totalFilterDur: Double,
+        sampleRate: Double
+    ) -> BiquadCoefficients {
+        guard useHighShelfCut, let hs = preset else { return .passthrough }
+
+        var hsGain: Float
+        let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
+        if t < pivotTime {
+            let denom = pivotTime - rampStart
+            let p = Float(denom > 0 ? (t - rampStart) / denom : 1.0)
+            hsGain = hs.startGain + (holdTarget - hs.startGain) * min(1, max(0, p))
+        } else {
+            let denom = rampEnd - pivotTime
+            let p = Float(denom > 0 ? (t - pivotTime) / denom : 1.0)
+            hsGain = holdTarget + (hs.endGain - holdTarget) * min(1, max(0, p))
+        }
+
+        // Tail-easing 10% — el coeficiente vuelve a 0 dB (passthrough)
+        // en el último 10% del fade, evitando residual de high-shelf
+        // colgado tras `gainForPlayerA → 0`. (v13.O.6, Filtros-A.)
+        let tailEaseStart = rampStart + totalFilterDur * 0.90
+        if t >= tailEaseStart {
+            let tailDur = rampEnd - tailEaseStart
+            let tailP = Float(tailDur > 0 ? (t - tailEaseStart) / tailDur : 1.0)
+            hsGain = hsGain + (0.0 - hsGain) * min(1, max(0, tailP))
+        }
+
+        return BiquadCoefficientCalculator.highShelf(
+            frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain
+        )
+    }
 }

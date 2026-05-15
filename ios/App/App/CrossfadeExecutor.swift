@@ -796,8 +796,12 @@ class CrossfadeExecutor {
         // valor que el tail-easing (commit Filtros-A) deje en p=1.0. Pre fix:
         // endGain del preset. Post fix: 0 (passthrough). Reportamos el valor
         // que efectivamente verá el oyente en el último tick.
+        // v14.02 (F4 expandida): poblar SIEMPRE — devolver 0.0 cuando el
+        // filtro está OFF (passthrough), no `nil`. Permite cruces analíticos
+        // "transiciones con filtro OFF vs ON" en el log-analyst que antes
+        // eran imposibles por el 87.5% de campos null (sesión v13.O.6, N=16).
         let highShelfEndA: Double? = {
-            guard useHighShelfCut, let hs = preset.highShelfA else { return nil }
+            guard useHighShelfCut, let hs = preset.highShelfA else { return 0.0 }
             // Reporta el endGain "lógico" del preset; el tail-easing aplicado
             // en runtime se valida vs este valor (post Filtros-A esperado 0).
             return Double(hs.endGain)
@@ -1280,12 +1284,14 @@ class CrossfadeExecutor {
             band2A = .passthrough
         }
 
-        let band3A: BiquadCoefficients
-        if !isCutTransition, useHighShelfCut, let hs = preset.highShelfA {
-            band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hs.startGain)
-        } else {
-            band3A = .passthrough
-        }
+        // v14.02 (R-C): band 3 high-shelf A delegado a DSPFilterManager.
+        // En transiciones tipo CUT/CUT_A_FADE_IN_B no aplica high-shelf —
+        // pasamos `useHighShelfCut=false` al manager para forzar passthrough.
+        let band3A: BiquadCoefficients = DSPFilterManager.highShelfCoefficientA_initial(
+            useHighShelfCut: !isCutTransition && useHighShelfCut,
+            preset: preset.highShelfA,
+            sampleRate: sampleRate
+        )
 
         dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
 
@@ -2190,9 +2196,12 @@ class CrossfadeExecutor {
                 let band2A: BiquadCoefficients = (useMidScoop ? preset.midScoopA.map {
                     BiquadCoefficientCalculator.parametric(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain, bandwidth: $0.bandwidth)
                 } : nil) ?? .passthrough
-                let band3A: BiquadCoefficients = (useHighShelfCut ? preset.highShelfA.map {
-                    BiquadCoefficientCalculator.highShelf(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain)
-                } : nil) ?? .passthrough
+                // v14.02 (R-C): band 3 delegado a DSPFilterManager.
+                let band3A: BiquadCoefficients = DSPFilterManager.highShelfCoefficientA_initial(
+                    useHighShelfCut: useHighShelfCut,
+                    preset: preset.highShelfA,
+                    sampleRate: sampleRate
+                )
                 dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
                 diagFreqA = freqA
                 return
@@ -2396,45 +2405,20 @@ class CrossfadeExecutor {
         }
 
         // ── Band 3: High-shelf cut ──
-        var band3A: BiquadCoefficients = .passthrough
-        if useHighShelfCut, let hs = preset.highShelfA {
-            var hsGain: Float
-            let holdTarget = hs.startGain + (hs.endGain - hs.startGain) * 0.30
-            if t < pivotTime {
-                let p = Float((t - rampStart) / (pivotTime - rampStart))
-                hsGain = linInterp(hs.startGain, holdTarget, min(1, p))
-            } else {
-                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
-                hsGain = linInterp(holdTarget, hs.endGain, min(1, p))
-            }
-            // v13.O.6 (Filtros-A) — tail-easing band 3 A hacia 0 dB en el
-            // último 10% del fade. Hipótesis: tras `gainForPlayerA → 0` (cos²
-            // estándar) el volumen de A cae a 0 al `progress=1.0`, pero el
-            // coeficiente del high-shelf permanece "colgado" en endGain
-            // (-10/-12 dB) hasta que `dspA.reset()` se ejecuta en
-            // `completeCrossfade`. Si hay residual audible (delay line de A
-            // todavía drenando o cola del shelf en el bus), el listener
-            // percibe brillo recortado en los últimos 150-200ms.
-            //
-            // Fix: en `progress ∈ [0.90, 1.00]` (rampEnd-frame), interpola
-            // linealmente en dB desde `hsGain` (post-pivot) hacia 0 (passthrough).
-            // El filtro queda neutro en p=1.0 → cualquier residual sale plano.
-            //
-            // Sin precedente DSP validado en repo. `aNaturalDecay` (028a020) es
-            // sobre volumen, no sobre coefs DSP. Validación coche-test obligatoria
-            // — el campo `highShelfGainA_atEnd` de telemetría (commit F4) reporta
-            // si el contrato `band3 ≈ passthrough en p=1.0` se cumple.
-            //
-            // NO toca volumen. NO toca gainForPlayerA. Invariante swap path
-            // preservada — este bloque solo cambia el coeficiente del shelf.
-            let tailEaseStart = rampStart + totalFilterDur * 0.90
-            if t >= tailEaseStart {
-                let tailDur = rampEnd - tailEaseStart
-                let tailP = tailDur > 0 ? Float((t - tailEaseStart) / tailDur) : 1.0
-                hsGain = linInterp(hsGain, 0.0, min(1, tailP))
-            }
-            band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain)
-        }
+        // v14.02 (R-C): lógica completa (pivot + tail-easing 10% Filtros-A)
+        // migrada a DSPFilterManager.highShelfCoefficientA. La rama legacy
+        // que vivía aquí ha sido eliminada. Único punto de cálculo de
+        // band 3 high-shelf A en todo el subsistema.
+        let band3A: BiquadCoefficients = DSPFilterManager.highShelfCoefficientA(
+            at: t,
+            useHighShelfCut: useHighShelfCut,
+            preset: preset.highShelfA,
+            rampStart: rampStart,
+            rampEnd: rampEnd,
+            pivotTime: pivotTime,
+            totalFilterDur: totalFilterDur,
+            sampleRate: sampleRate
+        )
 
         dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
     }
