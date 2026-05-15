@@ -595,42 +595,112 @@ final class NavidromeService: ObservableObject {
         return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
     }
 
-    /// Playlists containing at least one song by the artist (excludes smart +
-    /// daily-mix playlists). Mirrors navidromeApi.ts `getPlaylistsByArtist`.
+    /// Playlists artist-focused: SOLO Editorial o "This is …". Replica
+    /// `findPlaylistsByArtist` de Audiorr-web.
+    ///
+    /// Orden de salida:
+    ///   1. "This is {artistName}" oficial — siempre primero si existe (sin
+    ///      necesidad de descargar entries: match por nombre).
+    ///   2. Editoriales que contienen al artista, en su orden original de
+    ///      Navidrome.
+    ///   3. Otras "This is X" donde el artista aparece como feature.
+    ///
+    /// Cambio respecto a la versión previa: antes escaneábamos CUALQUIER
+    /// playlist con un track del artista. Ahora restringimos a curated/
+    /// editoriales/This-is, igual que la web — más rápido y más relevante.
     func getPlaylistsByArtist(artistName: String) async -> [NavidromePlaylist] {
-        guard let all = try? await getPlaylists() else { return [] }
+        guard !artistName.isEmpty, let all = try? await getPlaylists() else { return [] }
+        let target = artistName.lowercased().trimmingCharacters(in: .whitespaces)
 
-        // Pre-filter: skip smart + daily mixes.
-        let candidates = all.filter { pl in
-            let name = pl.name.lowercased()
-            let comment = pl.comment ?? ""
-            return !comment.contains("Smart Playlist")
-                && !name.contains("mix diario")
-                && !comment.lowercased().contains("mix diario")
+        // Bucket separation: oficial, editorial, otras "This is".
+        var officialThisIs: [NavidromePlaylist] = []
+        var otherThisIs: [NavidromePlaylist] = []
+        var editorialCandidates: [NavidromePlaylist] = []
+
+        for pl in all {
+            let cleanName = Self.stripSpotifyPrefix(pl.name)
+            let thisIs = Self.thisIsArtistName(from: cleanName)
+            if let thisIs {
+                if thisIs.lowercased() == target {
+                    officialThisIs.append(pl)
+                } else {
+                    otherThisIs.append(pl)
+                }
+            } else if Self.isEditorial(pl) {
+                editorialCandidates.append(pl)
+            }
         }
 
-        let lower = artistName.lowercased()
+        // Scan editoriales + otherThisIs en paralelo (mantiene orden de input
+        // dentro de cada bucket). La oficial NO se evalúa — matchea por contrato.
+        enum Tag { case editorial, otherThisIs }
+        var toScan: [(pl: NavidromePlaylist, tag: Tag, idx: Int)] = []
+        for (i, pl) in editorialCandidates.enumerated() {
+            toScan.append((pl, .editorial, i))
+        }
+        let editorialCount = editorialCandidates.count
+        for (i, pl) in otherThisIs.enumerated() {
+            toScan.append((pl, .otherThisIs, editorialCount + i))
+        }
 
-        // Parallelise playlist-song checks.
-        return await withTaskGroup(of: (Int, NavidromePlaylist?).self) { group in
-            for (idx, pl) in candidates.enumerated() {
+        let matched: [(pl: NavidromePlaylist, tag: Tag, idx: Int)?] = await withTaskGroup(
+            of: (Int, (NavidromePlaylist, Tag, Int)?).self
+        ) { group in
+            for (groupIdx, item) in toScan.enumerated() {
                 group.addTask {
-                    guard let (_, songs) = try? await NavidromeService.shared.getPlaylistSongs(playlistId: pl.id) else {
-                        return (idx, nil)
+                    guard let (_, songs) = try? await NavidromeService.shared.getPlaylistSongs(playlistId: item.pl.id) else {
+                        return (groupIdx, nil)
                     }
-                    let match = songs.contains { song in
-                        Self.artistMatches(needle: lower, in: song.artist.lowercased())
+                    let hit = songs.contains { song in
+                        Self.artistMatches(needle: target, in: song.artist.lowercased())
                     }
-                    return (idx, match ? pl : nil)
+                    return (groupIdx, hit ? (item.pl, item.tag, item.idx) : nil)
                 }
             }
-
-            var results: [(Int, NavidromePlaylist)] = []
-            for await (idx, pl) in group {
-                if let pl { results.append((idx, pl)) }
-            }
+            var results: [(Int, (NavidromePlaylist, Tag, Int)?)] = []
+            for await r in group { results.append(r) }
             return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
+
+        var editorialMatches: [NavidromePlaylist] = []
+        var otherThisIsMatches: [NavidromePlaylist] = []
+        for m in matched {
+            guard let m else { continue }
+            switch m.tag {
+            case .editorial:   editorialMatches.append(m.pl)
+            case .otherThisIs: otherThisIsMatches.append(m.pl)
+            }
+        }
+
+        return officialThisIs + editorialMatches + otherThisIsMatches
+    }
+
+    /// Detecta playlist editorial — `[Editorial]` en comment.
+    private static func isEditorial(_ p: NavidromePlaylist) -> Bool {
+        (p.comment ?? "").contains("[Editorial]")
+    }
+
+    /// Si la playlist se llama "This is X", devuelve "X". Sino nil.
+    /// Acepta prefijo legacy `[Spotify] `.
+    private static func thisIsArtistName(from cleanName: String) -> String? {
+        let trimmed = cleanName.trimmingCharacters(in: .whitespaces)
+        let pattern = "^this is\\s+(.+)$"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        guard let match = re.firstMatch(in: trimmed, range: range),
+              let r = Range(match.range(at: 1), in: trimmed) else { return nil }
+        return String(trimmed[r]).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Quita el prefijo legacy "[Spotify] " del nombre de playlist.
+    private static func stripSpotifyPrefix(_ name: String) -> String {
+        let pattern = "^\\[spotify\\]\\s*"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return name.trimmingCharacters(in: .whitespaces)
+        }
+        let range = NSRange(name.startIndex..., in: name)
+        let stripped = re.stringByReplacingMatches(in: name, range: range, withTemplate: "")
+        return stripped.trimmingCharacters(in: .whitespaces)
     }
 
     /// Loose match for artist names embedded in a "feat.", "&", or comma-joined
