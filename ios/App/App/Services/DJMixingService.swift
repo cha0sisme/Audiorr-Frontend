@@ -897,6 +897,38 @@ enum DJMixingService {
             print("[DJMixingService] 🔀 Hv5-3 redirect → BMB (entry mid-bucket sin BPM-grid)")
         }
 
+        // ── 6b-bis. v14.09: SEQUENTIAL fuerza entry=0 ──
+        //
+        // `decideTransitionType` puede redirigir DROP_MIX/STEM_MIX → .sequential
+        // vía F5b (commit 5161c99, v13.O.6). El `entry.entryPoint` se calculó
+        // arriba (línea ~724) ANTES de esa redirección, apuntando típicamente
+        // a chorus/drop ~30-60s del DROP_MIX original. Sin reset, B arranca a
+        // mitad de canción en vez de desde el principio — rompe la promesa
+        // SEQUENTIAL ("A termina natural, B empieza desde el principio").
+        //
+        // Quote director (2026-05-15): *"PlayerA llega más o menos al final
+        // y se activa y playerB entra por donde le da la gana. Debería de
+        // ser playerA llega a su final, playerB empieza desde el principio,
+        // es como skippear transiciones simplemente. Pues eso no funciona."*
+        //
+        // Fix: SIEMPRE que el tipo final sea .sequential, forzar entry=0.
+        // Aplica tanto a redirects F5b como a SEQUENTIAL elegidos directamente
+        // por el decisor (BPM incompatible extremo). El snap (6c) y Tier 4
+        // (6.5) posteriores no tocan SEQUENTIAL, así que el entry=0 propaga
+        // limpio al executor.
+        if transition.type == .sequential && entry.entryPoint > 0 {
+            print("[DJMixingService] 🔄 v14.09 SEQUENTIAL force entry=0 (was \(String(format: "%.1f", entry.entryPoint))s, src=\(entry.entrySource.rawValue))")
+            entry = EntryPointResult(
+                entryPoint: 0,
+                beatSyncInfo: entry.beatSyncInfo + " [SEQUENTIAL reset]",
+                usedFallback: entry.usedFallback,
+                isBeatSynced: false,
+                entrySource: entry.entrySource,
+                genreCapApplied: entry.genreCapApplied,
+                entryFinalCapApplied: entry.entryFinalCapApplied
+            )
+        }
+
         // ── 6c. CUT entry snap to downbeat ──
         // Done AFTER the type is decided (we only snap CUT-family) and BEFORE
         // anticipation/trigger/instrumental refinement (so they all see the
