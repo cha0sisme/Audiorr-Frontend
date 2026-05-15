@@ -2342,6 +2342,32 @@ class CrossfadeExecutor {
                 let p = Float((t - pivotTime) / (rampEnd - pivotTime))
                 hsGain = linInterp(holdTarget, hs.endGain, min(1, p))
             }
+            // v13.O.6 (Filtros-A) — tail-easing band 3 A hacia 0 dB en el
+            // último 10% del fade. Hipótesis: tras `gainForPlayerA → 0` (cos²
+            // estándar) el volumen de A cae a 0 al `progress=1.0`, pero el
+            // coeficiente del high-shelf permanece "colgado" en endGain
+            // (-10/-12 dB) hasta que `dspA.reset()` se ejecuta en
+            // `completeCrossfade`. Si hay residual audible (delay line de A
+            // todavía drenando o cola del shelf en el bus), el listener
+            // percibe brillo recortado en los últimos 150-200ms.
+            //
+            // Fix: en `progress ∈ [0.90, 1.00]` (rampEnd-frame), interpola
+            // linealmente en dB desde `hsGain` (post-pivot) hacia 0 (passthrough).
+            // El filtro queda neutro en p=1.0 → cualquier residual sale plano.
+            //
+            // Sin precedente DSP validado en repo. `aNaturalDecay` (028a020) es
+            // sobre volumen, no sobre coefs DSP. Validación coche-test obligatoria
+            // — el campo `highShelfGainA_atEnd` de telemetría (commit F4) reporta
+            // si el contrato `band3 ≈ passthrough en p=1.0` se cumple.
+            //
+            // NO toca volumen. NO toca gainForPlayerA. Invariante swap path
+            // preservada — este bloque solo cambia el coeficiente del shelf.
+            let tailEaseStart = rampStart + totalFilterDur * 0.90
+            if t >= tailEaseStart {
+                let tailDur = rampEnd - tailEaseStart
+                let tailP = tailDur > 0 ? Float((t - tailEaseStart) / tailDur) : 1.0
+                hsGain = linInterp(hsGain, 0.0, min(1, tailP))
+            }
             band3A = BiquadCoefficientCalculator.highShelf(frequency: hs.frequency, sampleRate: sampleRate, gainDB: hsGain)
         }
 
