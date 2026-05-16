@@ -431,7 +431,8 @@ struct AlbumDetailView: View {
     @ViewBuilder
     private var albumStatsLine: some View {
         if !vm.songs.isEmpty {
-            let total = vm.songs.reduce(0) { $0 + $1.duration }
+            let totalSeconds = vm.songs.reduce(0.0) { $0 + ($1.duration ?? 0) }
+            let total = Int(totalSeconds)
             let hours = total / 3600
             let minutes = (total % 3600) / 60
             let durationText: String
