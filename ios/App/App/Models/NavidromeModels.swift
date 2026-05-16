@@ -288,6 +288,18 @@ struct NavidromePlaylist: Identifiable, Decodable, Hashable {
             || c.contains("spotify synced")
             || name.lowercased().hasPrefix("mix diario")
     }
+
+    /// True when this playlist's `owner` matches the currently authenticated
+    /// Navidrome user (case-insensitive). Editorial / "This is X" / smart
+    /// playlists may belong to a service account so this returns false even
+    /// when the user has them favourited. Used by the toolbar menu to gate
+    /// the "Eliminar" action — the user can only delete their own playlists.
+    var isOwnedByCurrentUser: Bool {
+        guard let owner = owner?.lowercased(),
+              let me = NavidromeService.shared.credentials?.username.lowercased()
+        else { return false }
+        return owner == me
+    }
 }
 
 // MARK: - Homepage layout sections (mirrors backend PlaylistSection type)

@@ -506,8 +506,11 @@ struct PlaylistDetailView: View {
                     }
                 }
 
-                // Delete (user playlists only)
-                if !pl.isSystemPlaylist {
+                // Delete — only playlists OWNED by the current user, and never
+                // for editorial / smart / spotify-synced / mix diario (covered
+                // by `isSystemPlaylist`). A user can favourite or follow another
+                // user's public playlist; we must not let them delete it.
+                if !pl.isSystemPlaylist && pl.isOwnedByCurrentUser {
                     Section {
                         Button(role: .destructive) {
                             showDeleteConfirm = true
