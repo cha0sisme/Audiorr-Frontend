@@ -1460,6 +1460,44 @@ enum DJMixingService {
         // computeTier4Entry — ya no necesita scope mayor.
         let bRapidFadeIn = false
 
+        // v14.d V2' — telemetría inerte para calibrar decisor adaptativo
+        // `lsGainB_initial` en v14.e. Captura 3 señales del momento de la
+        // decisión que el log-analyst sobre el coche-test v14.d rated podrá
+        // cruzar con `lsGainB_initial` (ya viaja) y `userRating` para:
+        //   1. Distribución real de `bassProminenceB_0_15s` sobre el catálogo
+        //      → threshold percentil calibrado (vs el `0.55` magic-number
+        //      del diseño inicial cazado por devils-advocate).
+        //   2. Mean rating por bucket de `bassProminenceB_0_15s` + filtro
+        //      `lsGainB_initial=-12` → confirmar/refutar la sinergia
+        //      "bajo prominente + filtro fuerte = queja mala gestión".
+        //   3. Distribución `vocalOverlapRiskCode` × `lsGainB` → validar el
+        //      cinturón propuesto (no relajar en `aOnly` ni `both`).
+        // Cero efecto sobre audio en v14.d. Ventana `[0..3]` = segundos 0-15
+        // de B (corregida vs `[3..5]` = seg 15-25 del diseño inicial, que
+        // no coincidía con la ventana audible de las quejas del director).
+        let bassProminenceB_telemetry: Double? = {
+            guard let pc = safeNext?.percussiveCurve, pc.count >= 3 else { return nil }
+            let head = pc.prefix(3)
+            return head.reduce(0, +) / Double(head.count)
+        }()
+        let vocalOverlapRiskCodeForTelemetry: String = {
+            switch profile.vocalOverlapRisk {
+            case .none:  return "none"
+            case .aOnly: return "aOnly"
+            case .bOnly: return "bOnly"
+            case .both:  return "both"
+            }
+        }()
+        let energyIntroBForTelemetry: Double? = {
+            guard let next = safeNext, next.hasEnergyProfile else { return nil }
+            return next.energyIntro
+        }()
+        Task { @MainActor in
+            TransitionDiagnostics.shared.bassProminenceB_0_15s = bassProminenceB_telemetry
+            TransitionDiagnostics.shared.vocalOverlapRiskCode = vocalOverlapRiskCodeForTelemetry
+            TransitionDiagnostics.shared.energyIntroB_telemetry = energyIntroBForTelemetry
+        }
+
         return CrossfadeResult(
             entryPoint: finalEntry,
             fadeDuration: effectiveFadeDuration,

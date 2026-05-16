@@ -202,6 +202,31 @@ final class TransitionDiagnostics {
     /// raíz falsa, click viene de otro path (scheduleSegment, encoder AAC).
     var coefMagB_atSetup: Double? = nil
 
+    // v14.d V2' — telemetría inerte para calibrar decisor adaptativo de
+    // `lsGainB_initial`. NO modifica audio en v14.d; permite que el
+    // log-analyst sobre el coche-test rated reconstruya offline qué casos
+    // cumplirían el predicado del decisor (y con qué threshold real). El
+    // decisor se activará en v14.e con esta munición.
+    /// Bass prominencia de B en sus primeros 15s (ventana corregida vs el
+    /// `[3..5]` que el dj-engineer propuso en el diseño v14.d, mismatch
+    /// temporal cazado por devils-advocate). Media de `percussiveCurve[0..2]`
+    /// (3 samples de 5s cada uno) cuando hay ≥3 muestras; nil si la curva
+    /// no está disponible o tiene <3 muestras. Proxy del bajo prominente
+    /// que el catálogo Hip-Hop a 86-161 BPM tendría como queja "mala gestión"
+    /// cuando `lsGainB_initial=-12` corta demasiado.
+    var bassProminenceB_0_15s: Double? = nil
+    /// Código del enum `TransitionProfile.vocalOverlapRisk` capturado en el
+    /// momento del cálculo de la transición. Valores: "none", "aOnly",
+    /// "bOnly", "both". Cinturón propuesto para el decisor V2': relajar
+    /// `lsGainB` solo cuando el riesgo de overlap vocal NO sea `both` ni
+    /// `aOnly` (donde sí hace falta proteger A del bajo de B).
+    var vocalOverlapRiskCode: String? = nil
+    /// `nextAnalysis.energyIntro` capturado al construir la config. Solo
+    /// cuando `hasEnergyProfile=true` (señal real del backend); nil cuando
+    /// cae al default 0.5 (signal ausente). Fallback del decisor V2' cuando
+    /// `percussiveCurve` no esté disponible (~99.7% cobertura).
+    var energyIntroB_telemetry: Double? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -347,6 +372,11 @@ final class TransitionDiagnostics {
         // (resetSync) esperado ≈ 0. Optional para retrocompat con records
         // pre-v14.d.
         var coefMagB_atSetup: Double? = nil
+        // v14.d V2' — telemetría inerte aditiva para calibrar el decisor
+        // adaptativo de lsGainB_initial en v14.e (sin tocar audio en v14.d).
+        var bassProminenceB_0_15s: Double? = nil
+        var vocalOverlapRiskCode: String? = nil
+        var energyIntroB_telemetry: Double? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -779,6 +809,9 @@ final class TransitionDiagnostics {
                 peakTransientDeltaA: self.peakTransientDeltaA,
                 peakTransientDeltaB: self.peakTransientDeltaB,
                 coefMagB_atSetup: self.coefMagB_atSetup,
+                bassProminenceB_0_15s: self.bassProminenceB_0_15s,
+                vocalOverlapRiskCode: self.vocalOverlapRiskCode,
+                energyIntroB_telemetry: self.energyIntroB_telemetry,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )
