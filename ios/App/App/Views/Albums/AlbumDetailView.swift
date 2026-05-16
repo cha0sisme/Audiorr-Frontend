@@ -405,7 +405,7 @@ struct AlbumDetailView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(isLight ? Color.accentColor : .white)
+                .foregroundStyle(isLight ? Color.black : .white)
         }
     }
 
