@@ -176,6 +176,23 @@ final class TransitionDiagnostics {
     /// pero el primer tick de filterTimer cayó después de filterStartTime.
     var filterPreRollEffectiveA: Bool? = nil
 
+    // v14.c V1.B — telemetría peak-detector del fade-in entrada del fix V1.A.
+    // Capturada por completeCrossfade ANTES de llamar a dspA.reset() / dspB.reset()
+    // (el reset limpia los counters del kernel). 4 campos aditivos:
+    /// True si la cadena A disparó el fade-in suavizado pasthrough→activo al
+    /// menos una vez en este crossfade. False si quedó en passthrough todo el
+    /// tiempo (caso CUT family). nil si el kernel no estaba disponible.
+    var fadeInTriggeredA: Bool? = nil
+    /// True/False/nil simétrico al anterior para la cadena B.
+    var fadeInTriggeredB: Bool? = nil
+    /// Peak |sample[i]−sample[i−1]| capturado en los 4096 frames post-fade-in
+    /// del kernel A. Pre-V1.A: ≥0.3 indica click discreto. Post-V1.A: <0.05
+    /// indica que el suavizado eliminó el step. Métrica objetiva del fix.
+    var peakTransientDeltaA: Double? = nil
+    /// Idem para la cadena B. Usualmente menor porque B arranca con
+    /// mixerB.outputVolume=0 (audio inerte durante el fade-in).
+    var peakTransientDeltaB: Double? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -310,6 +327,11 @@ final class TransitionDiagnostics {
         var bassKillGainA_atVolumeFadeStart: Double? = nil
         var bassKillGainA_atSwap: Double? = nil
         var filterPreRollEffectiveA: Bool? = nil
+        // v14.c V1.B — telemetría peak-detector del fade-in (4 campos aditivos).
+        var fadeInTriggeredA: Bool? = nil
+        var fadeInTriggeredB: Bool? = nil
+        var peakTransientDeltaA: Double? = nil
+        var peakTransientDeltaB: Double? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -737,6 +759,10 @@ final class TransitionDiagnostics {
                 bassKillGainA_atVolumeFadeStart: self.bassKillGainA_atVolumeFadeStart,
                 bassKillGainA_atSwap: self.bassKillGainA_atSwap,
                 filterPreRollEffectiveA: self.filterPreRollEffectiveA,
+                fadeInTriggeredA: self.fadeInTriggeredA,
+                fadeInTriggeredB: self.fadeInTriggeredB,
+                peakTransientDeltaA: self.peakTransientDeltaA,
+                peakTransientDeltaB: self.peakTransientDeltaB,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

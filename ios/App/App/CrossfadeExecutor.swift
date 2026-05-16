@@ -2656,6 +2656,22 @@ class CrossfadeExecutor {
         mixerA.outputVolume = 0
         mixerB.outputVolume = maxVolumeB
 
+        // v14.c V1.B — Capturar telemetría peak-detector ANTES del reset.
+        // El reset limpia los counters del kernel (fadein flag + peak delta),
+        // por lo que la lectura debe ocurrir aquí. Los 4 valores se publican a
+        // TransitionDiagnostics y viajan en el record vía publishCompletion()
+        // más abajo. Se ejecuta nonisolated desde automationQueue → safe.
+        let fadeInTrigA = dspA.fadeInTriggeredSinceLastReset()
+        let fadeInTrigB = dspB.fadeInTriggeredSinceLastReset()
+        let peakDeltaA = dspA.peakTransientDelta()
+        let peakDeltaB = dspB.peakTransientDelta()
+        Task { @MainActor in
+            TransitionDiagnostics.shared.fadeInTriggeredA = fadeInTrigA
+            TransitionDiagnostics.shared.fadeInTriggeredB = fadeInTrigB
+            TransitionDiagnostics.shared.peakTransientDeltaA = Double(peakDeltaA)
+            TransitionDiagnostics.shared.peakTransientDeltaB = Double(peakDeltaB)
+        }
+
         // Reset crossfade DSP to passthrough + reset time-stretch
         dspA.reset()
         dspB.reset()

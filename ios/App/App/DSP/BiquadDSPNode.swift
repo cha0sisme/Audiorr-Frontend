@@ -233,4 +233,16 @@ final class BiquadDSPNode {
     func currentStateMagnitude() -> Float {
         kernel.currentStateMagnitude()
     }
+
+    /// v14.c V1.B — Whether the suavizado fade-in fired at least once since
+    /// the last `reset()`. Read pre-reset by completeCrossfade.
+    func fadeInTriggeredSinceLastReset() -> Bool {
+        kernel.fadeInTriggeredSinceLastReset()
+    }
+
+    /// v14.c V1.B — Peak sample-to-sample delta captured during the fade-in
+    /// transient window. Used to validate whether the click was eliminated.
+    func peakTransientDelta() -> Float {
+        kernel.peakTransientDelta()
+    }
 }

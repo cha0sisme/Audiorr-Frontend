@@ -91,6 +91,28 @@ final class BiquadDSPKernel {
     /// 32-bit aligned memory are atomic on ARM64 — no lock needed for diagnostics.
     private var lastStateMagnitude: Float = 0
 
+    /// v14.c telemetry — peak |sample[i] - sample[i-1]| captured during the
+    /// transient capture window armed by the same gate that fires the fade-in.
+    /// Pre-fix expectation: discrete step → large delta (≥0.3 in normalized signal).
+    /// Post-fix expectation: smooth interpolation → small delta (<0.05).
+    /// If V1.A actually fixed the click, this metric collapses to near-zero post-fix
+    /// even on transitions where the director would have heard the bug pre-fix.
+    /// Written by render thread, read by audit. Float read on ARM64 is atomic.
+    private var transientPeakDelta: Float = 0
+    /// Per-channel last sample for the peak-delta running max. Reset to zero
+    /// when the capture window arms so the first sample's delta is its own
+    /// magnitude (cleanly captures a step from silence).
+    private var transientLastSample: [Float] = Array(repeating: 0, count: maxChannels)
+    /// Frames left in the transient capture window. Set to `transientCaptureFramesTotal`
+    /// by `updateCoefficients` whenever the fade-in gate fires. Decremented per
+    /// render buffer until it reaches zero, then the captured `transientPeakDelta`
+    /// stays frozen until the next gate firing.
+    private var transientCaptureFramesRemaining: Int = 0
+    /// 4096 frames ≈ 85 ms @ 48 kHz. Covers the 21 ms fade-in plus a generous
+    /// margin to catch any residual click that might leak past the suavizado
+    /// (the click would manifest in the 1-3 buffers right after the gate fires).
+    private static let transientCaptureFramesTotal: Int = 4096
+
     // MARK: - Filter state (render thread only)
 
     /// Delay lines for each filter stage × each channel.
@@ -162,6 +184,14 @@ final class BiquadDSPKernel {
             hasPending = false
             // Mutually exclusive with the fade-out path.
             fadeoutFramesRemaining = 0
+            // v14.c V1.B — arm the transient capture window. The render thread
+            // will run a peak-delta scan over the next 4096 frames and freeze
+            // the result in `transientPeakDelta`. Pre-V1.A baselines would show
+            // large deltas at the step; V1.A is expected to collapse this to
+            // near zero. Captured per-kernel independently.
+            transientPeakDelta = 0
+            for ch in 0..<Self.maxChannels { transientLastSample[ch] = 0 }
+            transientCaptureFramesRemaining = Self.transientCaptureFramesTotal
             os_unfair_lock_unlock(&lock)
             return
         }
@@ -293,6 +323,29 @@ final class BiquadDSPKernel {
             }
         }
         lastStateMagnitude = maxMag
+
+        // v14.c V1.B — Transient capture: running max of consecutive-sample
+        // deltas across the active capture window. Operates on the POST-filter
+        // audio (already in `abl`) so it measures what the listener hears, not
+        // the upstream signal. Stops decrementing once the window expires; the
+        // peak stays frozen until the next fade-in gate fires.
+        if transientCaptureFramesRemaining > 0 {
+            let framesToScan = min(frames, transientCaptureFramesRemaining)
+            var peak = transientPeakDelta
+            for ch in 0..<channels {
+                guard let data = abl[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+                var prev = transientLastSample[ch]
+                for i in 0..<framesToScan {
+                    let cur = data[i]
+                    let delta = abs(cur - prev)
+                    if delta > peak { peak = delta }
+                    prev = cur
+                }
+                transientLastSample[ch] = prev
+            }
+            transientPeakDelta = peak
+            transientCaptureFramesRemaining -= framesToScan
+        }
     }
 
     // MARK: - Reset
@@ -324,6 +377,14 @@ final class BiquadDSPKernel {
         // the next crossfade starts fresh.
         fadeinFramesRemaining = 0
         fadeinDidTriggerSinceLastReset = false
+        // v14.c V1.B — Reset the transient capture state. Keep `transientPeakDelta`
+        // as a sticky-since-last-reset metric: the audit in completeCrossfade
+        // reads it BEFORE calling reset(), so by the time we clear it here the
+        // value has already been published. Subsequent crossfades start with a
+        // clean baseline.
+        transientPeakDelta = 0
+        transientCaptureFramesRemaining = 0
+        for ch in 0..<Self.maxChannels { transientLastSample[ch] = 0 }
         // needsStateReset will be raised by process() when the fade completes.
         // State arrays are owned exclusively by the render thread — writing them
         // from another thread would be a data race.
@@ -349,6 +410,24 @@ final class BiquadDSPKernel {
     /// the stop. Combine with a small wait after reset() before checking.
     func currentStateMagnitude() -> Float {
         return lastStateMagnitude
+    }
+
+    /// v14.c V1.B — Whether the fade-in gate fired at least once since the last
+    /// `reset()`. True after `setupInitialEQ`-style passthrough→activo handoff;
+    /// false on kernels that stayed in passthrough (CUT family A path, idle B
+    /// with skipBFilters, etc.). Read by completeCrossfade BEFORE calling reset()
+    /// so the post-completion audit can publish it to TransitionDiagnostics.
+    func fadeInTriggeredSinceLastReset() -> Bool {
+        return fadeinDidTriggerSinceLastReset
+    }
+
+    /// v14.c V1.B — Peak |sample[i] - sample[i-1]| over the 4096-frame window
+    /// armed by the fade-in gate. Pre-V1.A: large values (>0.3) signal the
+    /// discrete click. Post-V1.A: expected to collapse to near zero on the same
+    /// transitions. Stays frozen at the captured peak until the next gate fires.
+    /// Float read on ARM64 is atomic (32-bit aligned).
+    func peakTransientDelta() -> Float {
+        return transientPeakDelta
     }
 
     // MARK: - Biquad processing (Direct Form II Transposed)
