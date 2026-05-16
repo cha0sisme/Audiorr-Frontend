@@ -76,3 +76,75 @@ extension LinearGradient {
         )
     }
 }
+
+// MARK: - Expandable bio (Apple Music-style "MÁS" / "OCULTAR")
+
+/// Bio block that mirrors the Apple Music collapsed/expanded biography pattern.
+///
+/// Collapsed: 2 lines + the word "MÁS" inline at the trailing edge of the second
+/// line. A short horizontal gradient fades the truncated text behind "MÁS" into
+/// `pageBg` so the boundary doesn't look like a hard overlap. Tap anywhere on the
+/// block to expand.
+///
+/// Expanded: full text + "OCULTAR" button at the trailing edge below.
+///
+/// Used by AlbumDetailView (`albumNotes`) and ArtistDetailView (`biography`).
+/// The `pageBg` parameter is required because the gradient mask only works if it
+/// matches the page background colour of the host view; otherwise the seam reappears.
+struct ExpandableBio: View {
+    let text: String
+    let pageBg: Color
+    var textColor: Color = .secondary
+    @State private var expanded: Bool = false
+
+    var body: some View {
+        if expanded {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(text)
+                    .font(.system(size: 15))
+                    .foregroundStyle(textColor)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    withAnimation(Anim.content) { expanded = false }
+                } label: {
+                    Text("OCULTAR")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        } else {
+            Text(text)
+                .font(.system(size: 15))
+                .foregroundStyle(textColor)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .multilineTextAlignment(.leading)
+                .overlay(alignment: .bottomTrailing) {
+                    // Trailing inline "MÁS" with a short fade so the truncated
+                    // text doesn't visibly overlap the label. The gradient runs
+                    // from `pageBg.opacity(0)` (left edge of mask) to opaque
+                    // `pageBg` against "MÁS", which itself has an opaque pageBg
+                    // background for legibility on any host palette.
+                    HStack(spacing: 0) {
+                        LinearGradient(
+                            colors: [pageBg.opacity(0), pageBg],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: 28)
+                        Text("MÁS")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .background(pageBg)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(Anim.content) { expanded = true }
+                }
+        }
+    }
+}
