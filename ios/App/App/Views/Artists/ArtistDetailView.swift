@@ -317,12 +317,6 @@ struct ArtistDetailView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.75)
-
-                if let count = vm.artist.albumCount, count > 0 {
-                    Text(L.albumCount(count))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
-                }
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 18)
@@ -382,12 +376,12 @@ struct ArtistDetailView: View {
 
     private var contentSections: some View {
         VStack(alignment: .leading, spacing: 28) {
+            biographySection
             popularesSection
             discographySection
             collaborationsSection
             playlistsSection
             similarArtistsSection
-            biographySection
         }
         .padding(.top, 8)
     }
@@ -569,56 +563,50 @@ struct ArtistDetailView: View {
         }
     }
 
-    // MARK: Acerca de (biography)
+    // MARK: Biografía (Apple Music style — sube del final del scroll a justo
+    // bajo los botones de reproducción, sin tarjeta, sin título)
 
+    /// Bio del artista en el formato 2 líneas + MÁS estilo Apple Music. Sale al
+    /// principio de `contentSections`, antes que populares / discografía. Si no
+    /// hay bio disponible (carga o sin datos de last.fm), no se renderiza nada
+    /// y el divider tampoco aparece — la transición hero → populares queda
+    /// limpia como antes del refactor.
     @ViewBuilder
     private var biographySection: some View {
-        let cardBG: Color = isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.08)
-        let cardBorder: Color = isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.10)
+        let dividerColor: Color = isLight ? Color.black.opacity(0.15) : Color.white.opacity(0.15)
+        let skeletonBlock: Color = isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10)
 
         if vm.infoIsLoading {
-            VStack(alignment: .leading, spacing: 14) {
-                Rectangle()
-                    .fill(cardBG)
-                    .frame(width: 160, height: 22)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(0..<4, id: \.self) { i in
-                        Rectangle()
-                            .fill(cardBG)
-                            .frame(height: 14)
-                            .frame(maxWidth: i == 3 ? 220 : .infinity, alignment: .leading)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    }
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(skeletonBlock)
+                        .frame(height: 14)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(skeletonBlock)
+                        .frame(height: 14)
+                        .frame(maxWidth: 240, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 18)
+                Divider()
+                    .background(dividerColor)
+                    .padding(.horizontal, 16)
             }
-            .padding(20)
-            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(cardBorder, lineWidth: 1)
-            )
-            .padding(.horizontal, 16)
         } else if let bio = vm.info?.biography, !bio.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(L.aboutArtist(vm.artist.name))
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(isLight ? Color.black : .white)
-
-                Text(cleanBiography(bio))
-                    .font(.system(size: 15))
-                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
-                    .lineSpacing(4)
-                    .multilineTextAlignment(.leading)
+            VStack(alignment: .leading, spacing: 0) {
+                ExpandableBio(
+                    text: cleanBiography(bio),
+                    pageBg: pageBg,
+                    textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 18)
+                Divider()
+                    .background(dividerColor)
+                    .padding(.horizontal, 16)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(22)
-            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(cardBorder, lineWidth: 1)
-            )
-            .padding(.horizontal, 16)
         }
     }
 
