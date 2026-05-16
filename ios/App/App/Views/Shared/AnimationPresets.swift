@@ -132,17 +132,25 @@ struct ExpandableBio: View {
                     // (3t²−2t³) para que el degradado opacity 0 → pageBg sea
                     // perceptualmente lineal sin bandas, mismo patrón que el
                     // hero-fade canónico de `LinearGradient.heroFade(to:)`.
+                    // Frame height 22pt > line-height natural del texto 15pt
+                    // (~18pt). Sin esto, el HStack toma solo la altura de la
+                    // fuente del MÁS y los descenders/ascenders del texto
+                    // truncado detrás asoman fuera del background → seam
+                    // visible arriba/abajo. El Text "MÁS" dentro mantiene
+                    // alignment .bottom para que su baseline coincida con
+                    // la baseline del texto padre (la 2ª línea).
                     HStack(spacing: 0) {
                         LinearGradient(
                             stops: Self.maslFadeStops(pageBg: pageBg),
                             startPoint: .leading,
                             endPoint: .trailing
                         )
-                        .frame(width: 110)
+                        .frame(width: 110, height: 22)
                         Text("MÁS")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.primary)
                             .padding(.leading, 2)
+                            .frame(height: 22, alignment: .bottom)
                             .background(pageBg)
                     }
                 }
