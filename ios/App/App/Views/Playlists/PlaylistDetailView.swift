@@ -231,6 +231,7 @@ struct PlaylistDetailView: View {
                 VStack(spacing: 0) {
                     heroSection
                     songListSection
+                    statsFooter
                     Spacer(minLength: 120)
                 }
                 .frame(maxWidth: .infinity)
@@ -397,18 +398,67 @@ struct PlaylistDetailView: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Subtítulo del hero, dependiente del tipo de playlist:
+    /// - System (editorial / smart / spotify-synced / mix diario): "Incluye X,
+    ///   Y y Z" con los tres primeros artistas únicos por orden de aparición
+    ///   en la tracklist. Si hay <3 artistas únicos, ajusta gramaticalmente
+    ///   (1 → "Incluye X", 2 → "Incluye X y Y").
+    /// - Propia / pública de otro usuario: "Creada por {owner}" (legacy).
+    /// El contador songCount + duration se movió al footer del scroll
+    /// (`statsFooter`) por coherencia con AlbumDetailView.
+    @ViewBuilder
     private var metadataLine: some View {
         let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
         let pl = vm.displayPlaylist
-        var parts: [String] = []
-        if pl.songCount > 0 { parts.append(L.songCount(pl.songCount)) }
-        if pl.duration > 0  { parts.append(formatDuration(pl.duration)) }
-        if let owner = pl.owner, !owner.isEmpty { parts.append(owner) }
+        let text: String? = {
+            if pl.isSystemPlaylist {
+                let included = firstUniqueArtists(in: vm.songs, max: 3)
+                if included.isEmpty { return nil } // tracklist aún cargando
+                return "Incluye \(joinedArtists(included))"
+            }
+            if let owner = pl.owner, !owner.isEmpty {
+                return "Creada por \(owner)"
+            }
+            return nil
+        }()
 
-        return Text(parts.joined(separator: " · "))
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(textColor)
-            .lineLimit(1)
+        if let text {
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(textColor)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    /// Recorre `songs` en orden y devuelve hasta `max` nombres de artista
+    /// únicos. Usa un Set local para dedupe sin alterar el orden de aparición.
+    /// Limita el scan a las primeras 200 pistas para que playlists enormes no
+    /// recorran la lista completa en cada re-render — los 3 primeros artistas
+    /// salen siempre del top.
+    private func firstUniqueArtists(in songs: [NavidromeSong], max: Int) -> [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for song in songs.prefix(200) {
+            let name = song.artist
+            guard !name.isEmpty, !seen.contains(name) else { continue }
+            seen.insert(name)
+            ordered.append(name)
+            if ordered.count >= max { break }
+        }
+        return ordered
+    }
+
+    /// Une artistas en castellano: 1 → "X", 2 → "X y Y", 3+ → "X, Y y Z".
+    private func joinedArtists(_ artists: [String]) -> String {
+        switch artists.count {
+        case 0: return ""
+        case 1: return artists[0]
+        case 2: return "\(artists[0]) y \(artists[1])"
+        default:
+            let head = artists.dropLast().joined(separator: ", ")
+            return "\(head) y \(artists.last!)"
+        }
     }
 
     private var actionButtons: some View {
@@ -634,6 +684,25 @@ struct PlaylistDetailView: View {
             } else {
                 SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, showCover: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             }
+        }
+    }
+
+    /// Footer "N canciones · M min" estilo Apple Music, alineado a la izquierda
+    /// debajo del tracklist. Se basa en `displayPlaylist.songCount` y
+    /// `displayPlaylist.duration` (datos del header de Subsonic) para que
+    /// aparezca antes incluso de que `vm.songs` termine de cargar. Si la
+    /// playlist está vacía, no se renderiza.
+    @ViewBuilder
+    private var statsFooter: some View {
+        let pl = vm.displayPlaylist
+        if pl.songCount > 0 {
+            let durationText = pl.duration > 0 ? " · \(formatDuration(pl.duration))" : ""
+            Text("\(L.songCount(pl.songCount))\(durationText)")
+                .font(.system(size: 12))
+                .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
         }
     }
 
