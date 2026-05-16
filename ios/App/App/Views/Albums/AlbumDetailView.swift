@@ -133,8 +133,8 @@ struct AlbumDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
-                    songListSection
                     albumNotesSection
+                    songListSection
                     Spacer(minLength: 120) // mini-player clearance
                 }
                 .frame(maxWidth: .infinity)
@@ -423,59 +423,74 @@ struct AlbumDetailView: View {
             .padding(.top, 16)
     }
 
+    /// Línea "N canciones · M min" estilo Apple Music. Aparece debajo del
+    /// tracklist y encima del `recordLabelFooter`. Se calcula desde `vm.songs`
+    /// (no desde `displayAlbum.duration`) para que sea coherente con lo que el
+    /// usuario realmente ve listado, incluso si Subsonic reporta una duración
+    /// distinta a la suma de pistas tras filtros / extended editions.
+    @ViewBuilder
+    private var albumStatsLine: some View {
+        if !vm.songs.isEmpty {
+            let total = vm.songs.reduce(0) { $0 + $1.duration }
+            let hours = total / 3600
+            let minutes = (total % 3600) / 60
+            let durationText: String
+            if hours > 0 {
+                durationText = "\(hours) h \(minutes) min"
+            } else {
+                durationText = "\(minutes) min"
+            }
+            Text("\(L.songCount(vm.songs.count)) · \(durationText)")
+                .font(.system(size: 12))
+                .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+        }
+    }
+
     // MARK: - Album notes
 
+    /// Bio del álbum justo bajo el bloque de botones de reproducción, estilo
+    /// Apple Music: 2 líneas + "MÁS" inline, expandible. Sin tarjeta, sin
+    /// título "Acerca de". El divider que la separa del tracklist es
+    /// `albumNotesSection`-local para que cuando no haya notas (album sin bio
+    /// disponible) tampoco aparezca el divider y la transición hero → tracklist
+    /// quede limpia.
     @ViewBuilder
     private var albumNotesSection: some View {
-        let cardBG: Color = isLight ? Color.black.opacity(0.05) : Color.white.opacity(0.08)
-        let cardBorder: Color = isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.10)
+        let dividerColor: Color = isLight ? Color.black.opacity(0.15) : Color.white.opacity(0.15)
         let skeletonBlock: Color = isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10)
 
         if vm.isLoadingNotes {
-            VStack(alignment: .leading, spacing: 14) {
-                RoundedRectangle(cornerRadius: 6)
+            VStack(alignment: .leading, spacing: 10) {
+                RoundedRectangle(cornerRadius: 4)
                     .fill(skeletonBlock)
-                    .frame(width: 220, height: 22)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(0..<4, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(skeletonBlock)
-                            .frame(height: 14)
-                            .frame(maxWidth: i == 3 ? 220 : .infinity, alignment: .leading)
-                    }
-                }
+                    .frame(height: 14)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(skeletonBlock)
+                    .frame(height: 14)
+                    .frame(maxWidth: 240, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(22)
-            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(cardBorder, lineWidth: 1)
-            )
             .padding(.horizontal, 16)
-            .padding(.top, 20)
+            .padding(.top, 4)
+            .padding(.bottom, 18)
+            Divider()
+                .background(dividerColor)
+                .padding(.horizontal, 16)
         } else if let notes = vm.albumNotes, !notes.isEmpty {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(L.aboutAlbum(vm.displayAlbum.name))
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(isLight ? Color.black : .white)
-
-                Text(cleanNotes(notes))
-                    .font(.system(size: 15))
-                    .foregroundStyle(isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75))
-                    .lineSpacing(4)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(22)
-            .background(cardBG, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(cardBorder, lineWidth: 1)
+            ExpandableBio(
+                text: cleanNotes(notes),
+                pageBg: pageBg,
+                textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
             )
             .padding(.horizontal, 16)
-            .padding(.top, 20)
+            .padding(.top, 4)
+            .padding(.bottom, 18)
+            Divider()
+                .background(dividerColor)
+                .padding(.horizontal, 16)
         }
     }
 
@@ -510,6 +525,8 @@ struct AlbumDetailView: View {
                 )
             } else {
                 SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
+
+                albumStatsLine
 
                 if !vm.recordLabels.isEmpty {
                     recordLabelFooter
