@@ -70,26 +70,32 @@ final class TransitionDiagnostics {
     }
     @MainActor var lastAuditUploadStatus: AuditUploadStatus = .pending
 
-    static func stashCompleteCrossfade(recordId: UUID, payload: [String: Any]) {
+    // Helpers nonisolated: se invocan desde `publishPostResetAudit` (también
+    // nonisolated, viene del render/automation thread) y desde Task.detached
+    // del POST/PATCH. La sincronización vive en `auditStashQueue.sync`, no
+    // necesita el MainActor. Sin `nonisolated`, Xcode Cloud falla con
+    // "Main actor-isolated static method cannot be called from outside of
+    // the actor" en build estricto (Swift 6 concurrency).
+    nonisolated static func stashCompleteCrossfade(recordId: UUID, payload: [String: Any]) {
         auditStashQueue.sync { _stashCompleteCrossfade = StashedAudit(recordId: recordId, payload: payload) }
     }
-    static func stashPostSwap(recordId: UUID, payload: [String: Any]) {
+    nonisolated static func stashPostSwap(recordId: UUID, payload: [String: Any]) {
         auditStashQueue.sync { _stashPostSwap = StashedAudit(recordId: recordId, payload: payload) }
     }
-    static func consumeCompleteCrossfade(recordId: UUID) -> [String: Any]? {
+    nonisolated static func consumeCompleteCrossfade(recordId: UUID) -> [String: Any]? {
         auditStashQueue.sync {
             guard let s = _stashCompleteCrossfade, s.recordId == recordId else { return nil }
             _stashCompleteCrossfade = nil
             return s.payload
         }
     }
-    static func peekPostSwap(recordId: UUID) -> [String: Any]? {
+    nonisolated static func peekPostSwap(recordId: UUID) -> [String: Any]? {
         auditStashQueue.sync {
             guard let s = _stashPostSwap, s.recordId == recordId else { return nil }
             return s.payload
         }
     }
-    static func consumePostSwap() {
+    nonisolated static func consumePostSwap() {
         auditStashQueue.sync { _stashPostSwap = nil }
     }
 
@@ -97,7 +103,7 @@ final class TransitionDiagnostics {
     /// JSON-friendly. NO incluye bandsA/B, dspBandsA/B, panA/B, rateA/B —
     /// ya están en el record principal o son redundantes para análisis de
     /// divergencia DSP. Slim por diseño.
-    private static func buildAuditPayload(_ a: PostResetAudit) -> [String: Any] {
+    nonisolated private static func buildAuditPayload(_ a: PostResetAudit) -> [String: Any] {
         return [
             "source": a.source,
             "stateMagA": a.stateMagA, "stateMagB": a.stateMagB,
