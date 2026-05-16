@@ -36,3 +36,43 @@ enum Anim {
     /// Accent/color transitions: background fades, palette shifts (0.4s)
     static let color = Animation.easeInOut(duration: 0.4)
 }
+
+// MARK: - Hero → content fade (Apple Music-style)
+
+extension LinearGradient {
+    /// Multi-stop fade for hero backgrounds (AlbumDetailView, ArtistDetailView,
+    /// PlaylistDetailView). Replaces the 2-stop `[.clear, pageBg]` gradient,
+    /// which left a visible seam around the 50% line because linear opacity
+    /// interpolation makes the transition's midpoint the point of fastest
+    /// cromatic change.
+    ///
+    /// The opacity of `pageBg` follows a smoothstep curve `3t² − 2t³` (cubic
+    /// ease-in-out), sampled at 11 stops. The slow tails at top (≤10 %) and
+    /// bottom (≥90 %) dissolve the gradient's edges into the hero and into
+    /// the page body respectively, leaving no perceptible line. Apply with
+    /// `.frame(height:)` of ~50 – 60 % of the hero height; shorter frames will
+    /// compress the curve and re-introduce a visible seam.
+    ///
+    /// The hero behind shows through wherever opacity is below 1, so this
+    /// works identically over a blurred cover, a solid palette colour, or any
+    /// other background — no separate "solid" overload is needed.
+    static func heroFade(to pageBg: Color) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: pageBg.opacity(0.000), location: 0.00),
+                .init(color: pageBg.opacity(0.028), location: 0.10),
+                .init(color: pageBg.opacity(0.104), location: 0.20),
+                .init(color: pageBg.opacity(0.216), location: 0.30),
+                .init(color: pageBg.opacity(0.352), location: 0.40),
+                .init(color: pageBg.opacity(0.500), location: 0.50),
+                .init(color: pageBg.opacity(0.648), location: 0.60),
+                .init(color: pageBg.opacity(0.784), location: 0.70),
+                .init(color: pageBg.opacity(0.896), location: 0.80),
+                .init(color: pageBg.opacity(0.972), location: 0.90),
+                .init(color: pageBg.opacity(1.000), location: 1.00),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}

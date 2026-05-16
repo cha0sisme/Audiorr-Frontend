@@ -308,11 +308,8 @@ struct PlaylistDetailView: View {
                 .scaleEffect(overscrollScale, anchor: .top)
                 .frame(height: heroHeight)
                 .overlay(alignment: .bottom) {
-                    LinearGradient(
-                        colors: [.clear, pageBg],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                    .frame(height: heroHeight * 0.35)
+                    LinearGradient.heroFade(to: pageBg)
+                        .frame(height: heroHeight * 0.55)
                 }
                 .clipped()
 

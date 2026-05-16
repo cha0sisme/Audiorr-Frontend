@@ -191,34 +191,25 @@ struct AlbumDetailView: View {
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
             if vm.palette.isSolid {
-                // Solid cover: flat primary fills the hero, then a short gradient
-                // at the very bottom blends into pageBg. No mask = no colour
-                // clash around the cover art.
+                // Solid cover: flat primary fills the hero, then a smoothstep
+                // fade dissolves into pageBg over ~45 % of the hero height. The
+                // multi-stop curve hides the seam Apple Music-style — see
+                // `LinearGradient.heroFade(to:)` for the shape rationale.
                 ZStack(alignment: .bottom) {
                     Color(vm.palette.primary)
                         .scaleEffect(overscrollScale, anchor: .top)
                         .ignoresSafeArea(edges: .top)
 
-                    LinearGradient(
-                        colors: [
-                            Color(vm.palette.primary),
-                            pageBg
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 80)
+                    LinearGradient.heroFade(to: pageBg)
+                        .frame(height: heroHeight * 0.45)
                 }
             } else {
                 heroBackground
                     .scaleEffect(overscrollScale, anchor: .top)
                     .frame(height: heroHeight)
                     .overlay(alignment: .bottom) {
-                        LinearGradient(
-                            colors: [.clear, pageBg],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                        .frame(height: heroHeight * 0.35)
+                        LinearGradient.heroFade(to: pageBg)
+                            .frame(height: heroHeight * 0.55)
                     }
                     .clipped()
             }
