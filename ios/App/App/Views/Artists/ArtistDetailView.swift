@@ -127,6 +127,19 @@ final class ArtistDetailViewModel: ObservableObject {
         }
     }
 
+    /// Carga el primer álbum y pone su tracklist en reproducción aleatoria.
+    /// Mismo patrón que `loadAndPlay`, solo cambia el orden final. Si en el
+    /// futuro queremos shuffle "todos los tracks del artista", habrá que
+    /// pre-cargar varios álbumes — coste de red proporcional al catálogo.
+    func loadAndShuffle() async {
+        guard !albums.isEmpty else { return }
+        isLoadingPlayback = true
+        defer { isLoadingPlayback = false }
+        if let (_, songs, _) = try? await api.getAlbumDetail(albumId: albums[0].id) {
+            await MainActor.run { PlayerService.shared.playPlaylist(songs.shuffled(), contextUri: "artist:\(artist.id)", contextName: artist.name) }
+        }
+    }
+
     private func fetchAvatar() async -> UIImage? {
         if let cached = ArtistImageCache.shared.image(for: artist.id) {
             return cached
@@ -321,33 +334,48 @@ struct ArtistDetailView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 18)
 
-            playButton
+            playButtons
                 .padding(.bottom, 28)
         }
     }
 
-    private var playButton: some View {
+    /// Reproducir (cápsula principal) + Shuffle (círculo) en HStack. Mismo
+    /// patrón que AlbumDetailView.playButtons. Shuffle dispara `loadAndShuffle`
+    /// que reusa la carga del primer álbum pero envía la tracklist barajada.
+    private var playButtons: some View {
         let fillColor  = Color(vm.palette.buttonFillColor)
         let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
 
-        return Button {
-            Task { await vm.loadAndPlay() }
-        } label: {
-            Group {
-                if vm.isLoadingPlayback {
-                    ProgressView().tint(labelColor)
-                } else {
-                    HStack(spacing: 7) {
-                        Image(systemName: "play.fill")
-                        Text(L.play).fontWeight(.semibold)
+        return HStack(spacing: 14) {
+            Button {
+                Task { await vm.loadAndPlay() }
+            } label: {
+                Group {
+                    if vm.isLoadingPlayback {
+                        ProgressView().tint(labelColor)
+                    } else {
+                        HStack(spacing: 7) {
+                            Image(systemName: "play.fill")
+                            Text(L.play).fontWeight(.semibold)
+                        }
+                        .font(.system(size: 15))
                     }
-                    .font(.system(size: 15))
                 }
+                .foregroundStyle(labelColor)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 10)
+                .background(fillColor, in: Capsule())
             }
-            .foregroundStyle(labelColor)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 10)
-            .background(fillColor, in: Capsule())
+
+            Button {
+                Task { await vm.loadAndShuffle() }
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(labelColor)
+                    .frame(width: 40, height: 40)
+                    .background(fillColor, in: Circle())
+            }
         }
         .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
     }
