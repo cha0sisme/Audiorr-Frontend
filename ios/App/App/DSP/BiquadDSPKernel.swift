@@ -56,6 +56,31 @@ final class BiquadDSPKernel {
     /// "bug de filtros" click is broken into 2-3 small steps instead of 1 big one.
     private static let fadeoutFramesTotal: Int = 512
 
+    /// v14.c — Symmetric fade-in counterpart to the v14.10 fade-out. The original
+    /// fade-out covered the leaving edge (active coefs → passthrough on reset),
+    /// but the entering edge (passthrough → active coefs on the first
+    /// `setCoefficients` of a new crossfade) was still a discrete step over hot
+    /// audio (mixer A at full volume), producing the residual "bug de filtros"
+    /// click reported in coche-test v14.b. The fade-in interpolates from
+    /// passthrough toward the target coefs over `fadeinFramesTotal` frames,
+    /// gated by an EXACT passthrough check on the live coefficients (no epsilon).
+    /// CUT family is excluded by construction: `setupInitialEQ` plants
+    /// passthrough on every band for CUT/CUT_A_FADE_IN_B, so pending == current
+    /// == passthrough and the gate never fires.
+    private var fadeinFramesRemaining: Int = 0
+    private var fadeinTargetCoefs: [BiquadCoefficients] = Array(repeating: .passthrough, count: filterCount)
+    /// 1024 frames ≈ 21.3 ms @ 48 kHz / 23.2 ms @ 44.1 kHz. Larger than the
+    /// fade-out window (512) on purpose: a filterTick lands every ~16.7 ms,
+    /// so 1024 absorbs the first incoming tick — `updateCoefficients` arriving
+    /// mid-fade-in is dropped (caller path below) so the fade reaches its target
+    /// before the rampa real takes over, eliminating the doble-rampa race.
+    private static let fadeinFramesTotal: Int = 1024
+    /// v14.c telemetry — set to true by `updateCoefficients` whenever the
+    /// fade-in gate fires for this kernel since the last `reset()`. Read by the
+    /// post-setup audit to confirm whether the suavizado entered for this
+    /// transition (validates whether T3 was the actual cause of the click).
+    private var fadeinDidTriggerSinceLastReset: Bool = false
+
     /// Lock for coefficient access. The render thread uses trylock (non-blocking).
     private var lock = os_unfair_lock()
 
@@ -92,6 +117,55 @@ final class BiquadDSPKernel {
         band3: BiquadCoefficients
     ) {
         os_unfair_lock_lock(&lock)
+
+        // v14.c — Symmetric fade-in detection. The gate fires only when EVERY
+        // live band is exactly the canonical `.passthrough` struct (b0=1, rest=0)
+        // AND at least one pending band is NOT exact passthrough. This identifies
+        // the first `setCoefficients` after `reset()` / init, which is exactly
+        // the lifecycle point where v14.10 didn't cover and the click survives.
+        // Exact comparison (no epsilon) is intentional and safe: every calculator
+        // path that yields a passthrough filter returns `BiquadCoefficients.passthrough`
+        // directly via the `guard abs(gain) > 0.01 else { return .passthrough }`
+        // shortcut, so the kernel sees bit-identical structs from setup.
+        // Concurrent fade-in and fade-out are mutually exclusive — entering the
+        // fade-in path forces the fadeout counter to zero.
+        if fadeinFramesRemaining > 0 {
+            // Fade-in already in flight — drop this update. The 1024-frame window
+            // is long enough to swallow the first filterTick (16.7ms < 21.3ms),
+            // and the rampa real picks up at the next tick from the natural target.
+            // This is the doble-rampa mitigation devils-advocate flagged: never
+            // let an incoming coefficient stomp the fade-in mid-flight.
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+
+        let currentIsAllPassthrough =
+            isExactPassthrough(coefficients[0]) &&
+            isExactPassthrough(coefficients[1]) &&
+            isExactPassthrough(coefficients[2]) &&
+            isExactPassthrough(coefficients[3])
+        let anyPendingIsActive =
+            !isExactPassthrough(band0) ||
+            !isExactPassthrough(band1) ||
+            !isExactPassthrough(band2) ||
+            !isExactPassthrough(band3)
+
+        if currentIsAllPassthrough && anyPendingIsActive {
+            // Fire fade-in. Stage the target coefs; the render thread will
+            // interpolate from `.passthrough` toward them over 1024 frames.
+            fadeinTargetCoefs[0] = band0
+            fadeinTargetCoefs[1] = band1
+            fadeinTargetCoefs[2] = band2
+            fadeinTargetCoefs[3] = band3
+            fadeinFramesRemaining = Self.fadeinFramesTotal
+            fadeinDidTriggerSinceLastReset = true
+            hasPending = false
+            // Mutually exclusive with the fade-out path.
+            fadeoutFramesRemaining = 0
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+
         pendingCoefficients[0] = band0
         pendingCoefficients[1] = band1
         pendingCoefficients[2] = band2
@@ -103,6 +177,15 @@ final class BiquadDSPKernel {
         // take precedence; the half-faded state is dropped.
         fadeoutFramesRemaining = 0
         os_unfair_lock_unlock(&lock)
+    }
+
+    /// v14.c gate helper — strict equality against the canonical passthrough.
+    /// Inlined explicit comparisons avoid an epsilon-based mismatch with the
+    /// public `isPassthrough` (which uses `1e-6` tolerance) and guarantee the
+    /// gate fires only when the kernel really is at identity.
+    @inline(__always)
+    private func isExactPassthrough(_ c: BiquadCoefficients) -> Bool {
+        return c.b0 == 1 && c.b1 == 0 && c.b2 == 0 && c.a1 == 0 && c.a2 == 0
     }
 
     // MARK: - Render thread API
@@ -118,7 +201,27 @@ final class BiquadDSPKernel {
 
         // Try to pick up pending coefficients (non-blocking)
         if os_unfair_lock_trylock(&lock) {
-            if fadeoutFramesRemaining > 0 {
+            if fadeinFramesRemaining > 0 {
+                // v14.c — Fade-in in flight: interpolate from passthrough toward
+                // the staged target over 1024 frames. Progress at END of buffer
+                // matches the fade-out convention. When the counter drains, snap
+                // to the exact target so subsequent filterTicks rampean desde
+                // ahí sin escalón. No `needsStateReset` here: delay lines are
+                // already clean (we came from passthrough; nothing to flush).
+                let framesInThisBuffer = min(Int(frameCount), fadeinFramesRemaining)
+                let total = Self.fadeinFramesTotal
+                let progressEnd = Float(total - (fadeinFramesRemaining - framesInThisBuffer)) / Float(total)
+                for i in 0..<Self.filterCount {
+                    coefficients[i] = BiquadCoefficients.lerp(.passthrough, fadeinTargetCoefs[i], progressEnd)
+                }
+                fadeinFramesRemaining -= framesInThisBuffer
+                if fadeinFramesRemaining <= 0 {
+                    for i in 0..<Self.filterCount {
+                        coefficients[i] = fadeinTargetCoefs[i]
+                    }
+                    fadeinFramesRemaining = 0
+                }
+            } else if fadeoutFramesRemaining > 0 {
                 // v14.10 — reset() in flight: interpolate coefs toward passthrough.
                 // progress at END of this buffer (so the first buffer of the fade
                 // already moves; the last one lands exactly on passthrough).
@@ -214,6 +317,13 @@ final class BiquadDSPKernel {
         // pending is redundant with the fade — the fade itself ends in passthrough
         hasPending = false
         fadeoutFramesRemaining = Self.fadeoutFramesTotal
+        // v14.c — Cancel any in-flight fade-in. A reset takes precedence: if a
+        // fade-in was halfway, the fade-out kernel below picks up `coefficients[i]`
+        // as the starting point and fades toward passthrough, so the interrupted
+        // suavizado still ends on a clean tail. The telemetry flag is cleared so
+        // the next crossfade starts fresh.
+        fadeinFramesRemaining = 0
+        fadeinDidTriggerSinceLastReset = false
         // needsStateReset will be raised by process() when the fade completes.
         // State arrays are owned exclusively by the render thread — writing them
         // from another thread would be a data race.
