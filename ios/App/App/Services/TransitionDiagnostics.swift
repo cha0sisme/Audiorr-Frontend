@@ -193,6 +193,15 @@ final class TransitionDiagnostics {
     /// mixerB.outputVolume=0 (audio inerte durante el fade-in).
     var peakTransientDeltaB: Double? = nil
 
+    /// v14.d V1' — `‖coefficients − passthrough‖₂` del kernel B leído justo
+    /// antes de plantar los coefs nuevos en `setupInitialEQ`. Prueba empírica
+    /// de la hipótesis raíz V1': si los coefs del kernel B quedaron colgados
+    /// intermedios desde el fade-out del swap anterior (player parado, render
+    /// thread sin drenar), valor ≥ ~0.5. Tras `resetSync()` post-swap, el
+    /// valor debe colapsar a ≈ 0. Si tras V1' este campo no baja → hipótesis
+    /// raíz falsa, click viene de otro path (scheduleSegment, encoder AAC).
+    var coefMagB_atSetup: Double? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -332,6 +341,12 @@ final class TransitionDiagnostics {
         var fadeInTriggeredB: Bool? = nil
         var peakTransientDeltaA: Double? = nil
         var peakTransientDeltaB: Double? = nil
+        // v14.d V1' — Prueba empírica de hipótesis raíz "coefs del kernel B
+        // colgados intermedios desde el fade-out post-swap" (player parado,
+        // render thread sin drenar). Pre-V1' esperado ≥ ~0.5; post-V1'
+        // (resetSync) esperado ≈ 0. Optional para retrocompat con records
+        // pre-v14.d.
+        var coefMagB_atSetup: Double? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -763,6 +778,7 @@ final class TransitionDiagnostics {
                 fadeInTriggeredB: self.fadeInTriggeredB,
                 peakTransientDeltaA: self.peakTransientDeltaA,
                 peakTransientDeltaB: self.peakTransientDeltaB,
+                coefMagB_atSetup: self.coefMagB_atSetup,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

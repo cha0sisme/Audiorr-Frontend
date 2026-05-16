@@ -1364,7 +1364,16 @@ class CrossfadeExecutor {
             band2B = .passthrough
         }
         // B band 3 still passthrough — Sprint 2 reserves it for future companion effects.
+        // v14.d V1' telemetry — capturar la magnitud de los coefs ANTES de plantar
+        // los nuevos. Si la hipótesis raíz V1' es correcta (fade-out post-swap
+        // queda congelado), aquí veremos ≥ ~0.5 en BMB/EQ_MIX/NB en cohortes
+        // pre-V1'. Post-V1' (resetSync planta passthrough exact) debe colapsar
+        // a ≈ 0. Lectura inocua, solo prueba empírica del fix.
+        let coefMagB_atSetup = Double(dspB.coefMagFromPassthrough())
         dspB.setCoefficients(band0: band0B, band1: band1B, band2: band2B, band3: .passthrough)
+        Task { @MainActor in
+            TransitionDiagnostics.shared.coefMagB_atSetup = coefMagB_atSetup
+        }
     }
 
     @discardableResult

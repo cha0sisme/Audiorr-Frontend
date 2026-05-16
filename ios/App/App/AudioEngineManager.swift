@@ -1170,8 +1170,21 @@ class AudioEngineManager {
             // ═══ STEP 3: DSP RESET — instant, guaranteed ═══
             // With custom BiquadDSPNode, reset() zeroes delay lines and sets
             // coefficients to passthrough. No trampoline, no reconnect needed.
+            //
+            // dspNodeA post-swap == ex-dspNodeB del crossfade que termina:
+            // su player (= ex-playerB) SIGUE rendeando la canción nueva, render
+            // thread activo, el fade-out v14.10 drena correctamente en ~10ms.
+            //
+            // dspNodeB post-swap == ex-dspNodeA: su player (= ex-playerA) ACABA
+            // DE SER STOPPED en línea 1127. El render thread no procesará el
+            // fade-out v14.10 → coefs quedarían congelados a mitad de lerp →
+            // el siguiente setupInitialEQ verá coefs non-passthrough → el gate
+            // V1.A no dispararía → step discreto → "bug filtros" click.
+            // resetSync() es OBLIGATORIO aquí, no degradar a reset().
+            // Causa raíz documentada en `issues/2026-05-16-v14c-V1-click-filtros-entry.md`
+            // sección 2.5.b. Mismo patrón existe en seek()/stop() (deuda V1'').
             self.dspNodeA.reset()
-            self.dspNodeB.reset()
+            self.dspNodeB.resetSync()
 
             // ═══ STEP 3b: TIME-PITCH BUFFER FLUSH (the missing piece) ═══
             // After the swap:
@@ -1223,8 +1236,10 @@ class AudioEngineManager {
             let bsMixA = self.mixerA, bsMixB = self.mixerB
             let bsTPa = self.timePitchA, bsTPb = self.timePitchB
             CrossfadeExecutor.automationQueue.asyncAfter(deadline: .now() + 0.1) {
+                // bsDspB sigue siendo el del ex-playerA parado — resetSync por
+                // las mismas razones que el reset principal arriba (v14.d V1').
                 bsDspA.reset()
-                bsDspB.reset()
+                bsDspB.resetSync()
                 bsMixA.pan = 0
                 bsMixB.pan = 0
                 CrossfadeExecutor.resetTimePitchSoft(bsTPa)

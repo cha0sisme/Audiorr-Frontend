@@ -219,6 +219,23 @@ final class BiquadDSPNode {
         kernel.reset()
     }
 
+    /// v14.d V1' — Synchronous variant of `reset()` for the post-swap path
+    /// where the associated player has been stopped and the render thread
+    /// would not drain the v14.10 fade-out. Snaps coefficients to passthrough
+    /// from the automation thread; see `BiquadDSPKernel.resetSync()` for the
+    /// full rationale. USE ONLY on kernels whose player will not render
+    /// between this call and the next `setupInitialEQ`.
+    func resetSync() {
+        kernel.resetSync()
+    }
+
+    /// v14.d V1' telemetry — `‖coefficients − passthrough‖₂`. Read before
+    /// plantar coefs nuevos en `setupInitialEQ` para verificar empíricamente
+    /// si quedaron colgados intermedios desde el fade-out del swap anterior.
+    func coefMagFromPassthrough() -> Float {
+        kernel.coefMagFromPassthrough()
+    }
+
     // MARK: - Diagnostics
 
     /// Read current active coefficients for diagnostic display.

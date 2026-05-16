@@ -350,6 +350,67 @@ final class BiquadDSPKernel {
 
     // MARK: - Reset
 
+    /// v14.d V1' — Synchronous reset for the post-swap call site where the
+    /// associated AVAudioPlayerNode has been stopped immediately before the
+    /// swap (AudioEngineManager:1127). On that path the render thread of the
+    /// kernel that becomes `dspNodeB` does not drain the v14.10 fade-out
+    /// (the 512-frame lerp toward passthrough lives in `process()`, not in
+    /// `reset()`). The result observed in v14.c telemetry was
+    /// `fadeInTriggeredB=false` in 100% of BMB/EQ_MIX/NB: coefs stayed frozen
+    /// at intermediate values, the next `setupInitialEQ` saw non-passthrough
+    /// coefficients and fell through to the else branch that plants the new
+    /// activos as a discrete step → "bug filtros" click.
+    ///
+    /// `resetSync()` snaps coefficients to exact passthrough atomically on the
+    /// automation thread, with no render-thread dependency. Delay lines z1/z2
+    /// are NOT cleared from here (data race with render). They are zeroed by
+    /// the first `process()` that consumes `needsStateReset`; while the player
+    /// remains silent and coefficients are passthrough, the `c.isPassthrough`
+    /// guard in `process()` (line ~307) skips the stage entirely and z1/z2 are
+    /// never read, so any residual delay-line magnitude cannot contaminate the
+    /// next track's audio.
+    ///
+    /// USE ONLY on kernels whose player will NOT be rendering between this
+    /// call and the next `setupInitialEQ`. On the active path use `reset()`.
+    func resetSync() {
+        os_unfair_lock_lock(&lock)
+        for i in 0..<Self.filterCount {
+            coefficients[i] = .passthrough
+            pendingCoefficients[i] = .passthrough
+            fadeoutStartCoefs[i] = .passthrough
+            fadeinTargetCoefs[i] = .passthrough
+        }
+        hasPending = false
+        fadeoutFramesRemaining = 0
+        fadeinFramesRemaining = 0
+        fadeinDidTriggerSinceLastReset = false
+        transientPeakDelta = 0
+        transientCaptureFramesRemaining = 0
+        for ch in 0..<Self.maxChannels { transientLastSample[ch] = 0 }
+        needsStateReset = true
+        os_unfair_lock_unlock(&lock)
+    }
+
+    /// v14.d V1' telemetry — Euclidean norm of `(coefficients[i] − passthrough)`
+    /// summed across the 4 stages. Read **before** plantar coefs nuevos al
+    /// arrancar un crossfade para verificar empíricamente la hipótesis raíz:
+    /// si los coefs del kernel B quedaron colgados intermedios desde el
+    /// fade-out del swap anterior, esta lectura será ≥ ~0.5; si drenaron al
+    /// passthrough exacto, será ≈ 0. Sin esta lectura la hipótesis V1' queda
+    /// validada solo por razonamiento. Lock-free (snapshot atómico bajo lock).
+    func coefMagFromPassthrough() -> Float {
+        os_unfair_lock_lock(&lock)
+        var sumSq: Float = 0
+        for i in 0..<Self.filterCount {
+            let c = coefficients[i]
+            let db0 = c.b0 - 1, db1 = c.b1, db2 = c.b2
+            let da1 = c.a1, da2 = c.a2
+            sumSq += db0*db0 + db1*db1 + db2*db2 + da1*da1 + da2*da2
+        }
+        os_unfair_lock_unlock(&lock)
+        return sqrt(sumSq)
+    }
+
     /// Reset all filter state to clean passthrough.
     ///
     /// v14.10 — Two-phase fade-out to avoid the discrete coefficient step that
