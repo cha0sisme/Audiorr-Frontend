@@ -435,12 +435,9 @@ struct AlbumDetailView: View {
             let total = Int(totalSeconds)
             let hours = total / 3600
             let minutes = (total % 3600) / 60
-            let durationText: String
-            if hours > 0 {
-                durationText = "\(hours) h \(minutes) min"
-            } else {
-                durationText = "\(minutes) min"
-            }
+            let durationText: String = hours > 0
+                ? "\(hours) h \(minutes) min"
+                : "\(minutes) min"
             Text("\(L.songCount(vm.songs.count)) · \(durationText)")
                 .font(.system(size: 12))
                 .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
