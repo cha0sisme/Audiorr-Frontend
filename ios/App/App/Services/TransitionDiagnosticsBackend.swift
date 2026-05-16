@@ -123,6 +123,73 @@ private struct PatchOpinionBody: Encodable {
     let userComment: String?
 }
 
+/// Round v14.e Alt-3 (2026-05-17) — clave dinámica para inyectar sub-objetos
+/// aditivos en el payload del POST + PATCH enrich sin tener que declarar
+/// cada nombre estático. Backend acepta cualquier top-level key fuera del
+/// set `PROTECTED_ENRICH_KEYS` (14 columnas indexadas, ninguna empieza por
+/// "postResetAudit").
+private struct DynamicKey: CodingKey {
+    var stringValue: String
+    init?(stringValue: String) { self.stringValue = stringValue }
+    var intValue: Int? { nil }
+    init?(intValue: Int) { return nil }
+}
+
+/// Wrapper Encodable para diccionarios `[String: Any]` con tipos primitivos
+/// (String, Bool, Float, Double). Tipos no soportados se ignoran silenciosamente
+/// — el payload audit slim no incluye nada más.
+private struct NestedDict: Encodable {
+    let dict: [String: Any]
+    init(_ d: [String: Any]) { self.dict = d }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: DynamicKey.self)
+        for (k, v) in dict {
+            guard let key = DynamicKey(stringValue: k) else { continue }
+            switch v {
+            case let s as String: try c.encode(s, forKey: key)
+            case let b as Bool:   try c.encode(b, forKey: key)
+            case let f as Float:  try c.encode(f, forKey: key)
+            case let d as Double: try c.encode(d, forKey: key)
+            default: break
+            }
+        }
+    }
+}
+
+/// Envelope que mezcla el `TransitionRecord` con sub-objetos aditivos como
+/// hermanos del top-level. El backend persiste todo en `recordJson` sin
+/// sanitizer (confirmado backend-guardian sec 2.2). Usado por `uploadRecord`
+/// para inyectar `postResetAuditCompleteCrossfade` cuando viene presente.
+private struct UploadEnvelope: Encodable {
+    let record: TransitionDiagnostics.TransitionRecord
+    let extras: [String: [String: Any]]?  // top-level key → sub-objeto
+
+    func encode(to encoder: Encoder) throws {
+        // Primero codificamos el record (todas sus keys al top-level).
+        try record.encode(to: encoder)
+        // Luego mezclamos extras como top-level siblings.
+        guard let extras else { return }
+        var container = encoder.container(keyedBy: DynamicKey.self)
+        for (k, sub) in extras {
+            guard let key = DynamicKey(stringValue: k) else { continue }
+            try container.encode(NestedDict(sub), forKey: key)
+        }
+    }
+}
+
+/// Envelope-only para PATCH /enrich — body es un dict de top-level keys
+/// (e.g. `postResetAuditPostSwap`) → sub-objetos. Sin record principal.
+private struct OuterEnvelope: Encodable {
+    let body: [String: [String: Any]]
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicKey.self)
+        for (k, sub) in body {
+            guard let key = DynamicKey(stringValue: k) else { continue }
+            try container.encode(NestedDict(sub), forKey: key)
+        }
+    }
+}
+
 // MARK: - Service
 
 /// Cliente HTTP del backend de diagnósticos. Singleton stateless — toda la
@@ -158,8 +225,13 @@ final class TransitionDiagnosticsBackend {
     /// Sube un record nuevo al backend. Fire-and-forget desde el call site:
     /// si falla, descarta sin reintento (consistente con "sin queue, sin
     /// sync"). Devuelve `Result` por si el caller quiere loguear el outcome.
+    ///
+    /// Round v14.e Alt-3 (2026-05-17): `postResetAuditCompleteCrossfade` es
+    /// opcional. Cuando viene presente, se inyecta como sub-objeto top-level
+    /// hermano del record. Backend lo persiste en `recordJson` sin sanitizer.
     nonisolated func uploadRecord(
-        _ record: TransitionDiagnostics.TransitionRecord
+        _ record: TransitionDiagnostics.TransitionRecord,
+        postResetAuditCompleteCrossfade: [String: Any]? = nil
     ) async -> Result<DiagnosticsUploadResponse, DiagnosticsBackendError> {
         guard let request = makeRequest(path: "/transitions", method: "POST") else {
             return .failure(.noBaseURL)
@@ -167,13 +239,44 @@ final class TransitionDiagnosticsBackend {
         var req = request
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
-            req.httpBody = try jsonEncoder.encode(record)
+            let envelope = UploadEnvelope(
+                record: record,
+                extras: postResetAuditCompleteCrossfade.map { ["postResetAuditCompleteCrossfade": $0] }
+            )
+            req.httpBody = try jsonEncoder.encode(envelope)
         } catch {
             return .failure(.invalidResponse)
         }
         return await execute(req) { data in
             try self.jsonDecoder.decode(DiagnosticsUploadResponse.self, from: data)
         }
+    }
+
+    /// PATCH /transitions/:id/enrich — añade sub-objetos aditivos al
+    /// `recordJson` del record existente. El backend hace shallow merge
+    /// `{...parsed, ...body}` (verificado backend-guardian test #9 sec 5).
+    /// `body` debe contener top-level keys que NO estén en
+    /// `PROTECTED_ENRICH_KEYS` (userRating, type, id, etc.) o el backend
+    /// responde 400.
+    ///
+    /// Round v14.e Alt-3 — usado para enviar `postResetAuditPostSwap` tras
+    /// `.success` del POST. Si responde 404, marca race lost (POST 201 OK
+    /// pero record aún no commiteado — extremadamente raro con LAN flaky).
+    nonisolated func enrichRecord(
+        id: UUID,
+        body: [String: [String: Any]]
+    ) async -> Result<Void, DiagnosticsBackendError> {
+        guard let request = makeRequest(path: "/transitions/\(id.uuidString)/enrich", method: "PATCH") else {
+            return .failure(.noBaseURL)
+        }
+        var req = request
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            req.httpBody = try jsonEncoder.encode(OuterEnvelope(body: body))
+        } catch {
+            return .failure(.invalidResponse)
+        }
+        return await execute(req) { _ in () }
     }
 
     /// Patch del rating y/o comment en un record existente. Body envía solo los

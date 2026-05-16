@@ -1001,6 +1001,15 @@ class CrossfadeExecutor {
     // MARK: - Start
 
     func start() {
+        // v14.e Alt-3 — anclar `upcomingRecordId` ANTES del primer audit
+        // del crossfade. Los audits del lifecycle (T+0 completeCrossfade,
+        // +200ms delayed, post-swap+300ms) stashean contra este id en
+        // `TransitionDiagnostics.publishPostResetAudit` para que el
+        // `consumeCompleteCrossfade(recordId:)` del POST encuentre el
+        // payload correcto. Sin esta línea el stash llevaría el id del
+        // crossfade anterior. Caveat duro 1 sec 2.6 review 2.
+        TransitionDiagnostics.upcomingRecordId = UUID()
+
         // Keep mixerA at its current replayGain level (set by AudioEngineManager)
         // Keep mainMixerNode at user volume (set by AudioEngineManager)
         // mixerB starts at 0 (set in schedulePlayerB)

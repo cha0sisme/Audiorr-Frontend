@@ -40,6 +40,73 @@ final class TransitionDiagnostics {
 
     static let shared = TransitionDiagnostics()
 
+    // MARK: - Audit upload coordination (v14.e Alt-3)
+
+    /// Stash con `recordId` discriminador para que el solape entre crossfade
+    /// N (Task.detached aún vivo) y crossfade N+1 (skip rápido <750ms
+    /// post-swap) no contamine cobertura. Sin discriminador, el delayed
+    /// audit del N pisaría el stash justo cuando el waiter del N intenta
+    /// leerlo. Caveat duro 1 sec 2.6 review 2.
+    private struct StashedAudit: Sendable {
+        let recordId: UUID
+        let payload: [String: Any]
+    }
+    private static let auditStashQueue = DispatchQueue(label: "audiorr.audit.stash")
+    nonisolated(unsafe) private static var _stashCompleteCrossfade: StashedAudit?
+    nonisolated(unsafe) private static var _stashPostSwap: StashedAudit?
+
+    /// Próximo recordId que `publishCompletion` usará. Se asigna al inicio
+    /// del crossfade (`CrossfadeExecutor.start()`) para que los audits T+0,
+    /// +200ms y post-swap+300ms stashen contra el id correcto antes de que
+    /// `publishCompletion` construya el record.
+    nonisolated(unsafe) static var upcomingRecordId: UUID = UUID()
+
+    /// Status de la subida del audit. Permite auditar el orden temporal sin
+    /// perder señal causal. `failedRaceLost` (caveat duro 8) marca PATCH 404
+    /// — POST aún no había commiteado cuando llegó el PATCH. Sin este case,
+    /// fallo de orden temporal es invisible (patrón v14.d).
+    enum AuditUploadStatus: String, Sendable {
+        case pending, postOk, patchOk, postFailed, patchFailed, failedRaceLost
+    }
+    @MainActor var lastAuditUploadStatus: AuditUploadStatus = .pending
+
+    static func stashCompleteCrossfade(recordId: UUID, payload: [String: Any]) {
+        auditStashQueue.sync { _stashCompleteCrossfade = StashedAudit(recordId: recordId, payload: payload) }
+    }
+    static func stashPostSwap(recordId: UUID, payload: [String: Any]) {
+        auditStashQueue.sync { _stashPostSwap = StashedAudit(recordId: recordId, payload: payload) }
+    }
+    static func consumeCompleteCrossfade(recordId: UUID) -> [String: Any]? {
+        auditStashQueue.sync {
+            guard let s = _stashCompleteCrossfade, s.recordId == recordId else { return nil }
+            _stashCompleteCrossfade = nil
+            return s.payload
+        }
+    }
+    static func peekPostSwap(recordId: UUID) -> [String: Any]? {
+        auditStashQueue.sync {
+            guard let s = _stashPostSwap, s.recordId == recordId else { return nil }
+            return s.payload
+        }
+    }
+    static func consumePostSwap() {
+        auditStashQueue.sync { _stashPostSwap = nil }
+    }
+
+    /// Serializa los 8 signals del PostResetAudit + source a `[String: Any]`
+    /// JSON-friendly. NO incluye bandsA/B, dspBandsA/B, panA/B, rateA/B —
+    /// ya están en el record principal o son redundantes para análisis de
+    /// divergencia DSP. Slim por diseño.
+    private static func buildAuditPayload(_ a: PostResetAudit) -> [String: Any] {
+        return [
+            "source": a.source,
+            "stateMagA": a.stateMagA, "stateMagB": a.stateMagB,
+            "dspPitchA": a.dspPitchA, "dspPitchB": a.dspPitchB,
+            "dspRateA": a.dspRateA, "dspRateB": a.dspRateB,
+            "bypassA": a.bypassA, "bypassB": a.bypassB,
+        ]
+    }
+
     // MARK: - Transition decision
 
     var isActive = false
@@ -743,7 +810,12 @@ final class TransitionDiagnostics {
         guard Self.collectingEnabled else { return }
         Task { @MainActor in
             // Build record con versionado + telemetría completa.
+            // v14.e Alt-3 — id anclado al `upcomingRecordId` seteado por
+            // `CrossfadeExecutor.start()` para que el stash de audits (T+0,
+            // +200ms, post-swap+300ms) consume contra el mismo id que el
+            // POST envía al backend.
             let record = TransitionRecord(
+                id: Self.upcomingRecordId,
                 date: Date(),
                 fromTitle: self.currentTitle,
                 toTitle: self.nextTitle,
@@ -820,23 +892,82 @@ final class TransitionDiagnostics {
             self.isActive = false
             self.networkSnapshotEnd = Self.captureNetworkSnapshot()
 
-            // Upload al backend fire-and-forget. Si falla, el record vive solo
-            // en memoria de la sesión actual (se pierde al reiniciar la app).
-            // Coherente con "sin queue, sin sync, sin reconciliación".
+            // Upload al backend fire-and-forget con audit stash (v14.e Alt-3).
+            // Flujo:
+            //   T+0      audit completeCrossfade publica (corre síncrono pre-publishCompletion)
+            //   T=ahora  consumimos stash completeCrossfade contra recordId (caveat duro 1)
+            //   T+250ms  POST sale con sub-objeto postResetAuditCompleteCrossfade inline
+            //   T+~300ms audit post-swap publica (asyncAfter desde swap +100+200ms)
+            //   T+~500ms tras .success POST, polling 50ms × 10 lee post-swap stash
+            //   T+~500ms PATCH /enrich con { postResetAuditPostSwap: {...} }
+            //
+            // El filtro `isActive == false` original (sec 2.6 caveat 3) está
+            // ELIMINADO: era semánticamente invertido — publishCompletion ya
+            // pone isActive=false 3 líneas arriba antes del Task.detached.
+            // El gate efectivo es "POST devolvió 201" (continuation natural).
             if Self.backendAvailable {
+                let recordId = record.id
+                let completePayload = Self.consumeCompleteCrossfade(recordId: recordId)
+                self.lastAuditUploadStatus = .pending
+                print("[AuditUpload] T=POST_send rid=\(recordId.uuidString.prefix(8)) hasComplete=\(completePayload != nil)")
+
                 Task.detached {
-                    let result = await TransitionDiagnosticsBackend.shared.uploadRecord(record)
+                    let result = await TransitionDiagnosticsBackend.shared.uploadRecord(
+                        record,
+                        postResetAuditCompleteCrossfade: completePayload
+                    )
                     switch result {
                     case .success(let response):
-                        // Guardar el sessionId que asignó el backend en la copia
-                        // en memoria. Permite filtrar history por sessionId
-                        // desde la UI sin tener que hacer GET /sessions.
                         await MainActor.run {
+                            TransitionDiagnostics.shared.lastAuditUploadStatus = .postOk
                             if let idx = TransitionDiagnostics.shared.history.firstIndex(where: { $0.id == response.id }) {
                                 TransitionDiagnostics.shared.history[idx].sessionId = response.sessionId
                             }
                         }
+
+                        // Caveat duro 2 sec 2.6 review 2 — polling 50ms × 10
+                        // del stash post-swap. Sin race de registro de
+                        // continuation ni leak de waiter. Latencia máx 500ms.
+                        var postSwapPayload: [String: Any]? = nil
+                        for _ in 0..<10 {
+                            if let p = TransitionDiagnostics.peekPostSwap(recordId: recordId) {
+                                postSwapPayload = p
+                                break
+                            }
+                            try? await Task.sleep(nanoseconds: 50_000_000)
+                        }
+
+                        guard let postSwap = postSwapPayload else {
+                            print("[AuditUpload] T=PATCH_skip rid=\(recordId.uuidString.prefix(8)) — post-swap stash vacío (timeout 500ms)")
+                            return
+                        }
+
+                        print("[AuditUpload] T=PATCH_send rid=\(recordId.uuidString.prefix(8))")
+                        let patchResult = await TransitionDiagnosticsBackend.shared.enrichRecord(
+                            id: recordId,
+                            body: ["postResetAuditPostSwap": postSwap]
+                        )
+                        await MainActor.run {
+                            switch patchResult {
+                            case .success:
+                                TransitionDiagnostics.shared.lastAuditUploadStatus = .patchOk
+                            case .failure(.notFound):
+                                // Caveat duro 8 sec 2.6 review 2 — PATCH 404
+                                // = POST 201 OK pero backend aún no commit
+                                // del record (race extremadamente raro con
+                                // LAN flaky). Marca explícita para que
+                                // log-analyst distinga de otros .failure.
+                                TransitionDiagnostics.shared.lastAuditUploadStatus = .failedRaceLost
+                                print("[AuditUpload] PATCH 404 rid=\(recordId.uuidString.prefix(8)) — race lost (POST ack llegó pero record aún no commit)")
+                            case .failure(let e):
+                                TransitionDiagnostics.shared.lastAuditUploadStatus = .patchFailed
+                                print("[AuditUpload] PATCH failed: \(e.localizedDescription)")
+                            }
+                        }
+                        TransitionDiagnostics.consumePostSwap()
+
                     case .failure(let error):
+                        await MainActor.run { TransitionDiagnostics.shared.lastAuditUploadStatus = .postFailed }
                         print("[TransitionDiagnostics] ⚠️ uploadRecord(\(record.id)) failed: \(error.localizedDescription)")
                     }
                 }
@@ -1034,6 +1165,20 @@ final class TransitionDiagnostics {
             // eliminó. La detección de stuck filters / DSP divergence sigue
             // viva (console output arriba y `lastAuditFailed`/`lastAuditDetails`
             // observables por la UI si hace falta).
+        }
+
+        // v14.e Alt-3 — stash del payload slim contra el recordId vigente.
+        // El POST (T+250ms) consume el stash de "completeCrossfade*"; el
+        // waiter post-201 hace PATCH con el stash de "post-swap*". Sources
+        // distintos a esos dos no se stashean (no hay record que enriquecer).
+        let payload = Self.buildAuditPayload(audit)
+        let rid = Self.upcomingRecordId
+        if audit.source.hasPrefix("completeCrossfade") {
+            Self.stashCompleteCrossfade(recordId: rid, payload: payload)
+            print("[AuditUpload] T=stash source=\(audit.source) rid=\(rid.uuidString.prefix(8))")
+        } else if audit.source.hasPrefix("post-swap") {
+            Self.stashPostSwap(recordId: rid, payload: payload)
+            print("[AuditUpload] T=stash source=\(audit.source) rid=\(rid.uuidString.prefix(8))")
         }
     }
 
