@@ -123,21 +123,26 @@ struct ExpandableBio: View {
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
                 .overlay(alignment: .bottomTrailing) {
-                    // Trailing inline "MÁS" with a short fade so the truncated
-                    // text doesn't visibly overlap the label. The gradient runs
-                    // from `pageBg.opacity(0)` (left edge of mask) to opaque
-                    // `pageBg` against "MÁS", which itself has an opaque pageBg
-                    // background for legibility on any host palette.
+                    // Trailing inline "MÁS" con fade horizontal amplio (~110pt)
+                    // que se desvanece suavemente sobre las últimas palabras de
+                    // la segunda línea. El fade anterior de 28pt creaba un seam
+                    // visible: las letras a la izquierda del fade quedaban a
+                    // plena opacidad y contrastaban con la palabra "MÁS" como
+                    // un parche encima. El stack actual usa 7 stops smoothstep
+                    // (3t²−2t³) para que el degradado opacity 0 → pageBg sea
+                    // perceptualmente lineal sin bandas, mismo patrón que el
+                    // hero-fade canónico de `LinearGradient.heroFade(to:)`.
                     HStack(spacing: 0) {
                         LinearGradient(
-                            colors: [pageBg.opacity(0), pageBg],
+                            stops: Self.maslFadeStops(pageBg: pageBg),
                             startPoint: .leading,
                             endPoint: .trailing
                         )
-                        .frame(width: 28)
+                        .frame(width: 110)
                         Text("MÁS")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.primary)
+                            .padding(.leading, 2)
                             .background(pageBg)
                     }
                 }
@@ -145,6 +150,17 @@ struct ExpandableBio: View {
                 .onTapGesture {
                     withAnimation(Anim.content) { expanded = true }
                 }
+        }
+    }
+
+    /// Stops smoothstep `3t²−2t³` para el fade horizontal del MÁS. 7 stops dan
+    /// un degradado perceptualmente lineal opacity 0 → pageBg sin bandas,
+    /// cubriendo los ~110pt antes del label. Mismo patrón que el hero-fade.
+    private static func maslFadeStops(pageBg: Color) -> [Gradient.Stop] {
+        let ts: [Double] = [0.0, 0.15, 0.30, 0.50, 0.70, 0.85, 1.0]
+        return ts.map { t in
+            let smooth = t * t * (3 - 2 * t)
+            return Gradient.Stop(color: pageBg.opacity(smooth), location: t)
         }
     }
 }
