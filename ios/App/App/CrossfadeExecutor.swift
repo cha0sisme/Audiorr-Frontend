@@ -1132,7 +1132,11 @@ class CrossfadeExecutor {
     /// residue or stuck bypass flags. This version does.
     static func auditDSPState(source: String, dspA: BiquadDSPNode, dspB: BiquadDSPNode,
                               mixerA: AVAudioMixerNode, mixerB: AVAudioMixerNode,
-                              timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?) {
+                              timePitchA: AVAudioUnitTimePitch?, timePitchB: AVAudioUnitTimePitch?,
+                              stateMagA_postProcess: Float? = nil,
+                              stateMagB_postProcess: Float? = nil,
+                              ioBufferDurationMs: Float? = nil,
+                              sleepAppliedMs: Float? = nil) {
         func coeffSnapshot(_ dsp: BiquadDSPNode) -> [TransitionDiagnostics.EQBandSnapshot] {
             let coeffs = dsp.currentCoefficients()
             let labels = ["highPass", "lowShelf", "parametric", "highShelf"]
@@ -1198,6 +1202,12 @@ class CrossfadeExecutor {
         audit.stateMagB = dspB.currentStateMagnitude()
         audit.bypassA = bypassState(timePitchA)
         audit.bypassB = bypassState(timePitchB)
+        // v14.g — campos aditivos opcionales solo rellenos por el call-site de
+        // `completeCrossfade` (lectura post-process tras usleep dinámico).
+        audit.stateMagA_postProcess = stateMagA_postProcess
+        audit.stateMagB_postProcess = stateMagB_postProcess
+        audit.ioBufferDurationMs = ioBufferDurationMs
+        audit.sleepAppliedMs = sleepAppliedMs
         TransitionDiagnostics.shared.publishPostResetAudit(audit)
     }
 
@@ -2711,10 +2721,39 @@ class CrossfadeExecutor {
 
         print("[CrossfadeExecutor] Crossfade completado — B vol=\(String(format: "%.3f", maxVolumeB)) master=\(String(format: "%.2f", vol))")
 
+        // v14.g — observabilidad del reset. La lectura inmediata `stateMagA/B`
+        // dentro de `auditDSPState` cae sobre `lastStateMagnitude`, escrito
+        // solo desde `process()` en el render thread. Entre `dspA.resetSync()`
+        // (línea 2703) y este audit median ~µs en automation serial; el
+        // render thread aún no ha tocado un buffer post-reset → métrica
+        // congelada al valor PRE-reset (Caso B del análisis, issue
+        // 2026-05-17-v14g). Dormimos `1.5 × ioBufferDuration` con mínimo 15ms
+        // para garantizar ≥1 buffer procesado tras el reset y leer
+        // `stateMag*_postProcess` reflejando el estado REAL post-reset.
+        // CarPlay buffer típico 40ms → sleep 60ms; default 20ms → sleep 30ms.
+        // Watchdog tolera holgado (totalTime + 2.0s de slack). El sleep NO
+        // toca curvas ni mixers ni el swap path; solo retrasa el audit y el
+        // `publishCompletion` posterior. usleep en vez de asyncAfter para
+        // preservar el flujo Alt-3 (consume del stash ligado a publishCompletion).
+        let ioBufferDuration = AVAudioSession.sharedInstance().ioBufferDuration
+        let sleepSec = max(ioBufferDuration * 1.5, 0.015)
+        usleep(UInt32(sleepSec * 1_000_000))
+        let stateMagA_pp = dspA.currentStateMagnitude()
+        let stateMagB_pp = dspB.currentStateMagnitude()
+        let ioBufMs = Float(ioBufferDuration * 1000.0)
+        let sleepMs = Float(sleepSec * 1000.0)
+
         // Audit after reset — immediate (catches coefficient/rate/pitch state)
+        // Lleva además los campos `_postProcess` (v14.g) ya capturados tras el
+        // sleep dinámico — `stateMag*` originales se mantienen para no romper
+        // la comparativa con los baselines v14.e/v14.f.
         Self.auditDSPState(source: "completeCrossfade", dspA: dspA, dspB: dspB,
                            mixerA: mixerA, mixerB: mixerB,
-                           timePitchA: timePitchA, timePitchB: timePitchB)
+                           timePitchA: timePitchA, timePitchB: timePitchB,
+                           stateMagA_postProcess: stateMagA_pp,
+                           stateMagB_postProcess: stateMagB_pp,
+                           ioBufferDurationMs: ioBufMs,
+                           sleepAppliedMs: sleepMs)
         // Delayed audit (+200ms) — gives the render thread time to consume the
         // needsStateReset flag and zero delay lines. If the chains are idle (e.g.
         // a hard cut took over, or B never rendered), the delayed audit will show

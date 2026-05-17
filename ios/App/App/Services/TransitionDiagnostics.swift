@@ -104,13 +104,21 @@ final class TransitionDiagnostics {
     /// ya están en el record principal o son redundantes para análisis de
     /// divergencia DSP. Slim por diseño.
     nonisolated private static func buildAuditPayload(_ a: PostResetAudit) -> [String: Any] {
-        return [
+        var p: [String: Any] = [
             "source": a.source,
             "stateMagA": a.stateMagA, "stateMagB": a.stateMagB,
             "dspPitchA": a.dspPitchA, "dspPitchB": a.dspPitchB,
             "dspRateA": a.dspRateA, "dspRateB": a.dspRateB,
             "bypassA": a.bypassA, "bypassB": a.bypassB,
         ]
+        // v14.g — observabilidad del reset DSP. Aditivos solo cuando hay
+        // lectura post-process (call-site `completeCrossfade`). Otras fuentes
+        // (cancel, post-swap, +200ms) los dejan nil → omitidos del payload.
+        if let v = a.stateMagA_postProcess { p["stateMagA_postProcess"] = v }
+        if let v = a.stateMagB_postProcess { p["stateMagB_postProcess"] = v }
+        if let v = a.ioBufferDurationMs   { p["ioBufferDurationMs"] = v }
+        if let v = a.sleepAppliedMs       { p["sleepAppliedMs"] = v }
+        return p
     }
 
     // MARK: - Transition decision
@@ -1019,6 +1027,32 @@ final class TransitionDiagnostics {
         var stateMagB: Float = 0
         var bypassA: Bool = false   // AVAudioUnit shouldBypassEffect
         var bypassB: Bool = false
+
+        // v14.g (round 2026-05-17) — observabilidad del reset DSP. `stateMagA/B`
+        // arriba se leen de `lastStateMagnitude`, que solo se escribe dentro de
+        // `process()` cuando hay stage no-passthrough. Entre `resetSync()` y el
+        // audit T+0 median ~µs en automationQueue serial → render thread NO ha
+        // procesado ≥1 buffer post-reset → la métrica queda congelada en el
+        // valor anterior al reset (Caso B, ver issue 2026-05-17-v14g). Los
+        // campos `_postProcess` se capturan TRAS dormir `1.5 × ioBufferDuration`
+        // en automation thread, garantizando que el render thread haya
+        // procesado al menos un buffer con coefs ya en passthrough — entonces
+        // `lastStateMagnitude` refleja realmente el estado post-reset (≈0 si
+        // resetSync funciona, distinto de 0 si el residue persiste por otro
+        // path). Aditivos opcionales: solo se rellenan en el call-site de
+        // `completeCrossfade`; resto de fuentes (cancel, post-swap, +200ms)
+        // los dejan nil.
+        var stateMagA_postProcess: Float? = nil
+        var stateMagB_postProcess: Float? = nil
+        /// `AVAudioSession.sharedInstance().ioBufferDuration` en ms al momento
+        /// del audit. CarPlay típico 40ms, default ~20ms. Sin este campo no
+        /// podemos saber si el sleep fue suficiente para garantizar ≥1 buffer
+        /// procesado post-reset en cada record.
+        var ioBufferDurationMs: Float? = nil
+        /// Sleep real aplicado en ms antes de capturar `_postProcess`. Debe ser
+        /// ≥ `ioBufferDurationMs × 1.5`. Si log-analyst ve sleep < buffer
+        /// significa que la fórmula de cálculo falló.
+        var sleepAppliedMs: Float? = nil
     }
 
     /// Whether the last audit detected stuck filters (non-neutral values).
