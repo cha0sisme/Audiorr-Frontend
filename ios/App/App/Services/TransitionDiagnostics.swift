@@ -256,6 +256,14 @@ final class TransitionDiagnostics {
     /// vez en runtime — detecta el caso edge en que el gate dice "habilitado"
     /// pero el primer tick de filterTimer cayó después de filterStartTime.
     var filterPreRollEffectiveA: Bool? = nil
+    /// v14.g (round 2026-05-17) — `timings.filterLead` (segundos) calculado por
+    /// `CrossfadeExecutor.calculateTimings`. Define la "ventana de adelanto" del
+    /// sweep de filtros respecto al volume fade-out de A (v13.O.3: min(2.5,
+    /// fadeDuration * 0.35) en transiciones con overlap; 0 en CLEAN_HANDOFF /
+    /// VINYL_STOP / SEQUENTIAL). Aditivo, sin impacto en algoritmo. Permite
+    /// auditar correlación entre filterLead largo y quejas "filtros entran de
+    /// golpe" sin instrumentar el tick.
+    var filterLead: Double? = nil
 
     // v14.c V1.B — telemetría peak-detector del fade-in entrada del fix V1.A.
     // Capturada por completeCrossfade ANTES de llamar a dspA.reset() / dspB.reset()
@@ -468,6 +476,9 @@ final class TransitionDiagnostics {
         var bassKillGainA_atVolumeFadeStart: Double? = nil
         var bassKillGainA_atSwap: Double? = nil
         var filterPreRollEffectiveA: Bool? = nil
+        // v14.g (round 2026-05-17) — `timings.filterLead` segundos. Aditivo,
+        // Optional para retrocompat con records pre-v14.g.
+        var filterLead: Double? = nil
         // v14.c V1.B — telemetría peak-detector del fade-in (4 campos aditivos).
         var fadeInTriggeredA: Bool? = nil
         var fadeInTriggeredB: Bool? = nil
@@ -925,6 +936,7 @@ final class TransitionDiagnostics {
                 bassKillGainA_atVolumeFadeStart: self.bassKillGainA_atVolumeFadeStart,
                 bassKillGainA_atSwap: self.bassKillGainA_atSwap,
                 filterPreRollEffectiveA: self.filterPreRollEffectiveA,
+                filterLead: self.filterLead,
                 fadeInTriggeredA: self.fadeInTriggeredA,
                 fadeInTriggeredB: self.fadeInTriggeredB,
                 peakTransientDeltaA: self.peakTransientDeltaA,

@@ -846,6 +846,11 @@ class CrossfadeExecutor {
             // de la ventana). Inicializado a false para distinguir "no ejecutado"
             // de "no aplicable" (que queda nil porque el campo es Optional).
             TransitionDiagnostics.shared.filterPreRollEffectiveA = preRollWillApply ? false : nil
+            // v14.g — `timings.filterLead` aditivo. Persistido para auditar
+            // correlación con queja "filtros entran de golpe" sin instrumentar
+            // tick. 0 en CLEAN_HANDOFF/VINYL_STOP/SEQUENTIAL (sin overlap);
+            // min(2.5, fadeDuration*0.35) en resto cuando useFilters=true.
+            TransitionDiagnostics.shared.filterLead = timings.filterLead
         }
     }
 
