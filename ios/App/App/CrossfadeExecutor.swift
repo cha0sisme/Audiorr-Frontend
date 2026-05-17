@@ -2690,8 +2690,17 @@ class CrossfadeExecutor {
             TransitionDiagnostics.shared.peakTransientDeltaB = Double(peakDeltaB)
         }
 
-        // Reset crossfade DSP to passthrough + reset time-stretch
-        dspA.reset()
+        // Reset crossfade DSP to passthrough + reset time-stretch.
+        // v14.f: dspA (saliente) usa resetSync — snap atómico a passthrough en
+        // automation thread. reset() arma fade-out de 512f que necesita render
+        // thread para drenar; aquí mixerA acaba de ir a 0 (1-3 buffers de
+        // latencia de propagación en AVAudioEngine) y playerA está a punto de
+        // stopearse → el render thread no termina la rampa → residue audible
+        // del biquod en T+0..T+~10ms (datos coche-test v14.e: stateMagA_CF p99
+        // = 0.47). resetSync skip stage al primer process() post-lock.
+        // dspB (entrante) sigue con reset() porque mixerB tiene maxVolumeB y
+        // sigue siendo audible — snap rompería v14.10 (c39bf24).
+        dspA.resetSync()
         dspB.reset()
         mixerA.pan = 0
         mixerB.pan = 0
