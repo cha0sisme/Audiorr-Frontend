@@ -308,6 +308,32 @@ final class TransitionDiagnostics {
     /// `percussiveCurve` no esté disponible (~99.7% cobertura).
     var energyIntroB_telemetry: Double? = nil
 
+    // v14.g g2 (round 2026-05-17) — valores absolutos de `nextAnalysis` para
+    // calcular offsets post-hoc en log-analyst (chorus/vocal/introEnd respecto
+    // al entryPoint final). Aditivos, sin impacto en algoritmo. Munición para
+    // diseño de gates Frente #2 (entry-point cap=50s) y Frente #3 (fade-in B
+    // exagerado) del research v14.g. NULL cuando el backend no proveyó el
+    // dato o cuando el valor literal es 0 (caso indistinguible del "no
+    // detectado", aplicamos nil para no contaminar análisis).
+    /// `nextAnalysis.chorusStartTime` (segundos absolutos desde t=0 de B).
+    /// nil cuando el backend no proveyó o cuando es 0 literal.
+    var chorusStartTimeB: Double? = nil
+    /// Primeros 6 elementos de `nextAnalysis.downbeatTimes` (segundos absolutos
+    /// desde t=0 de B). nil cuando la lista está vacía. Truncado a 6 para
+    /// acotar peso del payload — suficiente para localizar 1-2 compases tras
+    /// el entryPoint en cualquier BPM razonable.
+    var downbeatTimesB: [Double]? = nil
+    /// `nextAnalysis.vocalStartTime` (segundos absolutos desde t=0 de B).
+    /// nil cuando el backend no proveyó (campo Optional en SongAnalysis) o
+    /// cuando es 0 literal (apertura cantada vs ausencia de dato — el
+    /// log-analyst resuelve la ambigüedad cruzando con `hasIntroVocalsB`).
+    var vocalStartTimeB: Double? = nil
+    /// `nextAnalysis.introEndTimeHeuristic ?? introEndTime` (segundos absolutos
+    /// desde t=0 de B). nil cuando ambos son 0. Prioriza heurística sobre ML
+    /// override (paridad con Hv5-2 backend signals que ya viajaban de forma
+    /// dispersa).
+    var introEndHeuristicB: Double? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -458,6 +484,15 @@ final class TransitionDiagnostics {
         var bassProminenceB_0_15s: Double? = nil
         var vocalOverlapRiskCode: String? = nil
         var energyIntroB_telemetry: Double? = nil
+        // v14.g g2 (round 2026-05-17) — valores absolutos de `nextAnalysis`
+        // para que log-analyst derive offsets post-hoc desde entryPoint final
+        // (chorusOffsetFromEntryB = chorusStartTimeB − entryPoint, etc.). Sin
+        // criterio de filtrado en cliente: persistimos siempre que el backend
+        // proveyó dato no-cero. Optional para retrocompat con records pre-g2.
+        var chorusStartTimeB: Double? = nil
+        var downbeatTimesB: [Double]? = nil
+        var vocalStartTimeB: Double? = nil
+        var introEndHeuristicB: Double? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -898,6 +933,10 @@ final class TransitionDiagnostics {
                 bassProminenceB_0_15s: self.bassProminenceB_0_15s,
                 vocalOverlapRiskCode: self.vocalOverlapRiskCode,
                 energyIntroB_telemetry: self.energyIntroB_telemetry,
+                chorusStartTimeB: self.chorusStartTimeB,
+                downbeatTimesB: self.downbeatTimesB,
+                vocalStartTimeB: self.vocalStartTimeB,
+                introEndHeuristicB: self.introEndHeuristicB,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

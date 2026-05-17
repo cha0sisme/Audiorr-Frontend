@@ -1078,6 +1078,23 @@ final class QueueManager: AudioEngineDelegate {
                     TransitionDiagnostics.shared.rmsTailCurveA_last = crossfadeResult.rmsTailCurveA_last
                     TransitionDiagnostics.shared.rmsTailSlopeA = crossfadeResult.rmsTailSlopeA
                     TransitionDiagnostics.shared.outroEnergyA = crossfadeResult.outroEnergyA
+                    // v14.g g2 — valores absolutos de `nextAnalysis` para que
+                    // log-analyst calcule offsets respecto al entryPoint final
+                    // (post-snap+beat-sync). NULL cuando el dato vale 0 literal
+                    // (indistinguible de "no detectado" en el backend actual).
+                    // Mismo patrón MainActor que `genreCapApplied`.
+                    TransitionDiagnostics.shared.chorusStartTimeB =
+                        nextSongAnalysis.chorusStartTime > 0 ? nextSongAnalysis.chorusStartTime : nil
+                    TransitionDiagnostics.shared.downbeatTimesB =
+                        nextSongAnalysis.downbeatTimes.isEmpty ? nil : Array(nextSongAnalysis.downbeatTimes.prefix(6))
+                    TransitionDiagnostics.shared.vocalStartTimeB = {
+                        guard let v = nextSongAnalysis.vocalStartTime, v > 0 else { return nil }
+                        return v
+                    }()
+                    TransitionDiagnostics.shared.introEndHeuristicB = {
+                        let heur = nextSongAnalysis.introEndTimeHeuristic ?? nextSongAnalysis.introEndTime
+                        return heur > 0 ? heur : nil
+                    }()
                 }
 
                 // ── Trailing silence on A ──
