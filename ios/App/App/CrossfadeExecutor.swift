@@ -625,6 +625,18 @@ class CrossfadeExecutor {
         // Calcular timings (port exacto de CrossfadeEngine.calculateTimings líneas 244-289)
         timings = Self.calculateTimings(config: config)
 
+        // Telemetría del cap filterLead. Cuando filterLead resultante = 0
+        // (no overlap o filters off) los dos campos quedan nil: no se aplica
+        // el cap. En el resto, preCap es el valor pre-min() y capApplied es
+        // true si preCap alcanzó el techo 3.5s. Permite saber qué casos se
+        // benefician del cap ampliado v15 vs los que ya estaban por debajo.
+        let filterLeadPreCapValue: Double? = timings.filterLead > 0 ? config.fadeDuration * 0.32 : nil
+        let filterLeadCapAppliedValue: Bool? = filterLeadPreCapValue.map { $0 >= 3.5 }
+        Task { @MainActor in
+            TransitionDiagnostics.shared.filterLeadPreCap = filterLeadPreCapValue
+            TransitionDiagnostics.shared.filterLeadCapApplied = filterLeadCapAppliedValue
+        }
+
         // Compute beat-aligned bass swap point
         hasBeatData = config.beatIntervalA > 0 || config.beatIntervalB > 0
         bassSwapTime = Self.computeBassSwapTime(config: config, timings: timings)
@@ -865,6 +877,17 @@ class CrossfadeExecutor {
             // tick. 0 en CLEAN_HANDOFF/VINYL_STOP/SEQUENTIAL (sin overlap);
             // min(2.5, fadeDuration*0.35) en resto cuando useFilters=true.
             TransitionDiagnostics.shared.filterLead = timings.filterLead
+            // Pre-roll bands 2/3 (midScoop/highShelf): true cuando la rampa
+            // del filtro se adelanta a preRollStart. Si el filtro está OFF en
+            // esta transición (useMidScoop/useHighShelfCut=false) el campo es
+            // false: no hubo pre-roll porque no había filtro que adelantar.
+            TransitionDiagnostics.shared.midScoopPreRollApplied = preRollWillApply && useMidScoop
+            TransitionDiagnostics.shared.highShelfPreRollApplied = preRollWillApply && useHighShelfCut
+            // aNaturalDecay: rama "A decae natural, B sin fade-in" en
+            // gainForPlayerB. Deterministic con config — duplicar la fórmula
+            // aquí es más simple que routear desde el path de cálculo runtime.
+            TransitionDiagnostics.shared.aNaturalDecayActive =
+                config.isOutroInstrumental && !config.tier4Active && !config.needsAnticipation
         }
     }
 
@@ -1133,6 +1156,17 @@ class CrossfadeExecutor {
             timePitchB?.rate = config.rateB
             rateBRampActive = false
             print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B=\(String(format: "%.3f", config.rateB)) (sin rampa, delta<0.02 o filterLead<0.6)")
+        }
+        // Persistir telemetría rateB ramp para auditar cobertura del path en
+        // cada record. Sin esto el path es ciego: no se puede saber post-coche
+        // cuántos casos disparan la rampa cosSquared vs path simple.
+        let rampActiveCopy: Bool = rateBRampActive
+        let startRelCopy: Double? = rateBRampActive ? (rateBRampStart - timings.startTime) : nil
+        let endRelCopy: Double? = rateBRampActive ? (rateBRampEnd - timings.startTime) : nil
+        Task { @MainActor in
+            TransitionDiagnostics.shared.rateBRampActive = rampActiveCopy
+            TransitionDiagnostics.shared.rateBRampStartRel = startRelCopy
+            TransitionDiagnostics.shared.rateBRampEndRel = endRelCopy
         }
     }
 

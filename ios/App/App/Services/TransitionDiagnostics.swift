@@ -342,6 +342,42 @@ final class TransitionDiagnostics {
     /// dispersa).
     var introEndHeuristicB: Double? = nil
 
+    // Telemetría aditiva — cierre de gaps de cobertura. Permite auditar si
+    // cada vector disparó realmente en cada record sin instrumentar el tick
+    // ni inferir por proxy.
+    //
+    /// true cuando setupTimeStretch armó la rampa cosSquared para rateB
+    /// (delta>=0.02 ∧ filterLead>=0.6). false cuando saltó al path simple
+    /// (asignación directa de rateB). nil si useTimeStretch=false.
+    var rateBRampActive: Bool? = nil
+    /// Inicio de la rampa de rateB, segundos relativos a timings.startTime.
+    /// nil cuando rateBRampActive != true.
+    var rateBRampStartRel: Double? = nil
+    /// Final de la rampa de rateB, segundos relativos a timings.startTime.
+    /// nil cuando rateBRampActive != true.
+    var rateBRampEndRel: Double? = nil
+    /// true cuando el rampStart de midScoop se adelantó a preRollStart +
+    /// cascadeOffsetMidScoop. false cuando no recibió pre-roll (gate
+    /// preRollActive=false o useMidScoop=false).
+    var midScoopPreRollApplied: Bool? = nil
+    /// true cuando el rampStart de highShelf se adelantó a preRollStart +
+    /// cascadeOffsetHighShelf. false cuando no recibió pre-roll.
+    var highShelfPreRollApplied: Bool? = nil
+    /// Valor de filterLead ANTES del cap (fadeDuration*0.32). Permite saber
+    /// cuánto se recortó por el cap 3.5s. nil cuando filterLead=0.
+    var filterLeadPreCap: Double? = nil
+    /// true cuando el cap 3.5s recortó el valor (preCap>=3.5). nil cuando
+    /// filterLead=0.
+    var filterLeadCapApplied: Bool? = nil
+    /// true cuando la defensa CUT_A_FADE_IN_B + energyB<0.10 → SEQUENTIAL
+    /// escaló el tipo. Permite distinguir SEQUENTIAL orgánico del override
+    /// defensivo. nil cuando el override no aplicó.
+    var sequentialOverrideByVectorD: Bool? = nil
+    /// true cuando el branch "A decae natural, B sin fade-in" se activó
+    /// (isOutroInstrumental ∧ !tier4Active ∧ !needsAnticipation). Mide
+    /// cobertura del flag antes de extensiones futuras.
+    var aNaturalDecayActive: Bool? = nil
+
     // Analysis
     var energyA: Double = 0
     var energyB: Double = 0
@@ -504,6 +540,19 @@ final class TransitionDiagnostics {
         var downbeatTimesB: [Double]? = nil
         var vocalStartTimeB: Double? = nil
         var introEndHeuristicB: Double? = nil
+        // Telemetría aditiva — cierre de gaps de cobertura por vector.
+        // Optional para retrocompat con records persistidos antes de este
+        // round. Permiten al log-analyst auditar si cada vector disparó
+        // realmente sin necesidad de inferir por proxy.
+        var rateBRampActive: Bool? = nil
+        var rateBRampStartRel: Double? = nil
+        var rateBRampEndRel: Double? = nil
+        var midScoopPreRollApplied: Bool? = nil
+        var highShelfPreRollApplied: Bool? = nil
+        var filterLeadPreCap: Double? = nil
+        var filterLeadCapApplied: Bool? = nil
+        var sequentialOverrideByVectorD: Bool? = nil
+        var aNaturalDecayActive: Bool? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -816,6 +865,20 @@ final class TransitionDiagnostics {
             self.highpassFreqB = 0
             self.networkSnapshotStart = Self.captureNetworkSnapshot()
             self.networkSnapshotEnd = nil
+            // Reset de telemetría per-transition aditiva. Sin esto, un campo
+            // setado en la transición N-1 que no se reasigna en N quedaría
+            // colgado y contaminaría el record N. Los demás campos Optional
+            // del singleton tienen la misma deuda preexistente — limpiar solo
+            // los nuevos minimiza superficie del cambio.
+            self.rateBRampActive = nil
+            self.rateBRampStartRel = nil
+            self.rateBRampEndRel = nil
+            self.midScoopPreRollApplied = nil
+            self.highShelfPreRollApplied = nil
+            self.filterLeadPreCap = nil
+            self.filterLeadCapApplied = nil
+            self.sequentialOverrideByVectorD = nil
+            self.aNaturalDecayActive = nil
         }
     }
 
@@ -949,6 +1012,15 @@ final class TransitionDiagnostics {
                 downbeatTimesB: self.downbeatTimesB,
                 vocalStartTimeB: self.vocalStartTimeB,
                 introEndHeuristicB: self.introEndHeuristicB,
+                rateBRampActive: self.rateBRampActive,
+                rateBRampStartRel: self.rateBRampStartRel,
+                rateBRampEndRel: self.rateBRampEndRel,
+                midScoopPreRollApplied: self.midScoopPreRollApplied,
+                highShelfPreRollApplied: self.highShelfPreRollApplied,
+                filterLeadPreCap: self.filterLeadPreCap,
+                filterLeadCapApplied: self.filterLeadCapApplied,
+                sequentialOverrideByVectorD: self.sequentialOverrideByVectorD,
+                aNaturalDecayActive: self.aNaturalDecayActive,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )

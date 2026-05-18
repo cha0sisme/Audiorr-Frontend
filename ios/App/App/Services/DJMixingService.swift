@@ -3735,9 +3735,18 @@ enum DJMixingService {
         // inaudible), el fade-in de B no tiene cuerpo que sostener — A corta
         // sin contraparte audible. Degradar a SEQUENTIAL deja que A acabe
         // natural y B arranque desde t=0 con su propio dinámica.
+        var sequentialOverrideByVectorD = false
         if type == .cutAFadeInB && profile.energyB < 0.10 {
             type = .sequential
             reason = "[v15 energyB<0.10 en CUT_A_FADE_IN_B → SEQUENTIAL] " + reason
+            sequentialOverrideByVectorD = true
+        }
+        // Telemetría: persistir solo si el override aplicó. Permite distinguir
+        // SEQUENTIAL orgánico (decisor) del SEQUENTIAL escalado por defensa.
+        if sequentialOverrideByVectorD {
+            Task { @MainActor in
+                TransitionDiagnostics.shared.sequentialOverrideByVectorD = true
+            }
         }
 
         // Record the final type for cooldown bookkeeping. Done at the end so the
