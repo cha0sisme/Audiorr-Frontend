@@ -3741,12 +3741,15 @@ enum DJMixingService {
             reason = "[v15 energyB<0.10 en CUT_A_FADE_IN_B → SEQUENTIAL] " + reason
             sequentialOverrideByVectorD = true
         }
-        // Telemetría: persistir solo si el override aplicó. Permite distinguir
-        // SEQUENTIAL orgánico (decisor) del SEQUENTIAL escalado por defensa.
-        if sequentialOverrideByVectorD {
-            Task { @MainActor in
-                TransitionDiagnostics.shared.sequentialOverrideByVectorD = true
-            }
+        // Telemetría: persistir SIEMPRE (true/false). La asignación se
+        // autosobrescribe por transición — sin reset entre rounds — porque
+        // este setter se encola al MainActor ANTES de publishDecision, y el
+        // reset de publishDecision lo borraría si fuera Optional con
+        // condición. Permite distinguir SEQUENTIAL orgánico (false) del
+        // SEQUENTIAL escalado por defensa (true).
+        let overrideAppliedForTelemetry = sequentialOverrideByVectorD
+        Task { @MainActor in
+            TransitionDiagnostics.shared.sequentialOverrideByVectorD = overrideAppliedForTelemetry
         }
 
         // Record the final type for cooldown bookkeeping. Done at the end so the

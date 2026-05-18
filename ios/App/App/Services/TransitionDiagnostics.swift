@@ -870,14 +870,19 @@ final class TransitionDiagnostics {
             // colgado y contaminaría el record N. Los demás campos Optional
             // del singleton tienen la misma deuda preexistente — limpiar solo
             // los nuevos minimiza superficie del cambio.
+            //
+            // NOTA importante de ordenación: `publishDecision` se encola al
+            // MainActor DESPUÉS de los setters de algunos campos (A5 desde
+            // CrossfadeExecutor.init pre-publishDecision; A6 desde
+            // DJMixingService.decideTransitionType pre-creación del executor).
+            // Esos campos no entran en el reset — su setter SIEMPRE asigna un
+            // valor (incluido `false`/`nil`) y se autosobreescriben por
+            // transición sin necesidad de reset.
             self.rateBRampActive = nil
             self.rateBRampStartRel = nil
             self.rateBRampEndRel = nil
             self.midScoopPreRollApplied = nil
             self.highShelfPreRollApplied = nil
-            self.filterLeadPreCap = nil
-            self.filterLeadCapApplied = nil
-            self.sequentialOverrideByVectorD = nil
             self.aNaturalDecayActive = nil
         }
     }
