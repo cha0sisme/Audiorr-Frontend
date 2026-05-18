@@ -2490,6 +2490,23 @@ enum DJMixingService {
                     decision += " Capped por intro B (\(String(format: "%.1f", introWindow))s×0.85) a \(String(format: "%.1f", fadeDuration))s."
                 }
             }
+
+            // v14.h — gate fade-vs-punch. Si introEndHeuristic < entryPoint − 1s,
+            // la intro de B ya terminó antes de que B entre en mezcla; el fade
+            // largo aplasta el chorus que ya está sonando libre. Acorta el fade
+            // al espacio real disponible (entry − introEnd) × 0.85, manteniendo
+            // floor 3s para no degenerar en quasi-CUT. No fuerza cambio de tipo;
+            // solo limita duración.
+            if let introEnd = next.introEndTimeHeuristic,
+               introEnd > 0,
+               introEnd < entryPoint - 1.0,
+               fadeDuration > 5 {
+                let punchCap = max(3.0, (entryPoint - introEnd) * 0.85)
+                if fadeDuration > punchCap {
+                    fadeDuration = punchCap
+                    decision += " Capped por fade-vs-punch (introEnd \(String(format: "%.1f", introEnd))s < entry \(String(format: "%.1f", entryPoint))s−1) a \(String(format: "%.1f", fadeDuration))s."
+                }
+            }
         }
 
         // ── Shorten when A has no instrumental outro ──
