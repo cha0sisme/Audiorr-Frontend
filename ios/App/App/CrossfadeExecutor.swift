@@ -788,8 +788,13 @@ class CrossfadeExecutor {
         let isNoOverlapForPreroll = config.transitionType == .cleanHandoff
             || config.transitionType == .vinylStop
             || config.transitionType == .sequential
-        let preRollDur = min(0.5, timings.filterLead * 0.3)
-        let preRollWillApply = !isCutFamilyForPreroll && !isNoOverlapForPreroll && !useLowpassA && preRollDur > 0
+        // v14.h — espejo del cálculo runtime en applyFiltersA (cap/ratio/gate
+        // idénticos). Mantener sincronizado: si la fórmula diverge, la
+        // telemetría filterPreRollAppliedA reporta un gate distinto al que
+        // ejecutó el render thread y rompe la falsabilidad del fix.
+        let preRollDur = min(0.9, timings.filterLead * 0.35)
+        let preRollWillApply = !isCutFamilyForPreroll && !isNoOverlapForPreroll && !useLowpassA
+            && preRollDur > 0 && timings.filterLead >= 0.6
         let lsGainBInitial = Double(preset.lowshelfB.startGain)
         let hpFreqBInitial = Double(preset.highpassB.startFreq)
         // En `applyFiltersA` con `progress=1.0`, band 3 high-shelf A toma el
@@ -2247,8 +2252,15 @@ class CrossfadeExecutor {
         let isNoOverlap = config.transitionType == .cleanHandoff
             || config.transitionType == .vinylStop
             || config.transitionType == .sequential
-        let preRollDur = min(0.5, timings.filterLead * 0.3)
-        let preRollActive = !isCutFamily && !isNoOverlap && !useLowpassA && preRollDur > 0
+        // v14.h — cap 0.5→0.9s + ratio 0.30→0.35 y gate filterLead>=0.6. El cap
+        // antiguo dejaba ~0.5s para barrer 20→400/600Hz (≥4 octavas log) y la
+        // zona crítica del kick (80-200Hz) se cruzaba en <200ms, audible como
+        // step espectral al inicio del barrido. Con 0.9s las primeras octavas
+        // inaudibles (20-60Hz) consumen tiempo real y el sweep llega a la zona
+        // sensible con velocidad constante en log-Hz.
+        let preRollDur = min(0.9, timings.filterLead * 0.35)
+        let preRollActive = !isCutFamily && !isNoOverlap && !useLowpassA
+            && preRollDur > 0 && timings.filterLead >= 0.6
         let preRollStart = timings.filterStartTime - preRollDur
 
         // v14.11 — bassKill A arranca con la ventana pre-roll en vez de en
@@ -2267,7 +2279,13 @@ class CrossfadeExecutor {
         if preRollActive {
             if t >= preRollStart && t < timings.filterStartTime {
                 let p = Float((t - preRollStart) / preRollDur)
-                let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, p))
+                // v14.h — easing cuadrático en el primer 15% del pre-roll.
+                // Emula gesto manual de DJ abriendo HPF: arranque lento en zona
+                // inaudible (<60Hz) hasta que el corte cruza ~80-100Hz, luego
+                // velocidad constante en log-Hz. Sin easing el sweep recorría
+                // ~30% del espacio espectral antes de tocar la zona sensible.
+                let pAdj = p < 0.15 ? p * (p / 0.15) : p
+                let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, pAdj))
                 let band0A = BiquadCoefficientCalculator.highpass(
                     frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
                 // v14.11 — band 1 ahora rampea bassKill desde preRollStart si
