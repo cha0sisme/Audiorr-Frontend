@@ -2571,8 +2571,13 @@ enum DJMixingService {
         let isVeryShort = fadeDuration < 3
         let isShort = fadeDuration < 4
 
+        // v15: umbral energyGap bajado 0.30 → 0.20. El umbral anterior dejaba
+        // sin anticipación de filtros transiciones con asimetría energética
+        // perceptual 0.20-0.30 (síntoma: A mantiene energía, B entra muy baja),
+        // común en catálogo Hip-Hop / R&B. El nuevo umbral cubre esa franja
+        // sin introducir filtros en transiciones que estaban funcionando bien.
         let useFilters = hasVocals ||
-            abs(profile.energyGap) > 0.3 ||
+            abs(profile.energyGap) > 0.20 ||
             profile.bpmDiff > 20 ||
             profile.harmonic.isClash ||
             profile.bassConflictRisk ||
@@ -2600,7 +2605,7 @@ enum DJMixingService {
 
         var reasons: [String] = []
         if hasVocals { reasons.append("voces") }
-        if abs(profile.energyGap) > 0.3 { reasons.append("energia \(Int(abs(profile.energyGap) * 100))%") }
+        if abs(profile.energyGap) > 0.20 { reasons.append("energia \(Int(abs(profile.energyGap) * 100))%") }
         if profile.bpmDiff > 20 { reasons.append("BPM ±\(Int(profile.bpmDiff))") }
         if profile.harmonic.compatibility == .tense { reasons.append("tension tonal") }
         if profile.harmonic.compatibility == .clash { reasons.append("clash tonal") }
