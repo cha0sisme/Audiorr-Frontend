@@ -384,17 +384,6 @@ extension RankedLayoutResponse {
     }
 }
 
-// Needed because PlaylistSection has no public init — synthesised one is
-// internal. We add an init for the mapper above.
-extension PlaylistSection {
-    init(id: String, title: String, type: SectionType, playlists: [String]?) {
-        self.id = id
-        self.title = title
-        self.type = type
-        self.playlists = playlists
-    }
-}
-
 // MARK: - Subsonic API response wrappers
 
 private struct SubsonicWrapper<T: Decodable>: Decodable {
