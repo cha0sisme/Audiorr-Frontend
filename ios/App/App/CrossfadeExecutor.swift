@@ -2276,6 +2276,21 @@ class CrossfadeExecutor {
         let bassKillRampStartOverride: Double? = (preRollActive && useBassKill)
             ? preRollStart
             : nil
+        // v15: pre-roll también para band 2 (midScoop) y band 3 (highShelf)
+        // cuando están activas. Misma técnica que v14.11 con bassKill: el
+        // rampStart efectivo se adelanta a preRollStart, la curva del branch
+        // principal arranca con anticipación y entra en filterStartTime ya
+        // con un valor intermedio entre startGain y holdTarget. Continuidad
+        // numérica garantizada (ambos branches evalúan la misma fórmula con
+        // el mismo rampStart efectivo). Bands 0/1 ya tenían anticipación;
+        // bands 2/3 cerraban la cascada entrando de golpe en filterStartTime
+        // y se percibía como "filtros bloque" en lugar de "filtros progresivos".
+        let midScoopRampStartOverride: Double? = (preRollActive && useMidScoop)
+            ? preRollStart
+            : nil
+        let highShelfRampStartOverride: Double? = (preRollActive && useHighShelfCut)
+            ? preRollStart
+            : nil
 
         if preRollActive {
             if t >= preRollStart && t < timings.filterStartTime {
@@ -2317,15 +2332,50 @@ class CrossfadeExecutor {
                     )
                     band1A = band1Pre.coefficient
                 }
-                let band2A: BiquadCoefficients = (useMidScoop ? preset.midScoopA.map {
-                    BiquadCoefficientCalculator.parametric(frequency: $0.frequency, sampleRate: sampleRate, gainDB: $0.startGain, bandwidth: $0.bandwidth)
-                } : nil) ?? .passthrough
-                // v14.02 (R-C): band 3 delegado a DSPFilterManager.
-                let band3A: BiquadCoefficients = DSPFilterManager.highShelfCoefficientA_initial(
-                    useHighShelfCut: useHighShelfCut,
-                    preset: preset.highShelfA,
-                    sampleRate: sampleRate
-                )
+                // v15: band 2 (midScoop) ahora rampea desde preRollStart si está
+                // activa. Evalúa la misma curva del branch principal con rampStart
+                // adelantado, así en filterStartTime el gain ya tiene avance
+                // parcial hacia holdTarget. Si !useMidScoop, queda passthrough.
+                let band2A: BiquadCoefficients
+                if useMidScoop, let ms = preset.midScoopA, let msStart = midScoopRampStartOverride {
+                    let msTotalDur = timings.transitionEndTime - msStart
+                    let msPivot = msStart + msTotalDur * 0.40
+                    let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
+                    var msGain: Float = ms.startGain
+                    if t < msPivot, msPivot > msStart {
+                        let p = Float((t - msStart) / (msPivot - msStart))
+                        msGain = linInterp(ms.startGain, holdTarget, min(1, max(0, p)))
+                    }
+                    band2A = BiquadCoefficientCalculator.parametric(
+                        frequency: ms.frequency, sampleRate: sampleRate,
+                        gainDB: msGain, bandwidth: ms.bandwidth)
+                } else {
+                    band2A = .passthrough
+                }
+                // v15: band 3 (highShelf) ahora rampea desde preRollStart si está
+                // activa. Misma técnica: rampStart adelantado para que el branch
+                // principal arranque ya con avance parcial en filterStartTime.
+                let band3A: BiquadCoefficients
+                if useHighShelfCut, let hsStart = highShelfRampStartOverride {
+                    let hsTotalDur = timings.transitionEndTime - hsStart
+                    let hsPivot = hsStart + hsTotalDur * 0.40
+                    band3A = DSPFilterManager.highShelfCoefficientA(
+                        at: t,
+                        useHighShelfCut: useHighShelfCut,
+                        preset: preset.highShelfA,
+                        rampStart: hsStart,
+                        rampEnd: timings.transitionEndTime,
+                        pivotTime: hsPivot,
+                        totalFilterDur: hsTotalDur,
+                        sampleRate: sampleRate
+                    )
+                } else {
+                    band3A = DSPFilterManager.highShelfCoefficientA_initial(
+                        useHighShelfCut: useHighShelfCut,
+                        preset: preset.highShelfA,
+                        sampleRate: sampleRate
+                    )
+                }
                 dspA.setCoefficients(band0: band0A, band1: band1A, band2: band2A, band3: band3A)
                 diagFreqA = freqA
                 // v14.12 — marcador runtime: el pre-roll branch ejecutó al menos
@@ -2473,15 +2523,23 @@ class CrossfadeExecutor {
         }
 
         // ── Band 2: Mid scoop ──
+        // v15: cuando preRoll fue activo + useMidScoop, rampStart efectivo se
+        // adelanta a preRollStart (override) para que la curva sea continua
+        // con la fase pre-roll que ya evaluó la misma fórmula.
         var band2A: BiquadCoefficients = .passthrough
         if useMidScoop, let ms = preset.midScoopA {
+            let msRampStart = midScoopRampStartOverride ?? rampStart
+            let msTotalDur = rampEnd - msRampStart
+            let msPivot = msRampStart + msTotalDur * 0.40
             var msGain: Float
             let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
-            if t < pivotTime {
-                let p = Float((t - rampStart) / (pivotTime - rampStart))
+            if t < msPivot {
+                let denom = msPivot - msRampStart
+                let p = Float(denom > 0 ? (t - msRampStart) / denom : 1.0)
                 msGain = linInterp(ms.startGain, holdTarget, min(1, p))
             } else {
-                let p = Float((t - pivotTime) / (rampEnd - pivotTime))
+                let denom = rampEnd - msPivot
+                let p = Float(denom > 0 ? (t - msPivot) / denom : 1.0)
                 msGain = linInterp(holdTarget, ms.endGain, min(1, p))
             }
             band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: msGain, bandwidth: ms.bandwidth)
@@ -2492,14 +2550,28 @@ class CrossfadeExecutor {
         // migrada a DSPFilterManager.highShelfCoefficientA. La rama legacy
         // que vivía aquí ha sido eliminada. Único punto de cálculo de
         // band 3 high-shelf A en todo el subsistema.
+        // v15: cuando preRoll fue activo + useHighShelfCut, rampStart efectivo
+        // se adelanta a preRollStart para continuidad con el branch pre-roll.
+        let hsRampStart: Double
+        let hsTotalDur: Double
+        let hsPivot: Double
+        if let hsStart = highShelfRampStartOverride {
+            hsRampStart = hsStart
+            hsTotalDur = rampEnd - hsStart
+            hsPivot = hsStart + hsTotalDur * 0.40
+        } else {
+            hsRampStart = rampStart
+            hsTotalDur = totalFilterDur
+            hsPivot = pivotTime
+        }
         let band3A: BiquadCoefficients = DSPFilterManager.highShelfCoefficientA(
             at: t,
             useHighShelfCut: useHighShelfCut,
             preset: preset.highShelfA,
-            rampStart: rampStart,
+            rampStart: hsRampStart,
             rampEnd: rampEnd,
-            pivotTime: pivotTime,
-            totalFilterDur: totalFilterDur,
+            pivotTime: hsPivot,
+            totalFilterDur: hsTotalDur,
             sampleRate: sampleRate
         )
 
