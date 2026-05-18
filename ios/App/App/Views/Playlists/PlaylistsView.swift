@@ -58,12 +58,16 @@ final class PlaylistsViewModel: ObservableObject {
             // `playlists` (dailyMixes / smartPlaylists / userPlaylists), so
             // they have data the moment getPlaylists() resolves. Skipping
             // this would leave the user looking at downloadsCard alone while
-            // getHomepageLayout() runs. Final assign below preserves original
-            // semantics: backend layout overrides if non-empty, defaults
-            // otherwise — same end-state as before.
+            // the backend layout fetch runs. Final assign below preserves
+            // original semantics: backend layout overrides if non-empty,
+            // defaults otherwise — same end-state as before.
             if sections.isEmpty { sections = defaultSections }
 
-            async let layoutTask = api.getHomepageLayout()
+            // Prefer the per-user ranked layout (affinity-reordered); fall back
+            // to the legacy editorial layout, then to client defaults. The
+            // service handles the fail-soft internally — any empty result
+            // walks the next step in the chain.
+            async let layoutTask = api.loadPlaylistsLayout(username: currentUsername)
             async let hashesTask: Void = api.refreshPlaylistCoverHashes()
             let fetched = await layoutTask
             _ = await hashesTask

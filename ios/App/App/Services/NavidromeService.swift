@@ -240,6 +240,35 @@ final class NavidromeService: ObservableObject {
         return (try? JSONDecoder().decode(Response.self, from: data))?.value ?? []
     }
 
+    /// Fetches the per-user ranked layout from
+    /// `GET /api/user/:username/ranked-layout`. The endpoint returns sections
+    /// with dynamic rows pre-sorted by `rankPredicted` (affinity descending).
+    /// Returns empty array if backend is unavailable, the user has no
+    /// scrobble history, or the response cannot be decoded — caller is
+    /// expected to fall back to `getHomepageLayout()` in that case.
+    func getRankedLayout(username: String) async -> [PlaylistSection] {
+        guard let base = backendURL(),
+              let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(base)/api/user/\(encoded)/ranked-layout") else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return [] }
+        guard let decoded = try? JSONDecoder().decode(RankedLayoutResponse.self, from: data) else { return [] }
+        return decoded.mapToLegacyLayout()
+    }
+
+    /// Layout resolution with affinity-aware fallback chain:
+    ///   1. Per-user ranked layout (affinity-reordered) if available.
+    ///   2. Editorial homepage layout (legacy global) if ranked is empty.
+    ///   3. Caller-side defaults (empty array → caller injects its own).
+    /// Username may be nil during logout/cold-start; in that case skip ranked
+    /// and go straight to the legacy path.
+    func loadPlaylistsLayout(username: String?) async -> [PlaylistSection] {
+        if let username, !username.isEmpty {
+            let ranked = await getRankedLayout(username: username)
+            if !ranked.isEmpty { return ranked }
+        }
+        return await getHomepageLayout()
+    }
+
     // MARK: - Playlists
 
     func getPlaylists() async throws -> [NavidromePlaylist] {

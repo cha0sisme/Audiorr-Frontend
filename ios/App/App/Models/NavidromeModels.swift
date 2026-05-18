@@ -318,6 +318,83 @@ struct PlaylistSection: Decodable, Identifiable {
     }
 }
 
+// MARK: - Ranked layout (GET /api/user/:username/ranked-layout)
+//
+// Per-user affinity-reordered layout. Dynamic sections come with playlists
+// already sorted by `rankPredicted`. Fixed sections (fixed_daily / fixed_user
+// / fixed_smart) come with playlists empty — client resolves them from its
+// own filtered lists (dailyMixes / userPlaylists / smartPlaylists).
+
+struct RankedPlaylistEntry: Decodable {
+    let playlistId: String
+    let playlistName: String?
+    let pinned: Bool?
+    let rankOriginal: Int?
+    let rankPredicted: Int?
+    let score: Double?
+}
+
+struct RankedSection: Decodable {
+    let sectionId: String
+    let title: String
+    let rowType: String        // "fixed_daily" | "fixed_smart" | "fixed_user" | "dynamic"
+    let playlists: [RankedPlaylistEntry]?
+    let note: String?
+}
+
+struct RankedUserProfile: Decodable {
+    let scrobbleCount90d: Int?
+    let confidence: Double?
+}
+
+struct RankedAffinityWeights: Decodable {
+    let genre: Double?
+    let bpm: Double?
+    let energy: Double?
+    let longTerm: Double?
+}
+
+struct RankedLayoutResponse: Decodable {
+    let username: String
+    let computedAt: String?
+    let userProfile: RankedUserProfile?
+    let weights: RankedAffinityWeights?
+    let sections: [RankedSection]
+}
+
+extension RankedLayoutResponse {
+    /// Maps the ranked response to the legacy `PlaylistSection` shape so the
+    /// existing rendering layer needs no change. Dynamic rows preserve the
+    /// backend ordering (playlists already sorted by `rankPredicted`). Fixed
+    /// rows leave `playlists` as nil so the page resolves them from its own
+    /// filtered lists (same path as the legacy layout flow).
+    func mapToLegacyLayout() -> [PlaylistSection] {
+        sections.compactMap { sec in
+            guard let kind = PlaylistSection.SectionType(rawValue: sec.rowType) else {
+                // Unknown rowType: skip the row instead of crashing — backend may
+                // introduce new types over time, the client tolerates them by
+                // dropping the row (rendering keeps working with the rest).
+                return nil
+            }
+            let ids: [String]? = (kind == .dynamic)
+                ? (sec.playlists ?? []).map { $0.playlistId }
+                : nil
+            return PlaylistSection(id: sec.sectionId, title: sec.title, type: kind, playlists: ids)
+        }
+    }
+}
+
+// Needed because PlaylistSection has no public init — synthesised one is
+// internal. We add an init for the mapper above.
+extension PlaylistSection {
+    init(id: String, title: String, type: SectionType, playlists: [String]?) {
+        self.id = id
+        self.title = title
+        self.type = type
+        self.playlists = playlists
+    }
+}
+
 // MARK: - Subsonic API response wrappers
 
 private struct SubsonicWrapper<T: Decodable>: Decodable {
