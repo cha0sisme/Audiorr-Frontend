@@ -2285,11 +2285,20 @@ class CrossfadeExecutor {
         // el mismo rampStart efectivo). Bands 0/1 ya tenían anticipación;
         // bands 2/3 cerraban la cascada entrando de golpe en filterStartTime
         // y se percibía como "filtros bloque" en lugar de "filtros progresivos".
+        //
+        // v15 escalonado: el rampStart efectivo de bands 2 y 3 incluye un
+        // desfase de 150 ms y 300 ms respectivamente sobre preRollStart cuando
+        // preRollDur >= 0.6 s. Reproduce la cascada DJ típica (HPF/bassKill
+        // primero, midScoop después, highShelf último) en lugar de bloque
+        // simultáneo. Bands 0 y 1 conservan preRollStart sin desfase para no
+        // tocar el alineado con downbeat ni los fixes ya validados.
+        let cascadeOffsetMidScoop: Double = preRollDur >= 0.6 ? 0.150 : 0
+        let cascadeOffsetHighShelf: Double = preRollDur >= 0.6 ? 0.300 : 0
         let midScoopRampStartOverride: Double? = (preRollActive && useMidScoop)
-            ? preRollStart
+            ? preRollStart + cascadeOffsetMidScoop
             : nil
         let highShelfRampStartOverride: Double? = (preRollActive && useHighShelfCut)
-            ? preRollStart
+            ? preRollStart + cascadeOffsetHighShelf
             : nil
 
         if preRollActive {
