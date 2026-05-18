@@ -877,14 +877,15 @@ class CrossfadeExecutor {
             || config.transitionType == .sequential {
             filterLead = 0
         } else {
-            // v13.O.3: extendido de min(1.5, * 0.2) → min(2.5, * 0.35). El sweep
-            // de filtros arranca antes del volume fade-out, dando al oído margen
-            // perceptual para acomodarse al cambio espectral mientras A todavía
-            // suena fuerte. Quote textual del director: "si nos anticipamos un
-            // poco y los aplicamos poco a poco". Invariante swap preservada:
-            // duration = config.fadeDuration es independiente de filterLead;
-            // gainForPlayerA(progress=1.0) sigue dando 0 (ver Timings:782).
-            filterLead = config.useFilters ? min(2.5, config.fadeDuration * 0.35) : 0
+            // v15: cap subido 2.5 → 3.5 s, multiplicador 0.35 → 0.32. Para fades
+            // largos (≥ 8 s) el cap antiguo recortaba la ventana espectral antes
+            // de tiempo. El nuevo cap aprovecha la duración disponible sin entrar
+            // en la zona de A todavía expuesto (los filtros audibles arrancan
+            // después del 50 % del filterLead transcurrido).
+            // Invariante swap preservada: duration = config.fadeDuration es
+            // independiente de filterLead; gainForPlayerA(progress=1.0) sigue
+            // dando 0 (ver Timings:782).
+            filterLead = config.useFilters ? min(3.5, config.fadeDuration * 0.32) : 0
         }
 
         // FadeOut = fadeDuration (1:1). No multiplier — A disappears cleanly
