@@ -435,6 +435,15 @@ class CrossfadeExecutor {
     private var lastLogTime: Double = 0
     private var lastTickTime: Double = 0
     private var foregroundObserver: Any?
+    /// v15 — Estado de la rampa de rateB. timePitchB se asigna directamente
+    /// al rate objetivo en versiones anteriores; el transitorio audible del
+    /// AVAudioUnitTimePitch correlacionaba con el "click" perceptual en
+    /// transiciones beat-matched. La rampa cosSquared 1.0 → config.rateB
+    /// durante 250 ms terminando 300 ms antes de fadeInStartTime mantiene
+    /// el delay-line del AU limpio antes de que mixerB abra.
+    private var rateBRampActive = false
+    private var rateBRampStart: Double = 0
+    private var rateBRampEnd: Double = 0
     /// Diagnostic tracking: current filter parameter values (for logging, not audio-critical)
     private var diagFreqA: Float = 20
     private var diagFreqB: Float = 20
@@ -1099,11 +1108,32 @@ class CrossfadeExecutor {
             print("[CrossfadeExecutor] Time-stretch OFF")
             return
         }
-        // Set initial rates — B starts at target rate immediately,
-        // A ramps gradually during the crossfade (handled in filterTick).
-        timePitchA?.rate = 1.0  // A starts at normal rate, ramps toward config.rateA
-        timePitchB?.rate = config.rateB
-        print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B=\(String(format: "%.3f", config.rateB))")
+        // A starts at normal rate, ramps toward config.rateA during the fade
+        // (handled in filterTick).
+        timePitchA?.rate = 1.0
+
+        // v15 — rampa cosSquared para rateB. La asignación abrupta de
+        // timePitchB.rate ≠ 1.0 provocaba un transitorio audible del
+        // AVAudioUnitTimePitch que correlacionaba con la queja "click en
+        // playerA" en transiciones beat-matched (rateB ≠ 1). Cuando hay
+        // margen suficiente (filterLead >= 0.6) y el rate está fuera de la
+        // zona muerta (|rateB-1| >= 0.02), rampear de 1.0 a config.rateB
+        // durante 250 ms terminando 300 ms antes de fadeInStartTime. Toda
+        // la rampa cae con mixerB.outputVolume = 0 (no audible) y deja al
+        // AU asentado antes de que mixerB empiece a abrir.
+        let rateBDelta = abs(config.rateB - 1.0)
+        let hasRampMargin = timings.filterLead >= 0.6
+        if rateBDelta >= 0.02 && hasRampMargin {
+            timePitchB?.rate = 1.0
+            rateBRampEnd = timings.fadeInStartTime - 0.30
+            rateBRampStart = rateBRampEnd - 0.25
+            rateBRampActive = true
+            print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B 1.0→\(String(format: "%.3f", config.rateB)) ramp@[\(String(format: "%.2f", rateBRampStart - timings.startTime)),\(String(format: "%.2f", rateBRampEnd - timings.startTime))]s")
+        } else {
+            timePitchB?.rate = config.rateB
+            rateBRampActive = false
+            print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B=\(String(format: "%.3f", config.rateB)) (sin rampa, delta<0.02 o filterLead<0.6)")
+        }
     }
 
     private func resetTimeStretch() {
@@ -2144,6 +2174,24 @@ class CrossfadeExecutor {
             let panAmount: Float = 0.08 * panProgress
             mixerA.pan = -panAmount  // A slightly left
             mixerB.pan = panAmount   // B slightly right
+        }
+
+        // ── v15: rate B ramp ──
+        // Si la rampa está activa, interpolar rate de B con cosSquared sobre
+        // [rateBRampStart, rateBRampEnd]. Llega al config.rateB final antes
+        // de que mixerB empiece a abrir en fadeInStartTime. Después de rampEnd,
+        // se asegura el valor final para evitar drift por dropped ticks.
+        if rateBRampActive, let tpB = timePitchB {
+            if t >= rateBRampEnd {
+                if tpB.rate != config.rateB {
+                    tpB.rate = config.rateB
+                }
+            } else if t >= rateBRampStart {
+                let denom = rateBRampEnd - rateBRampStart
+                let p = Float(denom > 0 ? min(1, max(0, (t - rateBRampStart) / denom)) : 1)
+                let cosP = 0.5 * (1 - cos(Float.pi * p))
+                tpB.rate = 1.0 + (config.rateB - 1.0) * cosP
+            }
         }
 
         // ── Filter automation (always active on both players) ──
