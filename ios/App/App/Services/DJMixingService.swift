@@ -3730,6 +3730,16 @@ enum DJMixingService {
             reason = "[F5b retirar STEM_MIX → SEQUENTIAL] " + reason
         }
 
+        // v15: defensa CUT_A_FADE_IN_B con energyB muy baja. Cuando el tipo
+        // queda en cutAFadeInB pero B viene con energy < 0.10 (intro casi
+        // inaudible), el fade-in de B no tiene cuerpo que sostener — A corta
+        // sin contraparte audible. Degradar a SEQUENTIAL deja que A acabe
+        // natural y B arranque desde t=0 con su propio dinámica.
+        if type == .cutAFadeInB && profile.energyB < 0.10 {
+            type = .sequential
+            reason = "[v15 energyB<0.10 en CUT_A_FADE_IN_B → SEQUENTIAL] " + reason
+        }
+
         // Record the final type for cooldown bookkeeping. Done at the end so the
         // safety overrides above (polirritmia, vocal trainwreck) are also tracked.
         recordTransition(type)
