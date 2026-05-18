@@ -663,8 +663,10 @@ class AudioEngineManager {
 
         let wasPlaying = isPlaying
         playerA.stop()
-        // Reset DSP delay lines to prevent click/artifact from stale filter state
-        dspNodeA.reset()
+        // v14.h — resetSync drena coefs y delay-line sin depender del render
+        // thread (playerA.stop() ya lo paró). Mismo patrón que el resetSync
+        // post-swap en CrossfadeExecutor.completeCrossfade.
+        dspNodeA.resetSync()
 
         // Marcar timestamp de seek para bloquear automix nativo brevemente
         lastSeekTime = CFAbsoluteTimeGetCurrent()
@@ -751,8 +753,11 @@ class AudioEngineManager {
         stopStreamPlayer()
         playerA.stop()
         playerB.stop()
-        dspNodeA.reset()
-        dspNodeB.reset()
+        // v14.h — resetSync en stop() por simetría con seek (línea 667). Los
+        // players ya están parados; no hay render thread que drene coefs vía
+        // fade-out; resetSync hace snap atómico desde MainActor.
+        dspNodeA.resetSync()
+        dspNodeB.resetSync()
         isPlaying = false
         isCrossfading = false
         currentFile = nil
