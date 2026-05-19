@@ -1379,14 +1379,7 @@ struct TransitionDetailSheet: View {
                     : "0.0s")
             ])
 
-            techBlock(title: "BPM / Beat", rows: [
-                ("BPM A → B", String(format: "%.1f → %.1f", record.bpmA, record.bpmB)),
-                ("Diff", record.bpmA > 0 && record.bpmB > 0 ? String(format: "%.1f", abs(record.bpmA - record.bpmB)) : "—"),
-                ("Synced", record.beatSynced ? "Yes" : "No"),
-                ("Time stretch", record.timeStretched
-                    ? String(format: "rateA=%.3f rateB=%.3f", record.rateA, record.rateB)
-                    : "Off")
-            ])
+            techBlock(title: "BPM / Beat", rows: bpmRows)
 
             effectsCard
 
@@ -1398,6 +1391,30 @@ struct TransitionDetailSheet: View {
                 ("ReplayGain A/B", String(format: "%.2f / %.2f", record.replayGainA, record.replayGainB))
             ])
 
+            if !bIntroRows.isEmpty {
+                techBlock(title: "Análisis B (entry)", rows: bIntroRows)
+            }
+
+            if !aOutroRows.isEmpty {
+                techBlock(title: "Análisis A (outro)", rows: aOutroRows)
+            }
+
+            if !filterRuntimeRows.isEmpty {
+                techBlock(title: "Filtros runtime", rows: filterRuntimeRows)
+            }
+
+            if !antiClickRows.isEmpty {
+                techBlock(title: "Anti-click telemetría", rows: antiClickRows)
+            }
+
+            if !bInitRows.isEmpty {
+                techBlock(title: "B init / bass-kill / overlap", rows: bInitRows)
+            }
+
+            if !rateBRows.isEmpty {
+                techBlock(title: "Rate B + gates v15", rows: rateBRows)
+            }
+
             techBlock(title: "Telemetría perceptual", rows: perceptualRows)
 
             techBlock(title: "Géneros B", rows: [
@@ -1405,6 +1422,7 @@ struct TransitionDetailSheet: View {
             ])
 
             techBlock(title: "Trazabilidad", rows: [
+                ("algorithmVersion", record.algorithmVersion ?? "—"),
                 ("buildId", record.buildId ?? "—"),
                 ("sessionId", record.sessionId?.uuidString.prefix(8).description ?? "—"),
                 ("recordId", record.id.uuidString.prefix(8).description),
@@ -1412,6 +1430,109 @@ struct TransitionDetailSheet: View {
                 ("deletedAt (comment)", record.deletedAt.map { $0.formatted(.dateTime.day().month().hour().minute()) } ?? "—")
             ])
         }
+    }
+
+    /// BPM con dos decimales en vez de uno. El `%.1f` previo enmascaraba pares
+    /// cuyas BPMs eran casi idénticas pero no exactas (87.50 vs 87.49) — ambos
+    /// se renderizaban como "87.5 → 87.5" y daba la falsa impresión de que el
+    /// algoritmo no distinguía BPMs. Además el caso "idénticos" se renderiza
+    /// como una sola línea explícita en vez del "A → B" formal.
+    private var bpmRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        let a = record.bpmA, b = record.bpmB
+        let valid = a > 0 && b > 0
+        if valid && abs(a - b) < 0.01 {
+            rows.append(("BPM idénticos", String(format: "%.2f", a)))
+        } else if valid {
+            rows.append(("BPM A → B", String(format: "%.2f → %.2f", a, b)))
+            rows.append(("Diff", String(format: "%.2f", abs(a - b))))
+        } else {
+            rows.append(("BPM A → B", String(format: "%.2f → %.2f", a, b)))
+            rows.append(("Diff", "—"))
+        }
+        rows.append(("Synced", record.beatSynced ? "Yes" : "No"))
+        rows.append(("Time stretch", record.timeStretched
+            ? String(format: "rateA=%.3f rateB=%.3f", record.rateA, record.rateB)
+            : "Off"))
+        return rows
+    }
+
+    /// Calidad del punto de entrada en B (vocalStart, chorusStart, intro,
+    /// downbeats). Las rows sólo aparecen si el backend rellenó el campo —
+    /// records pre-v14.g no los tienen y mostrar "—" sería ruido.
+    private var bIntroRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let v = record.vocalStartTimeB { rows.append(("vocalStartB", String(format: "%.1fs", v))) }
+        if let c = record.chorusStartTimeB { rows.append(("chorusStartB", String(format: "%.1fs", c))) }
+        if let h = record.introEndHeuristicB { rows.append(("introEndHeurB", String(format: "%.1fs", h))) }
+        if let s = record.introSlopeB { rows.append(("introSlopeB", String(format: "%.4f /s", s))) }
+        if let d = record.downbeatDensityB20s { rows.append(("downbeatDensB20s", String(format: "%.2f", d))) }
+        if let eIntro = record.energyIntroB_telemetry { rows.append(("energyIntroB[0..15s]", String(format: "%.3f", eIntro))) }
+        return rows
+    }
+
+    /// Calidad del outro de A (energía residual, slope, tail curve).
+    private var aOutroRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let e = record.outroEnergyA { rows.append(("outroEnergyA", String(format: "%.3f", e))) }
+        if let r = record.rmsTailCurveA_last { rows.append(("rmsTailCurve last", String(format: "%.3f", r))) }
+        if let s = record.rmsTailSlopeA { rows.append(("rmsTailSlope", String(format: "%.4f /s", s))) }
+        if let h = record.highShelfGainA_atEnd { rows.append(("highShelfA @end", String(format: "%.2f dB", h))) }
+        return rows
+    }
+
+    /// Estado de filtros en tiempo real: ventana de filterLead, pre-roll por
+    /// banda. Útil para auditar si los vectores anti-click dispararon en este
+    /// record concreto.
+    private var filterRuntimeRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let f = record.filterLead { rows.append(("filterLead", String(format: "%.2fs", f))) }
+        if let p = record.filterLeadPreCap { rows.append(("filterLead pre-cap", String(format: "%.2fs", p))) }
+        if let c = record.filterLeadCapApplied { rows.append(("filterLead capped", c ? "Yes" : "No")) }
+        if let a = record.filterPreRollAppliedA { rows.append(("preRoll A (gate)", a ? "Yes" : "No")) }
+        if let e = record.filterPreRollEffectiveA { rows.append(("preRoll A (run)", e ? "Yes" : "No")) }
+        if let m = record.midScoopPreRollApplied { rows.append(("midScoop preRoll", m ? "Yes" : "No")) }
+        if let h = record.highShelfPreRollApplied { rows.append(("highShelf preRoll", h ? "Yes" : "No")) }
+        return rows
+    }
+
+    /// Telemetría del kernel DSP enfocada al click "bug filtros". Confirma
+    /// si el gate fade-in disparó (passthrough→activo o activo→activo v15.b)
+    /// y mide el peak transient de cada lado en una ventana de ~85 ms.
+    private var antiClickRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let t = record.fadeInTriggeredA { rows.append(("fade-in A", t ? "Yes" : "No")) }
+        if let t = record.fadeInTriggeredB { rows.append(("fade-in B", t ? "Yes" : "No")) }
+        if let p = record.peakTransientDeltaA { rows.append(("peakTransientA", String(format: "%.4f", p))) }
+        if let p = record.peakTransientDeltaB { rows.append(("peakTransientB", String(format: "%.4f", p))) }
+        if let c = record.coefMagB_atSetup { rows.append(("coefMagB @setup", String(format: "%.4f", c))) }
+        return rows
+    }
+
+    /// Snapshot inicial de B (low-shelf gain, hpFreq) + telemetría de overlap
+    /// vocal entre A y B + bassProminence en los primeros 15 s.
+    private var bInitRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let ls = record.lsGainB_initial { rows.append(("lsGainB init", String(format: "%.2f dB", ls))) }
+        if let hp = record.hpFreqB_initial { rows.append(("hpFreqB init", String(format: "%.1f Hz", hp))) }
+        if let bp = record.bassProminenceB_0_15s { rows.append(("bassProminenceB", String(format: "%.3f", bp))) }
+        if let r = record.vocalOverlapRiskCode { rows.append(("vocalOverlapRisk", r)) }
+        if let bk = record.bassKillGainA_atSwap { rows.append(("bassKillA @swap", String(format: "%.2f dB", bk))) }
+        if let bk = record.bassKillGainA_atVolumeFadeStart { rows.append(("bassKillA @volFade", String(format: "%.2f dB", bk))) }
+        if let bk = record.bassKillGainA_atRampStart { rows.append(("bassKillA @rampStart", String(format: "%.2f dB", bk))) }
+        return rows
+    }
+
+    /// Rampa rate B + gates añadidos en v15 (defensa Vector D, decay natural).
+    /// Sólo aparece si alguno de los signals está presente.
+    private var rateBRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let r = record.rateBRampActive { rows.append(("rateB ramp", r ? "Active" : "Off")) }
+        if let s = record.rateBRampStartRel { rows.append(("rateB ramp start", String(format: "%.2fs", s))) }
+        if let e = record.rateBRampEndRel { rows.append(("rateB ramp end", String(format: "%.2fs", e))) }
+        if let s = record.sequentialOverrideByVectorD { rows.append(("Vector D override", s ? "Yes" : "No")) }
+        if let n = record.aNaturalDecayActive { rows.append(("A natural decay", n ? "Active" : "Off")) }
+        return rows
     }
 
     /// Card "Filtros y efectos" con cada bandera activa renderizada como pill
