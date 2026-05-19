@@ -69,6 +69,20 @@ final class BiquadDSPKernel {
     /// == passthrough and the gate never fires.
     private var fadeinFramesRemaining: Int = 0
     private var fadeinTargetCoefs: [BiquadCoefficients] = Array(repeating: .passthrough, count: filterCount)
+    /// v15.b — Source coefficients for the fade-in lerp. Symmetric counterpart
+    /// to `fadeinTargetCoefs`. Set to `.passthrough` when the gate fires from
+    /// the passthrough→activo path (v14.c original); set to the live
+    /// `coefficients[i]` snapshot when the gate fires from the activo→activo
+    /// path (v15.b new, for the preRoll first-tick step 400Hz→20Hz click).
+    private var fadeinFromCoefs: [BiquadCoefficients] = Array(repeating: .passthrough, count: filterCount)
+    /// v15.b — Threshold for the activo→activo gate. Euclidean norm of
+    /// (newCoefs − currentCoefs) over (b0,b1,b2,a1,a2). Calibrated analytically:
+    /// typical tick-a-tick delta in the preRoll sweep is 0.002–0.008 (peak ~0.01
+    /// in the steepest segment); the buggy step 400Hz→20Hz is ~0.089, 600Hz→20Hz
+    /// ~0.13, 800Hz→20Hz ~0.17, 200Hz→20Hz ~0.045. 0.03 sits 3× above the tick-pico
+    /// and 1.5× below the smallest non-CUT step, so it disparará el gate solo en
+    /// el primer tick del preRoll y nunca durante el sweep continuo.
+    private static let activeToActiveDeltaThreshold: Float = 0.03
     /// 1024 frames ≈ 21.3 ms @ 48 kHz / 23.2 ms @ 44.1 kHz. Larger than the
     /// fade-out window (512) on purpose: a filterTick lands every ~16.7 ms,
     /// so 1024 absorbs the first incoming tick — `updateCoefficients` arriving
@@ -175,6 +189,10 @@ final class BiquadDSPKernel {
         if currentIsAllPassthrough && anyPendingIsActive {
             // Fire fade-in. Stage the target coefs; the render thread will
             // interpolate from `.passthrough` toward them over 1024 frames.
+            fadeinFromCoefs[0] = .passthrough
+            fadeinFromCoefs[1] = .passthrough
+            fadeinFromCoefs[2] = .passthrough
+            fadeinFromCoefs[3] = .passthrough
             fadeinTargetCoefs[0] = band0
             fadeinTargetCoefs[1] = band1
             fadeinTargetCoefs[2] = band2
@@ -194,6 +212,45 @@ final class BiquadDSPKernel {
             transientCaptureFramesRemaining = Self.transientCaptureFramesTotal
             os_unfair_lock_unlock(&lock)
             return
+        }
+
+        // v15.b — Activo→activo gate. El path passthrough→activo de v14.c sólo
+        // protege la primera vez que se plantan coefs activos tras un reset.
+        // El bug del click sobreviviente vive un paso después: setupInitialEQ
+        // planta highpass(preset.startFreq ≈ 400Hz) en band 0 → gate v14.c
+        // dispara y suaviza desde passthrough. Durante ~anticipationTime el
+        // kernel renderiza A con highpass 400Hz cargando z1/z2. Llega el primer
+        // tick del preRoll branch (CrossfadeExecutor.swift:2470) y planta
+        // highpass(20Hz) — salto masivo de polos. Sin esta rama caería al
+        // fall-through hasPending y el render thread sustituiría coefs en un
+        // único buffer sobre delay-line cargada → click. La rama dispara fade-in
+        // de 1024 frames desde los coefs vivos hacia los nuevos cuando la norma
+        // euclídea del salto supera el umbral. Sólo activa con
+        // fadeoutFramesRemaining == 0 para no pisar un reset() en vuelo.
+        if fadeoutFramesRemaining == 0 {
+            let d0 = Self.coefDelta(coefficients[0], band0)
+            let d1 = Self.coefDelta(coefficients[1], band1)
+            let d2 = Self.coefDelta(coefficients[2], band2)
+            let d3 = Self.coefDelta(coefficients[3], band3)
+            let maxDelta = max(max(d0, d1), max(d2, d3))
+            if maxDelta > Self.activeToActiveDeltaThreshold {
+                fadeinFromCoefs[0] = coefficients[0]
+                fadeinFromCoefs[1] = coefficients[1]
+                fadeinFromCoefs[2] = coefficients[2]
+                fadeinFromCoefs[3] = coefficients[3]
+                fadeinTargetCoefs[0] = band0
+                fadeinTargetCoefs[1] = band1
+                fadeinTargetCoefs[2] = band2
+                fadeinTargetCoefs[3] = band3
+                fadeinFramesRemaining = Self.fadeinFramesTotal
+                fadeinDidTriggerSinceLastReset = true
+                hasPending = false
+                transientPeakDelta = 0
+                for ch in 0..<Self.maxChannels { transientLastSample[ch] = 0 }
+                transientCaptureFramesRemaining = Self.transientCaptureFramesTotal
+                os_unfair_lock_unlock(&lock)
+                return
+            }
         }
 
         pendingCoefficients[0] = band0
@@ -218,6 +275,19 @@ final class BiquadDSPKernel {
         return c.b0 == 1 && c.b1 == 0 && c.b2 == 0 && c.a1 == 0 && c.a2 == 0
     }
 
+    /// v15.b — Euclidean norm over the 5 normalized coefficients. Used by the
+    /// activo→activo gate to detect coefficient steps large enough to produce
+    /// an audible click when applied discretely over a loaded delay-line.
+    @inline(__always)
+    private static func coefDelta(_ a: BiquadCoefficients, _ b: BiquadCoefficients) -> Float {
+        let db0 = a.b0 - b.b0
+        let db1 = a.b1 - b.b1
+        let db2 = a.b2 - b.b2
+        let da1 = a.a1 - b.a1
+        let da2 = a.a2 - b.a2
+        return sqrt(db0*db0 + db1*db1 + db2*db2 + da1*da1 + da2*da2)
+    }
+
     // MARK: - Render thread API
 
     /// Process audio buffers in-place through 4 cascaded biquad filters.
@@ -232,17 +302,21 @@ final class BiquadDSPKernel {
         // Try to pick up pending coefficients (non-blocking)
         if os_unfair_lock_trylock(&lock) {
             if fadeinFramesRemaining > 0 {
-                // v14.c — Fade-in in flight: interpolate from passthrough toward
-                // the staged target over 1024 frames. Progress at END of buffer
-                // matches the fade-out convention. When the counter drains, snap
-                // to the exact target so subsequent filterTicks rampean desde
-                // ahí sin escalón. No `needsStateReset` here: delay lines are
-                // already clean (we came from passthrough; nothing to flush).
+                // v14.c / v15.b — Fade-in in flight: interpolate from
+                // `fadeinFromCoefs` toward the staged target over 1024 frames.
+                // In the v14.c passthrough→activo path `fadeinFromCoefs` was
+                // staged as `.passthrough` (delay lines are already clean,
+                // nothing to flush). In the v15.b activo→activo path it was
+                // staged as the live coefficients snapshot at the moment the
+                // gate fired (delay lines stay valid because the filter never
+                // stopped being active — the lerp morphs the transfer function
+                // continuously across the step). No `needsStateReset` in either
+                // case. Progress at END of buffer matches the fade-out convention.
                 let framesInThisBuffer = min(Int(frameCount), fadeinFramesRemaining)
                 let total = Self.fadeinFramesTotal
                 let progressEnd = Float(total - (fadeinFramesRemaining - framesInThisBuffer)) / Float(total)
                 for i in 0..<Self.filterCount {
-                    coefficients[i] = BiquadCoefficients.lerp(.passthrough, fadeinTargetCoefs[i], progressEnd)
+                    coefficients[i] = BiquadCoefficients.lerp(fadeinFromCoefs[i], fadeinTargetCoefs[i], progressEnd)
                 }
                 fadeinFramesRemaining -= framesInThisBuffer
                 if fadeinFramesRemaining <= 0 {
@@ -379,6 +453,7 @@ final class BiquadDSPKernel {
             pendingCoefficients[i] = .passthrough
             fadeoutStartCoefs[i] = .passthrough
             fadeinTargetCoefs[i] = .passthrough
+            fadeinFromCoefs[i] = .passthrough
         }
         hasPending = false
         fadeoutFramesRemaining = 0
@@ -427,6 +502,7 @@ final class BiquadDSPKernel {
         for i in 0..<Self.filterCount {
             fadeoutStartCoefs[i] = coefficients[i]
             pendingCoefficients[i] = .passthrough
+            fadeinFromCoefs[i] = .passthrough
         }
         // pending is redundant with the fade — the fade itself ends in passthrough
         hasPending = false
