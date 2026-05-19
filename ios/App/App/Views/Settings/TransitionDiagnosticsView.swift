@@ -1391,28 +1391,30 @@ struct TransitionDetailSheet: View {
                 ("ReplayGain A/B", String(format: "%.2f / %.2f", record.replayGainA, record.replayGainB))
             ])
 
-            if !bIntroRows.isEmpty {
-                techBlock(title: "Análisis B (entry)", rows: bIntroRows)
-            }
-
-            if !aOutroRows.isEmpty {
-                techBlock(title: "Análisis A (outro)", rows: aOutroRows)
-            }
-
-            if !filterRuntimeRows.isEmpty {
-                techBlock(title: "Filtros runtime", rows: filterRuntimeRows)
-            }
-
-            if !antiClickRows.isEmpty {
-                techBlock(title: "Anti-click telemetría", rows: antiClickRows)
-            }
-
-            if !bInitRows.isEmpty {
-                techBlock(title: "B init / bass-kill / overlap", rows: bInitRows)
-            }
-
-            if !rateBRows.isEmpty {
-                techBlock(title: "Rate B + gates v15", rows: rateBRows)
+            // Group envolvente: SwiftUI @ViewBuilder soporta hasta 10 children
+            // directos por contenedor. Sin este Group el VStack padre llegaría
+            // a 14 elementos y el type-checker tarda demasiado o falla en el
+            // archive de Xcode Cloud ("Preparing build for App Store Connect
+            // failed" sin error específico).
+            Group {
+                if !bIntroRows.isEmpty {
+                    techBlock(title: "Análisis B (entry)", rows: bIntroRows)
+                }
+                if !aOutroRows.isEmpty {
+                    techBlock(title: "Análisis A (outro)", rows: aOutroRows)
+                }
+                if !filterRuntimeRows.isEmpty {
+                    techBlock(title: "Filtros runtime", rows: filterRuntimeRows)
+                }
+                if !antiClickRows.isEmpty {
+                    techBlock(title: "Anti-click telemetría", rows: antiClickRows)
+                }
+                if !bInitRows.isEmpty {
+                    techBlock(title: "B init / bass-kill / overlap", rows: bInitRows)
+                }
+                if !rateBRows.isEmpty {
+                    techBlock(title: "Rate B + gates v15", rows: rateBRows)
+                }
             }
 
             techBlock(title: "Telemetría perceptual", rows: perceptualRows)
