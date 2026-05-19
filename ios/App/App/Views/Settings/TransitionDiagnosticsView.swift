@@ -87,11 +87,9 @@ struct TransitionHistoryView: View {
     @State private var offset = 0
     private let pageSize = 50
 
-    @State private var searchText = ""
-    @State private var debouncedSearch = ""
-    @State private var searchDebounceTask: Task<Void, Never>?
-
-    @State private var selectedFilter: HistoryFilter = .all
+    /// Filtro principal por versión de algoritmo. `nil` = todas las versiones.
+    /// La versión seleccionada gobierna el server-side fetch + agregados de stats.
+    @State private var selectedVersion: String? = nil
     @State private var unratedCount: Int = 0
 
     @State private var airpodsConnected: Bool = false
@@ -104,43 +102,29 @@ struct TransitionHistoryView: View {
     /// hace prepend en la lista local — evita tener que salir/volver a la view.
     @State private var diag = TransitionDiagnostics.shared
 
-    enum HistoryFilter: Int, Hashable, Identifiable, CaseIterable {
-        case all = 0
-        case unrated = 1
-        case low = 2       // 1-3
-        case mid = 3       // 4-6
-        case high = 4      // 7-10
-        case diamonds = 5  // 10
+    /// Resumen de una versión de algoritmo presente en el catálogo cargado.
+    /// El conteo se deriva de la sumatoria de `transitionCount` de las sesiones
+    /// que comparten esa `algorithmVersion` — coincide con lo que el backend
+    /// devolvería con un filtro `algorithmVersion=v15.b`. Las versiones sin
+    /// label (`nil`) se agrupan bajo "Sin versión" para no perder records.
+    struct VersionStat: Hashable, Identifiable {
+        let version: String
+        let count: Int
+        let mostRecent: Date
+        var id: String { version }
+    }
 
-        var id: Int { rawValue }
-
-        var label: String {
-            switch self {
-            case .all: return "Todas"
-            case .unrated: return "Sin valorar"
-            case .low: return "1–3"
-            case .mid: return "4–6"
-            case .high: return "7–10"
-            case .diamonds: return "Diamonds"
-            }
-        }
-
-        var systemImage: String? {
-            switch self {
-            case .diamonds: return "diamond.fill"
-            default: return nil
-            }
-        }
-
-        var tint: Color {
-            switch self {
-            case .all: return .accentColor
-            case .unrated: return .red
-            case .low: return Color(red: 0.85, green: 0.40, blue: 0.40)
-            case .mid: return .yellow
-            case .high: return .green
-            case .diamonds: return .cyan
-            }
+    /// Agregados de stats para el KPI dashboard. Calculados sobre el subset de
+    /// sesiones que coinciden con la versión seleccionada (o todas si nil).
+    struct StatsAggregates {
+        let total: Int
+        let rated: Int
+        let unrated: Int
+        let meanRating: Double?
+        let diamonds: Int
+        var ratedPct: Int {
+            guard total > 0 else { return 0 }
+            return Int((Double(rated) / Double(total) * 100).rounded())
         }
     }
 
@@ -149,30 +133,19 @@ struct TransitionHistoryView: View {
             Color(UIColor.systemGroupedBackground).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                searchBar
+                statsDashboard
                     .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 4)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
 
-                filterChips
-                    .padding(.bottom, 4)
+                versionChips
+                    .padding(.bottom, 6)
 
                 if airpodsConnected && unratedCount > 0 {
                     airpodsBanner
                         .padding(.horizontal, 16)
                         .padding(.bottom, 6)
                         .transition(.move(edge: .top).combined(with: .opacity))
-                }
-
-                if !debouncedSearch.isEmpty {
-                    HStack {
-                        Text("Resultado: \(totalCount) transición\(totalCount == 1 ? "" : "es")")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 4)
                 }
 
                 listContent
@@ -184,9 +157,6 @@ struct TransitionHistoryView: View {
         .task {
             await loadSessions()
             await loadUnratedCount()
-        }
-        .onChange(of: searchText) { _, newValue in
-            scheduleSearchDebounce(query: newValue)
         }
         // Reactividad en tiempo real: cuando el singleton inserta un record
         // nuevo (publishCompletion → history.insert(at: 0)), aparece arriba sin
@@ -213,40 +183,115 @@ struct TransitionHistoryView: View {
 
     // MARK: - Subviews
 
-    private var searchBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Buscar canción…", text: $searchText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !searchText.isEmpty {
-                Button {
-                    searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-            }
+    /// Dashboard 2x2 con 4 KPIs (Mean, Total, Diamonds, Cobertura) calculados
+    /// sobre el subset activo (todas las sesiones o solo las de la versión
+    /// seleccionada). Mismo lenguaje visual que `DiagnosticsKPI.svelte` de
+    /// Audiorr-web: número grande + label uppercase + delta vs período previo.
+    /// El delta compara la versión activa contra la inmediatamente anterior
+    /// (orden por `mostRecent` desc). Si no hay versión previa, delta = nil.
+    private var statsDashboard: some View {
+        let agg = aggregates
+        let deltas = aggregateDeltas
+        return LazyVGrid(
+            columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            KPICard(
+                kicker: "MEAN",
+                label: "Mean rating",
+                value: agg.meanRating.map { String(format: "%.2f", $0) } ?? "—",
+                delta: deltas.meanRating,
+                deltaDecimals: 2,
+                tint: .accentColor
+            )
+            KPICard(
+                kicker: "TOTAL",
+                label: "Transiciones",
+                value: "\(agg.total)",
+                delta: deltas.total.map { Double($0) },
+                deltaDecimals: 0,
+                tint: .mint
+            )
+            KPICard(
+                kicker: "GEMS",
+                label: "Diamonds",
+                value: "\(agg.diamonds)",
+                delta: deltas.diamonds.map { Double($0) },
+                deltaDecimals: 0,
+                tint: .yellow
+            )
+            KPICard(
+                kicker: "COBERTURA",
+                label: agg.unrated > 0 ? "Valoradas · \(agg.unrated) sin valorar" : "Valoradas",
+                value: "\(agg.ratedPct)%",
+                delta: deltas.ratedPct.map { Double($0) },
+                deltaDecimals: 0,
+                deltaUnit: "%",
+                tint: .pink
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+    /// Chips horizontales con las versiones de algoritmo presentes en el
+    /// catálogo cargado. Por defecto mostramos solo las 6 más recientes
+    /// (ordenadas por `mostRecent` desc) para no abrumar — el director ha
+    /// trabajado decenas de versiones y cargarlas todas pierde el foco.
+    /// El primer chip es siempre "Todas" (selectedVersion=nil). Si hay más
+    /// de 6 versiones, un último chip "+N" abre un menú con el resto.
+    private var versionChips: some View {
+        let stats = availableVersions
+        let visible = Array(stats.prefix(6))
+        let overflow = Array(stats.dropFirst(6))
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(HistoryFilter.allCases) { filter in
-                    FilterChip(
-                        filter: filter,
-                        isSelected: selectedFilter == filter,
-                        unratedBadge: filter == .unrated && unratedCount > 0 ? unratedCount : nil
+                VersionChip(
+                    label: "Todas",
+                    count: stats.reduce(0) { $0 + $1.count },
+                    isSelected: selectedVersion == nil,
+                    tint: .accentColor
+                ) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        selectedVersion = nil
+                    }
+                }
+                ForEach(visible) { stat in
+                    VersionChip(
+                        label: stat.version,
+                        count: stat.count,
+                        isSelected: selectedVersion == stat.version,
+                        tint: .accentColor
                     ) {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            selectedFilter = filter
+                            selectedVersion = stat.version
                         }
+                    }
+                }
+                if !overflow.isEmpty {
+                    Menu {
+                        ForEach(overflow) { stat in
+                            Button {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    selectedVersion = stat.version
+                                }
+                            } label: {
+                                Label(
+                                    "\(stat.version) · \(stat.count)",
+                                    systemImage: selectedVersion == stat.version ? "checkmark" : ""
+                                )
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("+\(overflow.count)")
+                                .font(.subheadline.weight(.medium))
+                            Image(systemName: "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(.regularMaterial))
                     }
                 }
             }
@@ -254,10 +299,117 @@ struct TransitionHistoryView: View {
         }
     }
 
+    /// Versiones presentes en las sesiones cargadas, ordenadas por la fecha
+    /// de la sesión más reciente (mostRecent desc). Sumatoria por
+    /// `algorithmVersion` de `transitionCount`. Las sesiones con versión nil
+    /// se ignoran — preferible esconder que mostrar un chip "—" confuso.
+    private var availableVersions: [VersionStat] {
+        var acc: [String: (count: Int, latest: Date)] = [:]
+        for s in sessions {
+            guard let v = s.algorithmVersion, !v.isEmpty else { continue }
+            let prev = acc[v]
+            let latest = max(s.endedAt, prev?.latest ?? .distantPast)
+            acc[v] = (count: (prev?.count ?? 0) + s.transitionCount, latest: latest)
+        }
+        return acc
+            .map { VersionStat(version: $0.key, count: $0.value.count, mostRecent: $0.value.latest) }
+            .sorted { $0.mostRecent > $1.mostRecent }
+    }
+
+    /// Agregados sobre las sesiones que coinciden con el filtro activo.
+    /// Si `selectedVersion` es nil, suma todas las sesiones cargadas.
+    private var aggregates: StatsAggregates {
+        let pool = matchingSessions(version: selectedVersion)
+        let total = pool.reduce(0) { $0 + $1.transitionCount }
+        let rated = pool.reduce(0) { $0 + $1.rated }
+        let unrated = pool.reduce(0) { $0 + $1.unrated }
+        let diamonds = pool.reduce(0) { $0 + $1.diamonds }
+        let mean: Double? = {
+            let withMean = pool.compactMap { s -> (Double, Int)? in
+                guard let m = s.meanRating, s.rated > 0 else { return nil }
+                return (m, s.rated)
+            }
+            guard !withMean.isEmpty else { return nil }
+            let totalRated = withMean.reduce(0) { $0 + $1.1 }
+            guard totalRated > 0 else { return nil }
+            let weighted = withMean.reduce(0.0) { $0 + $1.0 * Double($1.1) }
+            return weighted / Double(totalRated)
+        }()
+        return StatsAggregates(
+            total: total,
+            rated: rated,
+            unrated: unrated,
+            meanRating: mean,
+            diamonds: diamonds
+        )
+    }
+
+    /// Delta del agregado actual vs el de la versión inmediatamente anterior
+    /// (ordenadas por `mostRecent` desc). Si no hay versión previa (filtro
+    /// "Todas" o solo hay 1 versión cargada), todos los deltas son nil.
+    private var aggregateDeltas: (meanRating: Double?, total: Int?, diamonds: Int?, ratedPct: Int?) {
+        guard let current = selectedVersion else {
+            return (nil, nil, nil, nil)
+        }
+        let versions = availableVersions
+        guard let idx = versions.firstIndex(where: { $0.version == current }),
+              idx + 1 < versions.count else {
+            return (nil, nil, nil, nil)
+        }
+        let prevVersion = versions[idx + 1].version
+        let cur = aggregatesFor(version: current)
+        let prev = aggregatesFor(version: prevVersion)
+        let dMean: Double? = {
+            guard let c = cur.meanRating, let p = prev.meanRating else { return nil }
+            return c - p
+        }()
+        let dRatedPct: Int? = {
+            guard prev.total > 0 else { return nil }
+            return cur.ratedPct - prev.ratedPct
+        }()
+        return (
+            meanRating: dMean,
+            total: cur.total - prev.total,
+            diamonds: cur.diamonds - prev.diamonds,
+            ratedPct: dRatedPct
+        )
+    }
+
+    private func aggregatesFor(version: String) -> StatsAggregates {
+        let pool = matchingSessions(version: version)
+        let total = pool.reduce(0) { $0 + $1.transitionCount }
+        let rated = pool.reduce(0) { $0 + $1.rated }
+        let unrated = pool.reduce(0) { $0 + $1.unrated }
+        let diamonds = pool.reduce(0) { $0 + $1.diamonds }
+        let mean: Double? = {
+            let withMean = pool.compactMap { s -> (Double, Int)? in
+                guard let m = s.meanRating, s.rated > 0 else { return nil }
+                return (m, s.rated)
+            }
+            guard !withMean.isEmpty else { return nil }
+            let totalRated = withMean.reduce(0) { $0 + $1.1 }
+            guard totalRated > 0 else { return nil }
+            let weighted = withMean.reduce(0.0) { $0 + $1.0 * Double($1.1) }
+            return weighted / Double(totalRated)
+        }()
+        return StatsAggregates(
+            total: total, rated: rated, unrated: unrated,
+            meanRating: mean, diamonds: diamonds
+        )
+    }
+
+    private func matchingSessions(version: String?) -> [DiagnosticsSessionSummary] {
+        guard let v = version else { return sessions }
+        return sessions.filter { $0.algorithmVersion == v }
+    }
+
     private var airpodsBanner: some View {
         Button {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                selectedFilter = .unrated
+            // Abrir directamente el record más reciente sin valorar. Si no hay
+            // ninguno cargado en memoria, no hace nada — el badge ya indica
+            // que existen pero requieren un scroll que la lista hace sola.
+            if let pending = transitions.first(where: { $0.userRating == nil }) {
+                presentedRecord = pending
             }
         } label: {
             HStack(spacing: 12) {
@@ -307,50 +459,42 @@ struct TransitionHistoryView: View {
             // `.headerProminence`. Para visual Liquid Glass usamos
             // `.listRowBackground(Color.clear)` + `.scrollContentBackground(.hidden)`.
             List {
-                ForEach(groupedByDay, id: \.dayKey) { dayGroup in
+                ForEach(groupedSessions, id: \.sessionId) { sessionGroup in
                     Section {
-                        ForEach(dayGroup.sessionGroups, id: \.sessionId) { sessionGroup in
-                            // Sub-header de sesión como primera "fila" de la sección.
-                            sessionHeader(sessionGroup)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 16))
-
-                            ForEach(sessionGroup.records) { record in
-                                TransitionRow(record: record)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        presentedRecord = record
+                        ForEach(sessionGroup.records) { record in
+                            TransitionRow(record: record)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    presentedRecord = record
+                                }
+                                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button {
+                                        quickRate(record: record)
+                                    } label: {
+                                        Label("Valorar", systemImage: "star")
                                     }
-                                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                        Button {
-                                            quickRate(record: record)
+                                    .tint(.yellow)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    if (record.userComment ?? "").isEmpty == false {
+                                        Button(role: .destructive) {
+                                            deleteComment(for: record.id)
                                         } label: {
-                                            Label("Valorar", systemImage: "star")
+                                            Label("Borrar comment", systemImage: "text.bubble.fill")
                                         }
-                                        .tint(.yellow)
-                                    }
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        if (record.userComment ?? "").isEmpty == false {
-                                            Button(role: .destructive) {
-                                                deleteComment(for: record.id)
-                                            } label: {
-                                                Label("Borrar comment", systemImage: "text.bubble.fill")
-                                            }
-                                        } else {
-                                            Button {
-                                                presentedRecord = record
-                                            } label: {
-                                                Label("Editar", systemImage: "pencil")
-                                            }
-                                            .tint(.accentColor)
+                                    } else {
+                                        Button {
+                                            presentedRecord = record
+                                        } label: {
+                                            Label("Editar", systemImage: "pencil")
                                         }
+                                        .tint(.accentColor)
                                     }
-                            }
+                                }
                         }
                     } header: {
-                        dayHeader(dayGroup)
+                        sessionHeader(sessionGroup)
                     }
                 }
 
@@ -387,15 +531,10 @@ struct TransitionHistoryView: View {
     }
 
     private var emptyMessage: String {
-        if !debouncedSearch.isEmpty { return "Sin resultados para “\(debouncedSearch)”." }
-        switch selectedFilter {
-        case .all: return "Aún no hay transiciones registradas. Reproduce algo y vuelve a entrar."
-        case .unrated: return "Todas valoradas. Buen trabajo."
-        case .low: return "Sin transiciones en este rango."
-        case .mid: return "Sin transiciones en este rango."
-        case .high: return "Sin transiciones en este rango."
-        case .diamonds: return "Aún no hay diamonds (rating 10)."
+        if let v = selectedVersion {
+            return "Sin transiciones registradas para \(v)."
         }
+        return "Aún no hay transiciones registradas. Reproduce algo y vuelve a entrar."
     }
 
     private var loadMoreSentinel: some View {
@@ -411,75 +550,94 @@ struct TransitionHistoryView: View {
         }
     }
 
-    @ViewBuilder
-    private func dayHeader(_ group: DayGroup) -> some View {
-        Text(group.label)
-            .font(.headline.weight(.semibold))
-            .foregroundStyle(.primary)
-            .textCase(nil)
-    }
-
+    /// Header de cada sesión. Muestra fecha del inicio (relativa: Hoy/Ayer/...),
+    /// rango horario, y si la sesión cruza medianoche, añade el día final entre
+    /// paréntesis para que el cruce sea explícito ("Ayer · 22:00 → 02:14 hoy").
+    /// Pills: versión, conteo, media, diamonds. Mismo lenguaje que web stats
+    /// pero adaptado a iOS list section header.
     @ViewBuilder
     private func sessionHeader(_ group: SessionGroup) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(group.timeLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    if let v = group.algorithmVersion {
-                        Text(v)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                }
-                HStack(spacing: 6) {
-                    Text("\(group.records.count) trans.")
-                        .font(.caption.monospacedDigit())
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(group.dateLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text("·")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                Text(group.timeRangeLabel)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let v = group.algorithmVersion {
+                    Text(v)
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
-                    if let mean = group.meanRating {
-                        Text("· media \(String(format: "%.1f", mean))/10")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(meanColor(mean))
-                    }
-                    if group.diamonds > 0 {
-                        Image(systemName: "diamond.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.cyan)
-                        Text("\(group.diamonds)")
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(.cyan)
-                    }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
                 }
+                Spacer(minLength: 0)
             }
-            Spacer()
+            HStack(spacing: 6) {
+                Text("\(group.records.count) trans.")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                if let mean = group.meanRating {
+                    Text("· media \(String(format: "%.1f", mean))/10")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(meanColor(mean))
+                }
+                if group.diamonds > 0 {
+                    Image(systemName: "diamond.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.cyan)
+                    Text("\(group.diamonds)")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.cyan)
+                }
+                Spacer(minLength: 0)
+            }
         }
+        .textCase(nil)
+        .padding(.vertical, 4)
     }
 
     // MARK: - Grouping
 
-    private struct DayGroup {
-        let dayKey: String
-        let label: String
-        let sessionGroups: [SessionGroup]
-    }
-
+    /// Una sesión de escucha como bloque coherente. `startedAt` y `endedAt`
+    /// vienen del backend (gap-based 30 min) o del primer/último record si
+    /// no hay summary. La sesión preserva su identidad aunque cruce medianoche.
     private struct SessionGroup {
         let sessionId: UUID
         let startedAt: Date
-        let timeLabel: String
+        let endedAt: Date
         let algorithmVersion: String?
         let meanRating: Double?
         let diamonds: Int
         let records: [TransitionDiagnostics.TransitionRecord]
+
+        /// Fecha del inicio en formato relativo (Hoy / Ayer / "5 may").
+        var dateLabel: String {
+            TransitionHistoryView.dayLabel(for: startedAt)
+        }
+
+        /// "22:00 → 02:14" o "22:00 → 02:14 (Hoy)" si cruza medianoche.
+        var timeRangeLabel: String {
+            let cal = Calendar.current
+            let start = TransitionHistoryView.timeFormatter.string(from: startedAt)
+            let end = TransitionHistoryView.timeFormatter.string(from: endedAt)
+            let crossesMidnight = !cal.isDate(startedAt, inSameDayAs: endedAt)
+            if crossesMidnight {
+                return "\(start) → \(end) (\(TransitionHistoryView.dayLabel(for: endedAt)))"
+            }
+            return "\(start) → \(end)"
+        }
     }
 
-    private var groupedByDay: [DayGroup] {
-        // Bucket records by sessionId; records sin sessionId (recién subidos
-        // antes de que el backend devuelva) caen en bucket UUID nil → grupo "Local".
+    /// Lista plana de sesiones ordenadas por inicio desc. Sin bucket "día"
+    /// — el header de cada sesión ya muestra fecha + rango horario. Esto evita
+    /// que sesiones que cruzan 0:00 queden partidas en dos secciones distintas.
+    private var groupedSessions: [SessionGroup] {
         var bySession: [UUID?: [TransitionDiagnostics.TransitionRecord]] = [:]
         for record in transitions {
             bySession[record.sessionId, default: []].append(record)
@@ -487,25 +645,25 @@ struct TransitionHistoryView: View {
 
         let sessionsLookup = Dictionary(uniqueKeysWithValues: sessions.map { ($0.sessionId, $0) })
 
-        // Construir SessionGroup ordenando records por fecha desc dentro.
         var sessionGroups: [SessionGroup] = []
         for (sid, records) in bySession {
             let sortedRecords = records.sorted { $0.date > $1.date }
             let resolvedSid = sid ?? UUID()
             let summary = sid.flatMap { sessionsLookup[$0] }
             let started = summary?.startedAt ?? sortedRecords.last?.date ?? Date()
+            let ended = summary?.endedAt ?? sortedRecords.first?.date ?? started
             let mean: Double? = {
                 if let s = summary, let m = s.meanRating { return m }
                 let rated = sortedRecords.compactMap { $0.userRating }
                 guard !rated.isEmpty else { return nil }
                 return Double(rated.reduce(0, +)) / Double(rated.count)
             }()
-            let diamonds = summary?.diamonds ?? sortedRecords.filter { $0.userRating == 10 }.count
+            let diamonds = summary?.diamonds ?? sortedRecords.filter { ($0.userRating ?? 0) >= 9 }.count
             let version = summary?.algorithmVersion ?? sortedRecords.first?.algorithmVersion
             sessionGroups.append(SessionGroup(
                 sessionId: resolvedSid,
                 startedAt: started,
-                timeLabel: TransitionHistoryView.timeFormatter.string(from: started),
+                endedAt: ended,
                 algorithmVersion: version,
                 meanRating: mean,
                 diamonds: diamonds,
@@ -513,30 +671,15 @@ struct TransitionHistoryView: View {
             ))
         }
         sessionGroups.sort { $0.startedAt > $1.startedAt }
-
-        // Bucket sessionGroups por día (clave dayKey local) preservando el
-        // orden inverso de las sesiones (más reciente arriba).
-        var byDay: [String: [SessionGroup]] = [:]
-        var dayOrder: [String] = []
-        let cal = Calendar.current
-        for group in sessionGroups {
-            let key = TransitionHistoryView.dayKeyFormatter.string(from: cal.startOfDay(for: group.startedAt))
-            if byDay[key] == nil { dayOrder.append(key) }
-            byDay[key, default: []].append(group)
-        }
-        return dayOrder.map { key -> DayGroup in
-            let groups = byDay[key] ?? []
-            let label = TransitionHistoryView.dayLabel(for: groups.first?.startedAt ?? Date())
-            return DayGroup(dayKey: key, label: label, sessionGroups: groups)
-        }
+        return sessionGroups
     }
 
     // MARK: - Networking
 
-    /// Fingerprint que dispara reload — cualquier cambio en filtro o search
+    /// Fingerprint que dispara reload — cualquier cambio en versión activa
     /// activa una refetch desde offset 0.
     private var filterFingerprint: String {
-        "\(selectedFilter.id)|\(debouncedSearch)"
+        selectedVersion ?? "__all__"
     }
 
     private func reload() async {
@@ -552,12 +695,8 @@ struct TransitionHistoryView: View {
         isLoading = true
         defer { isLoading = false }
 
-        let (minR, maxR, unratedFlag) = filterToBackendArgs(selectedFilter)
         let result = await TransitionDiagnosticsBackend.shared.fetchTransitions(
-            minRating: minR,
-            maxRating: maxR,
-            unrated: unratedFlag,
-            search: debouncedSearch.isEmpty ? nil : debouncedSearch,
+            algorithmVersion: selectedVersion,
             limit: pageSize,
             offset: offset
         )
@@ -577,7 +716,10 @@ struct TransitionHistoryView: View {
     }
 
     private func loadSessions() async {
-        let result = await TransitionDiagnosticsBackend.shared.fetchSessions(limit: 30)
+        // limit=100: el chip "+N" del dropdown se nutre de aquí. 100 sesiones
+        // cubre meses de uso real sin sobrecargar el wire (cada summary pesa
+        // ~150 bytes). Si el catálogo crece más, paginar en una v15.x.
+        let result = await TransitionDiagnosticsBackend.shared.fetchSessions(limit: 100)
         if case .success(let summaries) = result {
             sessions = summaries
         }
@@ -596,69 +738,28 @@ struct TransitionHistoryView: View {
         }
     }
 
-    private func filterToBackendArgs(_ filter: HistoryFilter) -> (min: Int?, max: Int?, unrated: Bool?) {
-        switch filter {
-        case .all:      return (nil, nil, nil)
-        case .unrated:  return (nil, nil, true)
-        case .low:      return (1, 3, nil)
-        case .mid:      return (4, 6, nil)
-        case .high:     return (7, 10, nil)
-        case .diamonds: return (10, 10, nil)
-        }
-    }
-
     // MARK: - Live record reactivity
 
     /// Llamado por `.onChange(of: diag.history.first?.id)`. Si el primer record
-    /// del singleton no está ya en la lista local y pasa los filtros activos
-    /// (search + filter chip), se hace prepend al instante. El record recién
-    /// publicado tiene `userRating == nil` y `userComment == nil` por
-    /// definición, así que solo casa con `.all` y `.unrated`.
+    /// del singleton no está ya en la lista local y pasa los filtros activos,
+    /// se hace prepend al instante. Sólo se inserta si la versión del nuevo
+    /// record coincide con la versión seleccionada (o si no hay filtro activo).
     private func handleNewLiveRecord() {
         guard let latest = diag.history.first else { return }
-        // Idempotencia: si ya existe (re-render por mismo id) no duplicar.
         guard !transitions.contains(where: { $0.id == latest.id }) else { return }
         guard recordMatchesActiveFilters(latest) else { return }
         transitions.insert(latest, at: 0)
         totalCount += 1
         if latest.userRating == nil { unratedCount += 1 }
-        // Refrescar resumen de sesiones para que el header de "Sesión X" cuente
-        // la transición nueva. No bloquea — corre detached.
         Task { await loadSessions() }
     }
 
-    /// True si el record encaja con los filtros activos (search + chip). Se
-    /// usa solo para el path de inserción reactiva — la fetch paginada del
-    /// backend ya filtra server-side.
+    /// True si el record pertenece a la versión activa (o si no hay filtro).
+    /// La fetch paginada del backend ya aplica el filtro server-side; esto
+    /// sólo cubre el path de inserción reactiva del singleton.
     private func recordMatchesActiveFilters(_ r: TransitionDiagnostics.TransitionRecord) -> Bool {
-        // Search
-        if !debouncedSearch.isEmpty {
-            let q = debouncedSearch.lowercased()
-            let hit = r.fromTitle.lowercased().contains(q) || r.toTitle.lowercased().contains(q)
-            if !hit { return false }
-        }
-        // Filter chip
-        switch selectedFilter {
-        case .all:      return true
-        case .unrated:  return r.userRating == nil
-        case .low:      if let v = r.userRating { return v >= 1 && v <= 3 } else { return false }
-        case .mid:      if let v = r.userRating { return v >= 4 && v <= 6 } else { return false }
-        case .high:     if let v = r.userRating { return v >= 7 && v <= 10 } else { return false }
-        case .diamonds: return r.userRating == 10
-        }
-    }
-
-    // MARK: - Search debounce
-
-    private func scheduleSearchDebounce(query: String) {
-        searchDebounceTask?.cancel()
-        searchDebounceTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                debouncedSearch = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
+        guard let v = selectedVersion else { return true }
+        return r.algorithmVersion == v
     }
 
     // MARK: - Mutations
@@ -740,13 +841,7 @@ struct TransitionHistoryView: View {
         return f
     }()
 
-    private static let dayKeyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    private static func dayLabel(for date: Date) -> String {
+    fileprivate static func dayLabel(for date: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(date) { return "Hoy" }
         if cal.isDateInYesterday(date) { return "Ayer" }
@@ -759,50 +854,161 @@ struct TransitionHistoryView: View {
     }
 }
 
-// MARK: - Filter chip
+// MARK: - Version chip
 
-private struct FilterChip: View {
-    let filter: TransitionHistoryView.HistoryFilter
+/// Chip de filtro por versión de algoritmo. Muestra label + count compacto.
+/// Estado seleccionado: fondo accent gradient. Estado normal: glass material.
+private struct VersionChip: View {
+    let label: String
+    let count: Int
     let isSelected: Bool
-    let unratedBadge: Int?
+    let tint: Color
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let img = filter.systemImage {
-                    Image(systemName: img)
-                        .font(.caption.weight(.semibold))
-                }
-                Text(filter.label)
+                Text(label)
                     .font(.subheadline.weight(.medium))
-                if let count = unratedBadge {
-                    Text("\(count)")
-                        .font(.caption2.monospacedDigit().weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(.red, in: Capsule())
-                }
+                Text("\(count)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule().fill(isSelected
+                            ? Color.white.opacity(0.18)
+                            : Color.gray.opacity(0.18))
+                    )
             }
-            .foregroundStyle(isSelected ? Color.white : filter.tint)
+            .foregroundStyle(isSelected ? Color.white : tint)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background {
                 if isSelected {
-                    Capsule().fill(filter.tint.gradient)
+                    Capsule().fill(tint.gradient)
                 } else {
                     Capsule().fill(.regularMaterial)
                 }
             }
             .overlay {
                 if !isSelected {
-                    Capsule().strokeBorder(filter.tint.opacity(0.3), lineWidth: 0.5)
+                    Capsule().strokeBorder(tint.opacity(0.3), lineWidth: 0.5)
                 }
             }
         }
         .buttonStyle(.plain)
     }
+}
+
+// MARK: - KPI card
+
+/// Card de métrica con número grande, label uppercase, y delta vs período
+/// anterior (arrow up/down + bg coloreado). Mismo lenguaje visual que
+/// `DiagnosticsKPI.svelte` del viewer web: glass material + tint suave por
+/// categoría. Diseñado para grid 2x2 en iPhone vertical — altura uniforme.
+private struct KPICard: View {
+    let kicker: String
+    let label: String
+    let value: String
+    let delta: Double?
+    let deltaDecimals: Int
+    let deltaUnit: String
+    let tint: Color
+
+    init(
+        kicker: String,
+        label: String,
+        value: String,
+        delta: Double? = nil,
+        deltaDecimals: Int = 2,
+        deltaUnit: String = "",
+        tint: Color
+    ) {
+        self.kicker = kicker
+        self.label = label
+        self.value = value
+        self.delta = delta
+        self.deltaDecimals = deltaDecimals
+        self.deltaUnit = deltaUnit
+        self.tint = tint
+    }
+
+    private var deltaTone: DeltaTone {
+        guard let d = delta else { return .neutral }
+        if abs(d) < 0.005 { return .neutral }
+        return d > 0 ? .up : .down
+    }
+
+    private var deltaText: String {
+        guard let d = delta else { return "—" }
+        let sign = d > 0 ? "+" : (d < 0 ? "−" : "")
+        return "\(sign)\(String(format: "%.\(deltaDecimals)f", abs(d)))\(deltaUnit)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(tint.opacity(0.22))
+                    .frame(width: 6, height: 6)
+                Text(kicker)
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.6)
+                    .foregroundStyle(tint)
+            }
+
+            Text(value)
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            HStack(spacing: 6) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 4)
+                deltaPill
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(tint.opacity(0.18), lineWidth: 0.5)
+        )
+    }
+
+    @ViewBuilder
+    private var deltaPill: some View {
+        let (icon, color, bg): (String, Color, Color) = {
+            switch deltaTone {
+            case .up:      return ("arrow.up", .green, .green.opacity(0.14))
+            case .down:    return ("arrow.down", .red, .red.opacity(0.14))
+            case .neutral: return ("minus", .secondary, Color.gray.opacity(0.12))
+            }
+        }()
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+            Text(deltaText)
+                .font(.caption2.monospacedDigit().weight(.bold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(bg))
+    }
+
+    private enum DeltaTone { case up, down, neutral }
 }
 
 // MARK: - Transition row
