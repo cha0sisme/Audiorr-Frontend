@@ -897,6 +897,53 @@ enum DJMixingService {
             print("[DJMixingService] 🔀 Hv5-3 redirect → BMB (entry mid-bucket sin BPM-grid)")
         }
 
+        // ── 6b-ter. v15.b H2: entry tardío vs vocalStartB → SEQUENTIAL ──
+        //
+        // Cuando el punto de entrada elegido se salta una intro substancial
+        // de B (entryPoint − vocalStartB > 5s), la transición queda mal
+        // alineada: A entrega su outro pero B ya ha dejado atrás su material
+        // introductorio. Caso defensivo: forzar SEQUENTIAL (A termina natural,
+        // B desde el inicio) para preservar contexto vocal y armónico de B.
+        //
+        // Gate auxiliar: pistas con intro instrumental muy silenciosa (energyB
+        // < 0.12 + preIntroInstrumental true) usan threshold 20s — el entry
+        // tardío no se percibe como ruptura si la intro de B es casi inaudible
+        // y la sustitución musical es indistinguible.
+        //
+        // Drop-driven percussive: isBDropDrivenByPercussive protege la familia
+        // donde el drop justifica entry mid-song (kick programado tras una
+        // intro larga que el sweep filter del crossfade debe acompañar, no
+        // saltar). Si el detector dispara, dejamos el tipo original.
+        //
+        // Tipos exentos: si el decisor ya escogió .sequential / .vinylStop /
+        // .cut / .cutAFadeInB, H2 no toca — cada uno tiene gesto propio
+        // (vinylStop su frenada, cut su sweep, sequential ya es destino).
+        if let next = safeNext, next.hasError != true,
+           transition.type != .sequential,
+           transition.type != .vinylStop,
+           transition.type != .cut,
+           transition.type != .cutAFadeInB {
+            let vocalStartB: Double = {
+                if let vs = next.vocalStartTime, vs > 0 { return vs }
+                if let first = next.speechSegments.first, first.start > 0 { return first.start }
+                return 0
+            }()
+            if vocalStartB > 0 {
+                let (bIsDropDriven, _) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+                let isQuietInstrumentalIntro = profile.energyB < 0.12 && preIntroInstrumental
+                let h2Threshold: Double = isQuietInstrumentalIntro ? 20.0 : 5.0
+                let entryExcess = entry.entryPoint - vocalStartB
+                if entryExcess > h2Threshold && !bIsDropDriven {
+                    let oldReason = transition.reason
+                    transition = TransitionTypeResult(
+                        type: .sequential,
+                        reason: "Entry tardío vs vocalStartB (entry=\(String(format: "%.1f", entry.entryPoint))s, vocalStartB=\(String(format: "%.1f", vocalStartB))s, excess=\(String(format: "%.1f", entryExcess))s, threshold=\(String(format: "%.0f", h2Threshold))s) → SEQUENTIAL [old: \(oldReason)]"
+                    )
+                    print("[DJMixingService] 🚧 Entry salta intro útil → SEQUENTIAL")
+                }
+            }
+        }
+
         // ── 6b-bis. v14.09: SEQUENTIAL fuerza entry=0 ──
         //
         // `decideTransitionType` puede redirigir DROP_MIX/STEM_MIX → .sequential
