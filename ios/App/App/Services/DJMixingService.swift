@@ -944,6 +944,41 @@ enum DJMixingService {
             }
         }
 
+        // ── 6b-quater. v15.b H3: CUT sin outro instrumental fiable → SEQUENTIAL ──
+        //
+        // CUT depende de que A acabe en zona instrumental: si el outro lleva
+        // voz hasta el final, el corte trunca la palabra y el listener lo
+        // percibe como error. La heurística preOutroInstrumental (línea ~835)
+        // valida lastVocalTime y speechSegments, pero puede dar false-positive
+        // en outros que "no tienen voz" simplemente porque tampoco tienen
+        // sonido — pistas que cierran fade-out a silencio. En ese caso el
+        // CUT corta sobre material casi-inaudible y el cambio a B suena seco.
+        //
+        // Salvaguarda complementaria: exigir outroEnergyA > 0.10 para
+        // considerar el outro como instrumental defendible para CUT. Si la
+        // energía del outro queda por debajo del umbral, escalamos a
+        // SEQUENTIAL para que A respire hasta su final natural y B arranque
+        // desde el inicio sin trauma de corte.
+        //
+        // Sólo aplica al tipo .cut. .cutAFadeInB tiene fade-in en B que ya
+        // suaviza el handoff incluso sobre outros marginales.
+        if transition.type == .cut {
+            let h3OutroDefendsCut: Bool = {
+                guard preOutroInstrumental else { return false }
+                if let oe = outroEnergyAForTelemetry, oe < 0.10 { return false }
+                return true
+            }()
+            if !h3OutroDefendsCut {
+                let oldReason = transition.reason
+                let oeStr = outroEnergyAForTelemetry.map { String(format: "%.2f", $0) } ?? "nil"
+                transition = TransitionTypeResult(
+                    type: .sequential,
+                    reason: "CUT sin outro instrumental fiable (preOutroInstrumental=\(preOutroInstrumental), outroEnergyA=\(oeStr)) → SEQUENTIAL [old: \(oldReason)]"
+                )
+                print("[DJMixingService] ✂️→📼 CUT sin outro fiable → SEQUENTIAL")
+            }
+        }
+
         // ── 6b-bis. v14.09: SEQUENTIAL fuerza entry=0 ──
         //
         // `decideTransitionType` puede redirigir DROP_MIX/STEM_MIX → .sequential
