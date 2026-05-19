@@ -2386,13 +2386,37 @@ class CrossfadeExecutor {
         if preRollActive {
             if t >= preRollStart && t < timings.filterStartTime {
                 let p = Float((t - preRollStart) / preRollDur)
-                // v14.h — easing cuadrático en el primer 15% del pre-roll.
-                // Emula gesto manual de DJ abriendo HPF: arranque lento en zona
-                // inaudible (<60Hz) hasta que el corte cruza ~80-100Hz, luego
-                // velocidad constante en log-Hz. Sin easing el sweep recorría
-                // ~30% del espacio espectral antes de tocar la zona sensible.
-                let pAdj = p < 0.15 ? p * (p / 0.15) : p
-                let freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, pAdj))
+                // v15.c — band 0 estable en startFreq durante todo el preRoll
+                // cuando la freq de setupInitialEQ es audible (>60Hz).
+                //
+                // El sweep `20 → startFreq` se introdujo con la premisa "band 0
+                // estaba en passthrough antes del preRoll" (rama no-CUT). Esa
+                // premisa NO se cumple: setupInitialEQ planta highpass(startFreq)
+                // desde t=0 en todos los presets no-CUT. El descenso a 20Hz
+                // dejaba band 0 en infrasonido durante ~290-610ms del preRoll
+                // (con preRollDur=0.9s y easing v14.h). Síntoma perceptual:
+                // el corte audible desaparece durante esa ventana y reaparece
+                // cuando el sweep cruza la zona ~80-200Hz, cuando debería ser
+                // constante desde t=0.
+                //
+                // Para presets audibles (anticipation=600, normal=400, aggressive
+                // =600, dropMix=600, stemMix=200): band 0 = highpass(startFreq)
+                // constante durante todo el preRoll. Bands 1/2/3 conservan sus
+                // rampas desde startGain — todas arrancan en gain neutro y
+                // suben hacia el target, sin step inverso equivalente.
+                //
+                // Para gentle (startFreq=60 infrasónico): cae al else; sweep
+                // 20→60 perceptualmente irrelevante, mantenemos comportamiento.
+                //
+                // Easing v14.h queda sin efecto cuando startFreq>60 (no se
+                // evalúa el sweep). Sigue válido para la rama gentle.
+                let freqA: Float
+                if preset.highpassA.startFreq > 60 {
+                    freqA = preset.highpassA.startFreq
+                } else {
+                    let pAdj = p < 0.15 ? p * (p / 0.15) : p
+                    freqA = expInterp(20.0, preset.highpassA.startFreq, min(1, pAdj))
+                }
                 let band0A = BiquadCoefficientCalculator.highpass(
                     frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
                 // v14.11 — band 1 ahora rampea bassKill desde preRollStart si
