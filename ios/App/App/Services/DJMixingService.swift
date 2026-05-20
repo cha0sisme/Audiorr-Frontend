@@ -69,6 +69,10 @@ enum EntryPointSource: String, Codable {
     case punchChorusFallback   // calculatePunchEntry: chorusStart-2 dentro de styleAffinity
     case punchBufferFallback   // calculatePunchEntry: bufferDuration fallback
     case punchEnergyBoost      // calculatePunchEntry: energyUp boost reasigna entry
+    /// v15.e — el cap defensivo anti-vlfs-negativo retrajo el entry a
+    /// `vocalEntryTarget` por estar el cálculo original >5s después del
+    /// primer evento vocal de B. Permite cohort split en análisis post-coche.
+    case punchVocalCappedRollback
     case minimal               // .minimal case (cuando exista)
     case unknown               // sin asignar (no debería ocurrir si todo el switch está cableado)
 }
@@ -121,7 +125,7 @@ enum DJMixingService {
     /// `TransitionRecord` que se sube al backend para vincular ratings con
     /// cambios concretos del repo. Historial completo en
     /// `D:\Audiorr-shared\algorithm-versions.md`.
-    public static let kAlgorithmVersion: String = "v15.d"
+    public static let kAlgorithmVersion: String = "v15.e"
 
     /// SHA git corto del commit en el que se construyó esta build. Permite al
     /// backend distinguir "v13.O.2 antes del fix X" vs "v13.O.2 después del fix
@@ -130,7 +134,7 @@ enum DJMixingService {
     /// (clave `GitCommitSha` inyectada por Xcode Cloud via xcconfig). Mientras
     /// tanto se hardcodea — bumping este string en cada commit de algoritmo
     /// es trivial y no requiere infra extra.
-    public static let kBuildId: String = "v15.d-pending"
+    public static let kBuildId: String = "v15.e-pending"
 
     // MARK: - Set diversity (cooldowns)
 
@@ -2112,9 +2116,15 @@ enum DJMixingService {
             } else {
                 print("[DJMixingService] 🎯 Punch chorus promotion: entry=\(String(format: "%.1f", chorusEntryTarget))s (chorus=\(String(format: "%.1f", chorusStart))s -2s, chorus≤cap, dance=\(String(format: "%.2f", profile.avgDanceability)))")
             }
-            return PunchEntryResult(
+            let capped = Self.applyVlfsCap(
                 entry: chorusEntryTarget,
                 source: .punchChorusPromotion,
+                vocalStart: vocalStart,
+                vocalStartReliable: vocalStartReliable
+            )
+            return PunchEntryResult(
+                entry: capped.entry,
+                source: capped.source,
                 genreCapApplied: chorusStart > kChorusCap ? needsCap : false
             )
         }
@@ -2209,7 +2219,46 @@ enum DJMixingService {
             }
         }
 
-        return PunchEntryResult(entry: entry, source: source, genreCapApplied: genreCapApplied)
+        let capped = Self.applyVlfsCap(
+            entry: entry,
+            source: source,
+            vocalStart: vocalStart,
+            vocalStartReliable: vocalStartReliable
+        )
+        return PunchEntryResult(entry: capped.entry, source: capped.source, genreCapApplied: genreCapApplied)
+    }
+
+    /// v15.e — Cap defensivo anti-vlfs-negativo aplicado a la salida de
+    /// `calculatePunchEntry`. Si `entry` cae más de 5s después del primer
+    /// evento vocal de B (vlfs = vocalStart - entry < -5), retraemos a
+    /// `vocalEntryTarget = max(2, vocalStart - 2)` para que B se presente
+    /// antes del vocal en vez de aterrizar a mitad de verso.
+    ///
+    /// El threshold -5s prefiere ser conservador: solo dispara cuando el
+    /// desfase es claramente perceptible como "B ya está en plena
+    /// canción". Aplicado en los dos returns de calculatePunchEntry
+    /// (punchChorusPromotion early + return final).
+    ///
+    /// Guards:
+    /// - vocalStartReliable=false → no aplica (chorusLikelyMislabeled o
+    ///   vocalStart fuera de [3,20] sin introIsInstrumental).
+    /// - vocalStart<3 → no aplica (pista con vocal a t=0, cap daría
+    ///   entry=2 sub-musical sobre grito/sample).
+    ///
+    /// Emite source `.punchVocalCappedRollback` para distinguir en
+    /// telemetría los casos donde el cap disparó del path original.
+    private static func applyVlfsCap(
+        entry: Double,
+        source: PunchEntrySource,
+        vocalStart: Double,
+        vocalStartReliable: Bool
+    ) -> (entry: Double, source: PunchEntrySource) {
+        guard vocalStartReliable, vocalStart >= 3.0 else { return (entry, source) }
+        let vlfs = vocalStart - entry
+        guard vlfs < -5.0 else { return (entry, source) }
+        let cappedEntry = max(2.0, vocalStart - 2.0)
+        print("[DJMixingService] 🛡️ v15.e VLFS cap: entry=\(String(format: "%.1f", entry))s → \(String(format: "%.1f", cappedEntry))s (vocalStart=\(String(format: "%.1f", vocalStart))s, vlfs=\(String(format: "%.1f", vlfs))s, srcOrig=\(source))")
+        return (cappedEntry, .punchVocalCappedRollback)
     }
 
     // MARK: - Sanitize
