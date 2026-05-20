@@ -2249,10 +2249,10 @@ enum DJMixingService {
     /// telemetría los casos donde el cap disparó del path original.
     private static func applyVlfsCap(
         entry: Double,
-        source: PunchEntrySource,
+        source: EntryPointSource,
         vocalStart: Double,
         vocalStartReliable: Bool
-    ) -> (entry: Double, source: PunchEntrySource) {
+    ) -> (entry: Double, source: EntryPointSource) {
         guard vocalStartReliable, vocalStart >= 3.0 else { return (entry, source) }
         let vlfs = vocalStart - entry
         guard vlfs < -5.0 else { return (entry, source) }
