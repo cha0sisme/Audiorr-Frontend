@@ -251,6 +251,13 @@ final class TransitionDiagnostics {
     /// Gain (dB) en t=transitionEndTime − 0.05. Esperado ≈ −16.0 (target
     /// `bassKillTargetDepth`). Diverge si rampEnd no llega a p=1.0.
     var bassKillGainA_atSwap: Double? = nil
+    /// v15.d — true cuando la rampa cosSquared bassKill A se extendió hasta
+    /// anticipationStartTime (gate: useBassKill && anticipationTime>=1.5 en
+    /// blendy types). false cuando se mantiene el comportamiento v14.11
+    /// (rampStart=preRollStart). nil cuando useBassKill=false (campo no
+    /// aplica conceptualmente). Permite separar ambas poblaciones en
+    /// análisis posterior sin instrumentar el tick.
+    var bassKillRampExtendedA: Bool? = nil
     /// Distinto de `filterPreRollAppliedA` (gate estático). Este se marca true
     /// SOLO si el branch pre-roll de `applyFiltersA` se ejecuta al menos una
     /// vez en runtime — detecta el caso edge en que el gate dice "habilitado"
@@ -511,6 +518,8 @@ final class TransitionDiagnostics {
         var bassKillGainA_atRampStart: Double? = nil
         var bassKillGainA_atVolumeFadeStart: Double? = nil
         var bassKillGainA_atSwap: Double? = nil
+        // v15.d — flag de rampStart bassKill A extendido a anticipationStart.
+        var bassKillRampExtendedA: Bool? = nil
         var filterPreRollEffectiveA: Bool? = nil
         // v14.g (round 2026-05-17) — `timings.filterLead` segundos. Aditivo,
         // Optional para retrocompat con records pre-v14.g.
@@ -1003,6 +1012,7 @@ final class TransitionDiagnostics {
                 bassKillGainA_atRampStart: self.bassKillGainA_atRampStart,
                 bassKillGainA_atVolumeFadeStart: self.bassKillGainA_atVolumeFadeStart,
                 bassKillGainA_atSwap: self.bassKillGainA_atSwap,
+                bassKillRampExtendedA: self.bassKillRampExtendedA,
                 filterPreRollEffectiveA: self.filterPreRollEffectiveA,
                 filterLead: self.filterLead,
                 fadeInTriggeredA: self.fadeInTriggeredA,

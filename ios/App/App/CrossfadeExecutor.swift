@@ -836,9 +836,32 @@ class CrossfadeExecutor {
         // 3 puntos clave del fade. Permite auditar la curva real sin instrumentar
         // el tick. Solo se pueblan cuando useBassKill y hay lowshelfA; en otros
         // casos quedan nil (campos optional, decoder retrocompat).
-        let bkRampStart: Double = preRollWillApply
-            ? timings.filterStartTime - preRollDur
-            : timings.filterStartTime
+        // v15.d — cuando useBassKill y anticipationTime>=1.5s en blendy types,
+        // la rampa cosSquared 0→-16dB arranca en anticipationStartTime en
+        // lugar de preRollStart. La misma curva se estira sobre
+        // anticipationTime+filterLead+fadeOut, dando gain≈-1.4dB en
+        // filterStartTime (por debajo del JND low-shelf) y suavizando la
+        // entrada del filtro A en el gap previo al pre-roll. Gate implícito
+        // por noRealOutro: decideAnticipation devuelve anticipationTime=0
+        // cuando A no tiene outro real → la extensión no dispara y se
+        // preserva el comportamiento legacy en pistas donde A mantiene
+        // groove hasta el final.
+        let bassKillExtendToAnticipationTypeOK: Bool = {
+            switch config.transitionType {
+            case .eqMix, .beatMatchBlend, .crossfade: return true
+            default: return false
+            }
+        }()
+        let bassKillExtendToAnticipation = useBassKill && config.anticipationTime >= 1.5
+            && bassKillExtendToAnticipationTypeOK
+        let bkRampStart: Double
+        if bassKillExtendToAnticipation {
+            bkRampStart = timings.anticipationStartTime
+        } else if preRollWillApply {
+            bkRampStart = timings.filterStartTime - preRollDur
+        } else {
+            bkRampStart = timings.filterStartTime
+        }
         let bkRampEnd: Double = timings.transitionEndTime
         let bkGains: (atRampStart: Double?, atVolumeFadeStart: Double?, atSwap: Double?) = {
             guard useBassKill, let lsA = preset.lowshelfA, bkRampEnd > bkRampStart else {
@@ -867,6 +890,12 @@ class CrossfadeExecutor {
             TransitionDiagnostics.shared.bassKillGainA_atRampStart = bkGains.atRampStart
             TransitionDiagnostics.shared.bassKillGainA_atVolumeFadeStart = bkGains.atVolumeFadeStart
             TransitionDiagnostics.shared.bassKillGainA_atSwap = bkGains.atSwap
+            // v15.d — flag de telemetría para distinguir transiciones donde la
+            // rampa bassKill A se extendió hasta anticipationStartTime frente
+            // a las que mantuvieron rampStart=preRollStart. Solo se setea
+            // cuando useBassKill (en otros casos queda nil porque el campo no
+            // aplica conceptualmente).
+            TransitionDiagnostics.shared.bassKillRampExtendedA = useBassKill ? bassKillExtendToAnticipation : nil
             // filterPreRollEffectiveA se setea desde el pre-roll branch en runtime
             // (no estático: detecta si el primer tick efectivamente cayó dentro
             // de la ventana). Inicializado a false para distinguir "no ejecutado"
@@ -2355,9 +2384,30 @@ class CrossfadeExecutor {
         // empiece a perder graves suavemente, alineado con el sweep de band 0
         // que ya vivía en esta ventana. Continuidad garantizada porque la
         // cosSquared se evalúa con el mismo (rampStart, rampEnd) en ambas ramas.
-        let bassKillRampStartOverride: Double? = (preRollActive && useBassKill)
-            ? preRollStart
-            : nil
+        // v15.d — extensión rampStart bassKill A hasta anticipationStart.
+        // Cuando useBassKill y anticipationTime>=1.5s en blendy types, la
+        // cosSquared 0→-16dB arranca en t=anticipationStart en lugar de
+        // preRollStart. Cubre el gap previo al preRoll donde A sonaba con
+        // bajo pleno hasta que arrancaba la rampa. Espejo del cálculo estático
+        // en applyFilters: ambas ramas deben evaluar la misma cosSquared con
+        // el mismo (rampStart, rampEnd) para continuidad numérica en
+        // filterStart.
+        let bassKillExtendToAnticipationTypeOK: Bool = {
+            switch config.transitionType {
+            case .eqMix, .beatMatchBlend, .crossfade: return true
+            default: return false
+            }
+        }()
+        let bassKillExtendToAnticipation = useBassKill && config.anticipationTime >= 1.5
+            && bassKillExtendToAnticipationTypeOK
+        let bassKillRampStartOverride: Double?
+        if bassKillExtendToAnticipation {
+            bassKillRampStartOverride = timings.anticipationStartTime
+        } else if preRollActive && useBassKill {
+            bassKillRampStartOverride = preRollStart
+        } else {
+            bassKillRampStartOverride = nil
+        }
         // v15: pre-roll también para band 2 (midScoop) y band 3 (highShelf)
         // cuando están activas. Misma técnica que v14.11 con bassKill: el
         // rampStart efectivo se adelanta a preRollStart, la curva del branch
@@ -2382,6 +2432,53 @@ class CrossfadeExecutor {
         let highShelfRampStartOverride: Double? = (preRollActive && useHighShelfCut)
             ? preRollStart + cascadeOffsetHighShelf
             : nil
+
+        // v15.d — branch dedicado [anticipationStart, preRollStart] para
+        // aplicar la cosSquared bassKill A con rampStart=anticipationStart.
+        // Bands 0/2/3 se mantienen en su estado de setupInitialEQ (mismas
+        // fórmulas del manager con startGain/startFreq del preset) — su
+        // pre-roll se mantiene en preRollStart como antes. Cuando t llega a
+        // preRollStart, el branch pre-roll existente toma el relevo y evalúa
+        // la misma cosSquared con los mismos (rampStart, rampEnd) —
+        // continuidad C0 numérica garantizada. setCoefficients a 60Hz sin
+        // pop (precedente: comentario v14.h).
+        if bassKillExtendToAnticipation, let lsA = preset.lowshelfA,
+           t >= timings.anticipationStartTime && t < preRollStart {
+            let isCutTransition = config.transitionType == .cut || config.transitionType == .cutAFadeInB
+            let band1Run = DSPFilterManager.band1CoefficientA_bassKill(
+                at: t,
+                lsA: lsA,
+                rampStart: timings.anticipationStartTime,
+                rampEnd: timings.transitionEndTime,
+                sampleRate: sampleRate
+            )
+            let band0AltInitial = DSPFilterManager.band0CoefficientA_initial(
+                isCutTransition: isCutTransition,
+                useLowpassA: useLowpassA,
+                highpassPreset: preset.highpassA,
+                lowpassPreset: preset.lowpassA,
+                sampleRate: sampleRate
+            )
+            let band2AltInitial: BiquadCoefficients
+            if !isCutTransition, useMidScoop, let ms = preset.midScoopA {
+                band2AltInitial = BiquadCoefficientCalculator.parametric(
+                    frequency: ms.frequency, sampleRate: sampleRate,
+                    gainDB: ms.startGain, bandwidth: ms.bandwidth)
+            } else {
+                band2AltInitial = .passthrough
+            }
+            let band3AltInitial = DSPFilterManager.highShelfCoefficientA_initial(
+                useHighShelfCut: !isCutTransition && useHighShelfCut,
+                preset: preset.highShelfA,
+                sampleRate: sampleRate
+            )
+            dspA.setCoefficients(band0: band0AltInitial.coefficient,
+                                 band1: band1Run.coefficient,
+                                 band2: band2AltInitial,
+                                 band3: band3AltInitial)
+            diagLsGainA = band1Run.gain
+            return
+        }
 
         if preRollActive {
             if t >= preRollStart && t < timings.filterStartTime {
