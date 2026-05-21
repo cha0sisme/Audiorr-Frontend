@@ -311,6 +311,13 @@ final class TransitionDiagnostics {
     /// que el catálogo Hip-Hop a 86-161 BPM tendría como queja "mala gestión"
     /// cuando `lsGainB_initial=-12` corta demasiado.
     var bassProminenceB_0_15s: Double? = nil
+    /// Sub-bass RMS <120 Hz. `A_outro` toma últimos 15s del stem sub-bass de A;
+    /// `B_intro` los primeros 15s del de B. Permite calibrar magnitud bassKill
+    /// contra contenido real de bajo sub-perceptible (vs proxy broadband
+    /// `rmsTailCurveA_last` que no discrimina los <120 Hz). nil cuando el backend
+    /// no ha analizado/backfilleado la pista (endpoint `POST /api/labels/backfill-subbass`).
+    var subBassRmsA_outro: Double? = nil
+    var subBassRmsB_intro: Double? = nil
     /// Código del enum `TransitionProfile.vocalOverlapRisk` capturado en el
     /// momento del cálculo de la transición. Valores: "none", "aOnly",
     /// "bOnly", "both". Cinturón propuesto para el decisor V2': relajar
@@ -538,6 +545,8 @@ final class TransitionDiagnostics {
         // v14.d V2' — telemetría inerte aditiva para calibrar el decisor
         // adaptativo de lsGainB_initial en v14.e (sin tocar audio en v14.d).
         var bassProminenceB_0_15s: Double? = nil
+        var subBassRmsA_outro: Double? = nil
+        var subBassRmsB_intro: Double? = nil
         var vocalOverlapRiskCode: String? = nil
         var energyIntroB_telemetry: Double? = nil
         // v14.g g2 (round 2026-05-17) — valores absolutos de `nextAnalysis`
@@ -1021,6 +1030,8 @@ final class TransitionDiagnostics {
                 peakTransientDeltaB: self.peakTransientDeltaB,
                 coefMagB_atSetup: self.coefMagB_atSetup,
                 bassProminenceB_0_15s: self.bassProminenceB_0_15s,
+                subBassRmsA_outro: self.subBassRmsA_outro,
+                subBassRmsB_intro: self.subBassRmsB_intro,
                 vocalOverlapRiskCode: self.vocalOverlapRiskCode,
                 energyIntroB_telemetry: self.energyIntroB_telemetry,
                 chorusStartTimeB: self.chorusStartTimeB,

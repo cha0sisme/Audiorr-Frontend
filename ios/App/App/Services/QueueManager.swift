@@ -882,6 +882,10 @@ final class QueueManager: AudioEngineDelegate {
                     // v13.O round 2026-05-10 — percussiveCurve para gate
                     // drop-driven en calculatePunchEntry (chorus_promotion cap).
                     currentSongAnalysis.percussiveCurve = curAn.percussiveCurve
+                    // Sub-bass RMS <120 Hz para telemetría calibración magnitud
+                    // bassKill. nil cuando el backend no ha analizado la pista.
+                    currentSongAnalysis.subBassIntroRms = curAn.subBassIntroRms
+                    currentSongAnalysis.subBassOutroRms = curAn.subBassOutroRms
                     // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
                     // no las provee. Revive tambien SmartMixManager:323/375/466 dead code.
                     // Ventana 4 windows (20s) coherente con la ventana del gate 5.5.
@@ -951,6 +955,9 @@ final class QueueManager: AudioEngineDelegate {
                     // v13.O round 2026-05-10 — percussiveCurve para gate
                     // drop-driven en calculatePunchEntry (chorus_promotion cap).
                     nextSongAnalysis.percussiveCurve = nxtAn.percussiveCurve
+                    // Sub-bass RMS <120 Hz (paralelo a current).
+                    nextSongAnalysis.subBassIntroRms = nxtAn.subBassIntroRms
+                    nextSongAnalysis.subBassOutroRms = nxtAn.subBassOutroRms
                     // v13.D — derivar slopes desde curvas cuando backend EnergyProfile
                     // no las provee. Misma logica que current (mismo paragrafo arriba).
                     if nextSongAnalysis.introSlope == nil {

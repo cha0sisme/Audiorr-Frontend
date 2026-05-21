@@ -42,6 +42,10 @@ actor AnalysisCacheService {
         let harmonicCurve: [Double]?
         let onsetDensity: [Double]?
         let rmsTailCurve: [Double]?
+        // Sub-bass RMS <120 Hz. Top-level scalars en el JSON: medias de los
+        // primeros 15s (intro) y últimos 15s (outro) del stem sub-bass.
+        let subBassIntroRms: Double?
+        let subBassOutroRms: Double?
         // Diagnostics object — contains fade_info with cuePoint, energyProfile, etc.
         let diagnostics: Diagnostics?
 

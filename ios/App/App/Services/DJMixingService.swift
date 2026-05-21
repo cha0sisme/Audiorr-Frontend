@@ -134,7 +134,7 @@ enum DJMixingService {
     /// (clave `GitCommitSha` inyectada por Xcode Cloud via xcconfig). Mientras
     /// tanto se hardcodea — bumping este string en cada commit de algoritmo
     /// es trivial y no requiere infra extra.
-    public static let kBuildId: String = "v15.e-pending"
+    public static let kBuildId: String = "v15.e+sb-pending"
 
     // MARK: - Set diversity (cooldowns)
 
@@ -325,6 +325,13 @@ enum DJMixingService {
         /// (ej. Hip-Hop+Pop+R&B). El populator (QueueManager) la copia de
         /// nextSong.genres antes de invocar calculateCrossfadeConfig.
         var genres: [String] = []
+        /// Sub-bass RMS <120 Hz. Medias de los primeros 15s (intro) y últimos 15s
+        /// (outro) del stem sub-bass. nil cuando el backend aún no ha analizado
+        /// la pista. Permite calibrar magnitud bassKill contra contenido real
+        /// sub-bass de A_outro y B_intro (vs proxy broadband rmsTailCurve, que no
+        /// discrimina los <120 Hz).
+        var subBassIntroRms: Double? = nil
+        var subBassOutroRms: Double? = nil
     }
 
     // MARK: - Transition Profile (A↔B Relationship)
@@ -1578,8 +1585,14 @@ enum DJMixingService {
             guard let next = safeNext, next.hasEnergyProfile else { return nil }
             return next.energyIntro
         }()
+        // Sub-bass RMS <120 Hz. Lectura directa de SongAnalysis. nil cuando el
+        // backend no ha analizado la pista (queda como gap en TransitionRecord).
+        let subBassRmsA_outro_telemetry: Double? = safeCurrent?.subBassOutroRms
+        let subBassRmsB_intro_telemetry: Double? = safeNext?.subBassIntroRms
         Task { @MainActor in
             TransitionDiagnostics.shared.bassProminenceB_0_15s = bassProminenceB_telemetry
+            TransitionDiagnostics.shared.subBassRmsA_outro = subBassRmsA_outro_telemetry
+            TransitionDiagnostics.shared.subBassRmsB_intro = subBassRmsB_intro_telemetry
             TransitionDiagnostics.shared.vocalOverlapRiskCode = vocalOverlapRiskCodeForTelemetry
             TransitionDiagnostics.shared.energyIntroB_telemetry = energyIntroBForTelemetry
         }
