@@ -291,7 +291,16 @@ class CrossfadeExecutor {
     static let presetAnticipation = FilterPreset(
         highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 1.2),
         highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.6),
-        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -16),
+        // v15.f — endGain -16 → -12 dB en presetAnticipation. La rampa cosSquared
+        // a -16 dB sobre A todavía a volumen pleno (durante los 2-4s de
+        // anticipationTime) se percibía como gesto puntual ("playerA aplica filtros
+        // de repente"). -12 dB sitúa el bassKill final cerca del JND lowshelf
+        // <120 Hz (~10-12 dB para program material típico), bajando el evento
+        // perceptual sin perder defensa contra pile-up con kick de B. Toca solo
+        // este preset: 18/19 (94.7%) de transiciones bk=true rated v15.e usan
+        // anticipation; los demás presets quedan sin tocar para no romper la
+        // jerarquía musical (drop-mix -22, stem-mix -20).
+        lowshelfA: .init(frequency: 200, startGain: 0, midGain: -8, endGain: -12),
         lowshelfB: .init(frequency: 200, startGain: -12, midGain: -6, endGain: 0),
         lowpassA: nil,
         midScoopA: .init(frequency: 1500, bandwidth: 1.5, startGain: 0, endGain: -15),
