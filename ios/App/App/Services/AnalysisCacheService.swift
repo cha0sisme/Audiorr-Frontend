@@ -46,6 +46,12 @@ actor AnalysisCacheService {
         // primeros 15s (intro) y últimos 15s (outro) del stem sub-bass.
         let subBassIntroRms: Double?
         let subBassOutroRms: Double?
+        // v15.g — Downbeats (primer beat de cada compás detectado) + meter
+        // (compases por bar). Backend publica `beats[::stride]` con stride
+        // ajustado por half-time detection. Optional retrocompat con JSON
+        // pre-backfill — el path de snap V1 cae al fallback cuando es nil.
+        let downbeats: [Double]?
+        let meter: Int?
         // Diagnostics object — contains fade_info with cuePoint, energyProfile, etc.
         let diagnostics: Diagnostics?
 
@@ -441,24 +447,44 @@ actor AnalysisCacheService {
     private func revalidateCacheIfNeeded(songId: String, cached: AnalysisResult, streamURL: URL?) {
         let speechMissing = cached.speechSegments?.isEmpty != false
         let vocalStartMissing = cached.vocalStartTime == nil && cached.vocalStartFromDiagnostics == nil
-        guard speechMissing || vocalStartMissing else { return }
+        // v15.g — extensión del stale-while-revalidate para campos que
+        // aparecieron en el backend después del JSON cacheado original.
+        // lastVocalTime habilita el sanitizador en DJMixingService que eleva
+        // outroStartTime cuando hay vocales sostenidas más allá del outro
+        // detectado. downbeats habilita el snap del rampStart bassKill al
+        // beat fuerte musical más cercano.
+        // Caveat conocido: pistas con vocales hasta el final tendrán
+        // lastVocalTime nil legítimamente — refetch repetido eterno hasta
+        // que se introduzca un cacheSchemaVersion (fuera de scope).
+        let lastVocalMissing = cached.lastVocalTime == nil
+        let downbeatsMissing = (cached.downbeats?.isEmpty != false)
+        guard speechMissing || vocalStartMissing || lastVocalMissing || downbeatsMissing else { return }
         guard let streamURL else { return }
         guard !revalidatingIds.contains(songId), inFlightTasks[songId] == nil else { return }
 
         revalidatingIds.insert(songId)
-        let reason = [speechMissing ? "speechSegments" : nil, vocalStartMissing ? "vocalStart" : nil]
-            .compactMap { $0 }.joined(separator: "+")
+        let reason = [
+            speechMissing ? "speechSegments" : nil,
+            vocalStartMissing ? "vocalStart" : nil,
+            lastVocalMissing ? "lastVocalTime" : nil,
+            downbeatsMissing ? "downbeats" : nil,
+        ].compactMap { $0 }.joined(separator: "+")
         print("[AnalysisCacheService] Revalidating \(reason) for \(songId)")
 
         Task {
             if let fresh = await fetchFromBackend(songId: songId, streamURL: streamURL) {
                 let gotSpeech = fresh.speechSegments?.isEmpty == false
                 let gotVocalStart = fresh.vocalStartTime != nil || fresh.vocalStartFromDiagnostics != nil
-                let improved = (speechMissing && gotSpeech) || (vocalStartMissing && gotVocalStart)
+                let gotLastVocal = fresh.lastVocalTime != nil
+                let gotDownbeats = fresh.downbeats?.isEmpty == false
+                let improved = (speechMissing && gotSpeech)
+                            || (vocalStartMissing && gotVocalStart)
+                            || (lastVocalMissing && gotLastVocal)
+                            || (downbeatsMissing && gotDownbeats)
                 if improved {
                     memoryCache[songId] = fresh
                     saveToDisk(songId: songId, result: fresh)
-                    print("[AnalysisCacheService] ✅ Refreshed \(songId): speech=\(gotSpeech) vocalStart=\(gotVocalStart)")
+                    print("[AnalysisCacheService] ✅ Refreshed \(songId): speech=\(gotSpeech) vocalStart=\(gotVocalStart) lastVocal=\(gotLastVocal) downbeats=\(gotDownbeats)")
                 } else {
                     print("[AnalysisCacheService] \(reason) still missing for \(songId) — backend may not have backfilled yet")
                 }
