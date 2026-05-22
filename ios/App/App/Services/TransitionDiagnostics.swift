@@ -370,6 +370,11 @@ final class TransitionDiagnostics {
     /// Final de la rampa de rateB, segundos relativos a timings.startTime.
     /// nil cuando rateBRampActive != true.
     var rateBRampEndRel: Double? = nil
+    /// Duración efectiva de la rampa de rateB en segundos (rampEnd - rampStart).
+    /// v15.g — escalada por |Δrate| con cap por filterLead. nil cuando
+    /// rateBRampActive != true. Permite cruzar duración con rating en
+    /// validación posterior para refinar la heurística `0.25 + 5.0·Δrate`.
+    var rateBRampDuration: Double? = nil
     /// true cuando el rampStart de midScoop se adelantó a preRollStart +
     /// cascadeOffsetMidScoop. false cuando no recibió pre-roll (gate
     /// preRollActive=false o useMidScoop=false).
@@ -565,6 +570,7 @@ final class TransitionDiagnostics {
         var rateBRampActive: Bool? = nil
         var rateBRampStartRel: Double? = nil
         var rateBRampEndRel: Double? = nil
+        var rateBRampDuration: Double? = nil
         var midScoopPreRollApplied: Bool? = nil
         var highShelfPreRollApplied: Bool? = nil
         var filterLeadPreCap: Double? = nil
@@ -899,6 +905,7 @@ final class TransitionDiagnostics {
             self.rateBRampActive = nil
             self.rateBRampStartRel = nil
             self.rateBRampEndRel = nil
+            self.rateBRampDuration = nil
             self.midScoopPreRollApplied = nil
             self.highShelfPreRollApplied = nil
             self.aNaturalDecayActive = nil
@@ -1041,6 +1048,7 @@ final class TransitionDiagnostics {
                 rateBRampActive: self.rateBRampActive,
                 rateBRampStartRel: self.rateBRampStartRel,
                 rateBRampEndRel: self.rateBRampEndRel,
+                rateBRampDuration: self.rateBRampDuration,
                 midScoopPreRollApplied: self.midScoopPreRollApplied,
                 highShelfPreRollApplied: self.highShelfPreRollApplied,
                 filterLeadPreCap: self.filterLeadPreCap,

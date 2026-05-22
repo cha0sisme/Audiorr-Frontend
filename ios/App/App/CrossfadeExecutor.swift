@@ -1186,10 +1186,22 @@ class CrossfadeExecutor {
         let hasRampMargin = timings.filterLead >= 0.6
         if rateBDelta >= 0.02 && hasRampMargin {
             timePitchB?.rate = 1.0
+            // v15.g — duración de rampa cosSquared escalada por |Δrate|. La
+            // base 0.25s (v15) era suficiente para Δrate~0.03 pero quedaba
+            // corta para Δrate≥0.05 (cushion insuficiente, el AU TimePitch
+            // emite un transitorio audible al final de la rampa cuando el
+            // salto de tempo es grande).
+            // Slope 5.0 = heurística inicial (Δrate=0.05 → 0.50s, Δrate=0.10
+            // → 0.75s). Cap superior 1.0s; cap por filterLead-0.30 evita
+            // rebasar el margen disponible. Cuando filterLead<1s la fórmula
+            // satura al baseline 0.25s (fade<3s aprox — limitación conocida,
+            // a re-evaluar con telemetría rateBRampDuration en producción).
+            let maxRampDuration: Double = min(1.0, timings.filterLead - 0.30)
+            let rampDuration: Double = max(0.25, min(maxRampDuration, 0.25 + 5.0 * Double(rateBDelta)))
             rateBRampEnd = timings.fadeInStartTime - 0.30
-            rateBRampStart = rateBRampEnd - 0.25
+            rateBRampStart = rateBRampEnd - rampDuration
             rateBRampActive = true
-            print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B 1.0→\(String(format: "%.3f", config.rateB)) ramp@[\(String(format: "%.2f", rateBRampStart - timings.startTime)),\(String(format: "%.2f", rateBRampEnd - timings.startTime))]s")
+            print("[CrossfadeExecutor] Time-stretch ON: A→\(String(format: "%.3f", config.rateA)) B 1.0→\(String(format: "%.3f", config.rateB)) ramp@[\(String(format: "%.2f", rateBRampStart - timings.startTime)),\(String(format: "%.2f", rateBRampEnd - timings.startTime))]s dur=\(String(format: "%.2f", rampDuration))s")
         } else {
             timePitchB?.rate = config.rateB
             rateBRampActive = false
@@ -1201,10 +1213,12 @@ class CrossfadeExecutor {
         let rampActiveCopy: Bool = rateBRampActive
         let startRelCopy: Double? = rateBRampActive ? (rateBRampStart - timings.startTime) : nil
         let endRelCopy: Double? = rateBRampActive ? (rateBRampEnd - timings.startTime) : nil
+        let durationCopy: Double? = rateBRampActive ? (rateBRampEnd - rateBRampStart) : nil
         Task { @MainActor in
             TransitionDiagnostics.shared.rateBRampActive = rampActiveCopy
             TransitionDiagnostics.shared.rateBRampStartRel = startRelCopy
             TransitionDiagnostics.shared.rateBRampEndRel = endRelCopy
+            TransitionDiagnostics.shared.rateBRampDuration = durationCopy
         }
     }
 
