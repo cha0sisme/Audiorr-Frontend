@@ -375,6 +375,12 @@ final class TransitionDiagnostics {
     /// rateBRampActive != true. Permite cruzar duración con rating en
     /// validación posterior para refinar la heurística `0.25 + 5.0·Δrate`.
     var rateBRampDuration: Double? = nil
+    /// Delta (segundos) entre el rampStart bassKill raw y el snap al downbeat
+    /// A más cercano hacia atrás. v15.g — nil cuando no aplicó (downbeats
+    /// vacíos o bassKill inactivo). 0 cuando el target ya coincidía con un
+    /// downbeat. Positivo = cuánto se adelantó el ramp para alinearlo con
+    /// el compás. Permite auditar cobertura efectiva del path.
+    var bassKillRampStartSnappedDelta: Double? = nil
     /// true cuando el rampStart de midScoop se adelantó a preRollStart +
     /// cascadeOffsetMidScoop. false cuando no recibió pre-roll (gate
     /// preRollActive=false o useMidScoop=false).
@@ -571,6 +577,7 @@ final class TransitionDiagnostics {
         var rateBRampStartRel: Double? = nil
         var rateBRampEndRel: Double? = nil
         var rateBRampDuration: Double? = nil
+        var bassKillRampStartSnappedDelta: Double? = nil
         var midScoopPreRollApplied: Bool? = nil
         var highShelfPreRollApplied: Bool? = nil
         var filterLeadPreCap: Double? = nil
@@ -906,6 +913,7 @@ final class TransitionDiagnostics {
             self.rateBRampStartRel = nil
             self.rateBRampEndRel = nil
             self.rateBRampDuration = nil
+            self.bassKillRampStartSnappedDelta = nil
             self.midScoopPreRollApplied = nil
             self.highShelfPreRollApplied = nil
             self.aNaturalDecayActive = nil
@@ -1049,6 +1057,7 @@ final class TransitionDiagnostics {
                 rateBRampStartRel: self.rateBRampStartRel,
                 rateBRampEndRel: self.rateBRampEndRel,
                 rateBRampDuration: self.rateBRampDuration,
+                bassKillRampStartSnappedDelta: self.bassKillRampStartSnappedDelta,
                 midScoopPreRollApplied: self.midScoopPreRollApplied,
                 highShelfPreRollApplied: self.highShelfPreRollApplied,
                 filterLeadPreCap: self.filterLeadPreCap,

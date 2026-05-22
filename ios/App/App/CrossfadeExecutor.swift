@@ -92,6 +92,11 @@ class CrossfadeExecutor {
         let beatIntervalB: Double
         let downbeatTimesA: [Double]
         let downbeatTimesB: [Double]
+        // v15.g — downbeats musicales reales del backend (primer beat de
+        // cada compás). Diferente de downbeatTimesA que recibe beats[].
+        // Vacío si el backend no los expone (fallback al rampStart raw).
+        let realDownbeatsA: [Double]
+        let meterA: Int
         // DJ-grade filters: activated by analysis
         let useMidScoop: Bool       // Anti-clash vocal: dip mids on A when vocals overlap
         let useHighShelfCut: Bool   // Hi-hat cleanup: attenuate highs on A
@@ -872,14 +877,31 @@ class CrossfadeExecutor {
         }()
         let bassKillExtendToAnticipation = useBassKill && config.anticipationTime >= 1.5
             && bassKillExtendToAnticipationTypeOK
-        let bkRampStart: Double
+        let rawBkRampStart: Double
         if bassKillExtendToAnticipation {
-            bkRampStart = timings.anticipationStartTime
+            rawBkRampStart = timings.anticipationStartTime
         } else if preRollWillApply {
-            bkRampStart = timings.filterStartTime - preRollDur
+            rawBkRampStart = timings.filterStartTime - preRollDur
         } else {
-            bkRampStart = timings.filterStartTime
+            rawBkRampStart = timings.filterStartTime
         }
+        // v15.g — snap del rampStart bassKill al downbeat A musical más
+        // cercano hacia atrás (cap 1 compás). Solo aplica cuando hay
+        // downbeats disponibles del backend y el bassKill está activo en
+        // una rampa larga (preRoll o extensión hasta anticipationStart).
+        // Snap solo hacia atrás (alarga el ramp); clamp inferior a
+        // timings.startTime para no salir del marco de la transición.
+        let bpmFromBeatIntervalA = config.beatIntervalA > 0 ? 60.0 / config.beatIntervalA : 0
+        let bkRampStart: Double = (useBassKill && (bassKillExtendToAnticipation || preRollWillApply))
+            ? Self.snappedRampStart(
+                target: rawBkRampStart,
+                downbeats: config.realDownbeatsA,
+                beats: config.downbeatTimesA,
+                bpmReported: bpmFromBeatIntervalA,
+                meter: config.meterA,
+                lowerBound: timings.startTime
+            )
+            : rawBkRampStart
         let bkRampEnd: Double = timings.transitionEndTime
         let bkGains: (atRampStart: Double?, atVolumeFadeStart: Double?, atSwap: Double?) = {
             guard useBassKill, let lsA = preset.lowshelfA, bkRampEnd > bkRampStart else {
@@ -914,6 +936,12 @@ class CrossfadeExecutor {
             // cuando useBassKill (en otros casos queda nil porque el campo no
             // aplica conceptualmente).
             TransitionDiagnostics.shared.bassKillRampExtendedA = useBassKill ? bassKillExtendToAnticipation : nil
+            // v15.g — delta del snap al downbeat (segundos adelantados desde
+            // rawBkRampStart). nil cuando snap no aplicó (downbeats vacíos o
+            // bassKill inactivo). 0 cuando target ya coincidía con downbeat.
+            TransitionDiagnostics.shared.bassKillRampStartSnappedDelta =
+                (useBassKill && (bassKillExtendToAnticipation || preRollWillApply))
+                    ? max(0.0, rawBkRampStart - bkRampStart) : nil
             // filterPreRollEffectiveA se setea desde el pre-roll branch en runtime
             // (no estático: detecta si el primer tick efectivamente cayó dentro
             // de la ventana). Inicializado a false para distinguir "no ejecutado"
@@ -1006,6 +1034,75 @@ class CrossfadeExecutor {
     // MARK: - Beat-aligned bass swap computation
 
     /// Find the best wall-clock time for the bass swap point.
+    /// v15.g — Snap del rampStart bassKill al downbeat A musical más cercano
+    /// HACIA ATRÁS, con cap de 1 compás (60·meter/bpm). Nunca snap hacia
+    /// adelante (acortaría la rampa). Si downbeats está vacío o el candidato
+    /// queda fuera del cap, devuelve target sin tocar (fallback al
+    /// comportamiento previo). Aplica clamp inferior a `lowerBound` (típicamente
+    /// `timings.startTime`) para no salir del marco de la transición.
+    ///
+    /// Detección half-time iOS: si `beats[]` sugiere un ritmo efectivo al
+    /// doble del `bpmReported` (caso típico Hip-Hop sub-95bpm donde el
+    /// sanitizer backend dividió bpm a la mitad pero `downbeats[]=beats[::4]`
+    /// sigue al ritmo detectado), consumimos solo downbeats pares para que
+    /// cada snap caiga en un compás real al ritmo musical, no medio compás.
+    private static func snappedRampStart(
+        target: Double,
+        downbeats: [Double],
+        beats: [Double],
+        bpmReported: Double,
+        meter: Int,
+        lowerBound: Double
+    ) -> Double {
+        guard !downbeats.isEmpty, bpmReported > 0 else { return target }
+
+        // V1-a — detección half-time iOS. Si los beats[] van al doble del
+        // bpm reportado, los downbeats publicados están a medio compás del
+        // ritmo musical → tomamos uno sí uno no.
+        let effectiveDownbeats: [Double]
+        if beats.count >= 4 {
+            var diffs: [Double] = []
+            let limit = min(30, beats.count)
+            for i in 1..<limit { diffs.append(beats[i] - beats[i - 1]) }
+            diffs.sort()
+            let med = diffs[diffs.count / 2]
+            if med > 0 {
+                let bpmFromBeats = 60.0 / med
+                let ratio = bpmFromBeats / bpmReported
+                if ratio >= 1.5 {
+                    effectiveDownbeats = downbeats.enumerated()
+                        .compactMap { $0.offset % 2 == 0 ? $0.element : nil }
+                } else {
+                    effectiveDownbeats = downbeats
+                }
+            } else {
+                effectiveDownbeats = downbeats
+            }
+        } else {
+            effectiveDownbeats = downbeats
+        }
+
+        let barDur = 60.0 * Double(meter) / bpmReported
+        let maxDistanceBack = barDur
+
+        // Mejor candidato: máximo downbeat ≤ target.
+        var best: Double? = nil
+        for db in effectiveDownbeats {
+            if db <= target && (best == nil || db > best!) {
+                best = db
+            }
+        }
+        guard let snap = best else { return target }
+        let delta = target - snap
+        if delta <= maxDistanceBack {
+            // V1-b — clamp inferior. Si el snap cae antes del frame 0 de la
+            // transición (pistas <60 bpm con compases ~4s pueden hacerlo),
+            // recortamos a `lowerBound` para no salir del marco.
+            return max(snap, lowerBound)
+        }
+        return target
+    }
+
     /// Targets ~40-50% of the crossfade, snapped to the nearest downbeat of B.
     /// Falls back to linear 50% if no beat data is available.
     private static func computeBassSwapTime(config: Config, timings: Timings) -> Double {
@@ -2434,9 +2531,28 @@ class CrossfadeExecutor {
             && bassKillExtendToAnticipationTypeOK
         let bassKillRampStartOverride: Double?
         if bassKillExtendToAnticipation {
-            bassKillRampStartOverride = timings.anticipationStartTime
+            // v15.g — snap al downbeat A más cercano hacia atrás (cap 1
+            // compás, clamp inferior a timings.startTime). Mantiene
+            // continuidad numérica con applyFiltersStatic.
+            let bpmFromBeatIntervalA = config.beatIntervalA > 0 ? 60.0 / config.beatIntervalA : 0
+            bassKillRampStartOverride = Self.snappedRampStart(
+                target: timings.anticipationStartTime,
+                downbeats: config.realDownbeatsA,
+                beats: config.downbeatTimesA,
+                bpmReported: bpmFromBeatIntervalA,
+                meter: config.meterA,
+                lowerBound: timings.startTime
+            )
         } else if preRollActive && useBassKill {
-            bassKillRampStartOverride = preRollStart
+            let bpmFromBeatIntervalA = config.beatIntervalA > 0 ? 60.0 / config.beatIntervalA : 0
+            bassKillRampStartOverride = Self.snappedRampStart(
+                target: preRollStart,
+                downbeats: config.realDownbeatsA,
+                beats: config.downbeatTimesA,
+                bpmReported: bpmFromBeatIntervalA,
+                meter: config.meterA,
+                lowerBound: timings.startTime
+            )
         } else {
             bassKillRampStartOverride = nil
         }

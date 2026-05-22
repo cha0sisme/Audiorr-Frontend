@@ -308,6 +308,15 @@ actor AnalysisCacheService {
         if let beats = result.beats, !beats.isEmpty {
             analysis.downbeatTimes = beats
         }
+        // v15.g — campo paralelo con downbeats musicales reales del backend.
+        // No reemplaza downbeatTimes (que sigue siendo beats[] por compat con
+        // consumidores que lo tratan como "lista de beats"). Cuando el backend
+        // no expone el campo (snapshot pre-backfill) el path V1 cae al
+        // fallback. meter por defecto 4 — backend actual siempre devuelve 4.
+        if let dbs = result.downbeats, !dbs.isEmpty {
+            analysis.realDownbeats = dbs
+            analysis.meter = result.meter ?? 4
+        }
 
         if let segments = result.speechSegments {
             analysis.speechSegments = segments.map { (start: $0.start, end: $0.end) }

@@ -271,6 +271,12 @@ enum DJMixingService {
         var chorusStartTime: Double = 0
         var phraseBoundaries: [Double] = []
         var downbeatTimes: [Double] = []
+        // v15.g — downbeats musicales del backend (primer beat de cada compás).
+        // Diferente de `downbeatTimes` que recibe beats[] por compat. Usado por
+        // el snap de rampStart en CrossfadeExecutor. Vacío si el backend aún
+        // no lo expone (snapshot pre-backfill).
+        var realDownbeats: [Double] = []
+        var meter: Int = 4
         var speechSegments: [(start: Double, end: Double)] = []
         var hasError: Bool = false
         var hasOutroData: Bool = false
@@ -436,6 +442,11 @@ enum DJMixingService {
         let beatIntervalB: Double
         let downbeatTimesA: [Double]
         let downbeatTimesB: [Double]
+        // v15.g — downbeats musicales del backend (no beats). Vacío si el
+        // backend no los expuso aún. Consumido por CrossfadeExecutor para
+        // snap de rampStart en el bassKill A.
+        let realDownbeatsA: [Double]
+        let meterA: Int
         let useMidScoop: Bool
         let useHighShelfCut: Bool
         let isOutroInstrumental: Bool
@@ -1266,6 +1277,13 @@ enum DJMixingService {
         let rawDbB = (safeNext?.hasError != true) ? (safeNext?.downbeatTimes ?? []) : []
         let dbB: [Double] = timeStretch.useTimeStretch && timeStretch.rateB > 0
             ? rawDbB.map { $0 / Double(timeStretch.rateB) } : rawDbB
+        // v15.g — downbeats musicales reales del backend (paralelo a dbA/dbB
+        // que recibe beats[]). Usado por el snap de rampStart en
+        // CrossfadeExecutor. Cuando vacío, el path cae al fallback (rampStart
+        // sin tocar). beatIntervalAFromBackend permite al executor calcular
+        // bpm musical sin half-time mismatch.
+        let realDbA = (safeCurrent?.hasError != true) ? (safeCurrent?.realDownbeats ?? []) : []
+        let meterA = (safeCurrent?.hasError != true) ? (safeCurrent?.meter ?? 4) : 4
 
         // ── Instrumental detection (refined with actual fade zone) ──
         let outroInstrumental = detectOutroInstrumental(
@@ -1617,6 +1635,8 @@ enum DJMixingService {
             beatIntervalB: biB,
             downbeatTimesA: dbA,
             downbeatTimesB: dbB,
+            realDownbeatsA: realDbA,
+            meterA: meterA,
             useMidScoop: effectiveMidScoop,
             useHighShelfCut: djFilters.useHighShelfCut,
             isOutroInstrumental: outroInstrumental,
