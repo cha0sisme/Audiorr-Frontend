@@ -289,7 +289,16 @@ class CrossfadeExecutor {
     // filtersAggressive, r=8) "playerB aplicó filtros o fade demasiado rápido".
     // Banda A se queda igual — la "construcción de tensión" en A sí funciona.
     static let presetAnticipation = FilterPreset(
-        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 1.2),
+        // v15.g — Q 1.2 → 0.7 (cerca de Butterworth Q=0.707, sin resonancia).
+        // Q=1.2 dejaba un pico de ~+1.6 dB en la frecuencia de corte (RBJ
+        // cookbook biquad highpass) que el oído rastreaba como "color
+        // metálico" del filtro al final del sweep cuando el corte avanzaba
+        // de 600 a 5000 Hz. Q=0.7 da pendiente 12 dB/oct sin pico — el corte
+        // queda invisible como gesto, audible solo como ausencia de bajas.
+        // Mantiene la jerarquía con presetAggressive (Q=1.2 conserva
+        // carácter agresivo) y se alinea con presetNormal (Q=1.1) que
+        // históricamente no genera queja de "tic" perceptible.
+        highpassA: .init(startFreq: 600, midFreq: 2500, endFreq: 5000, q: 0.7),
         highpassB: .init(startFreq: 800, midFreq: 200, endFreq: 60, q: 0.6),
         // v15.f — endGain -16 → -12 dB en presetAnticipation. La rampa cosSquared
         // a -16 dB sobre A todavía a volumen pleno (durante los 2-4s de
