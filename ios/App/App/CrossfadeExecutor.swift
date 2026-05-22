@@ -168,6 +168,7 @@ class CrossfadeExecutor {
              energyA: Double = 0.5, energyB: Double = 0.5,
              beatIntervalA: Double = 0, beatIntervalB: Double = 0,
              downbeatTimesA: [Double] = [], downbeatTimesB: [Double] = [],
+             realDownbeatsA: [Double] = [], meterA: Int = 4,
              useMidScoop: Bool = false, useHighShelfCut: Bool = false,
              isOutroInstrumental: Bool = false, isIntroInstrumental: Bool = false,
              danceability: Double = 0.5, skipBFilters: Bool = false,
@@ -199,6 +200,8 @@ class CrossfadeExecutor {
             self.beatIntervalB = beatIntervalB
             self.downbeatTimesA = downbeatTimesA
             self.downbeatTimesB = downbeatTimesB
+            self.realDownbeatsA = realDownbeatsA
+            self.meterA = meterA
             self.useMidScoop = useMidScoop
             self.useHighShelfCut = useHighShelfCut
             self.isOutroInstrumental = isOutroInstrumental
