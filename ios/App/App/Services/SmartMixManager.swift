@@ -263,6 +263,14 @@ final class SmartMixManager {
         var unmixed = valid
         var mixed: [AnalyzedSong] = []
 
+        // Pre-compute pool artist counts para artist penalty proporcional.
+        // Permite al round-robin saber cuántas pistas hay del mismo artista
+        // en el conjunto y separar en consecuencia (4 Biggies de 27 ≈ 1 cada 6-7).
+        var poolArtistCounts: [String: Int] = [:]
+        for s in valid {
+            poolArtistCounts[s.song.artist, default: 0] += 1
+        }
+
         // 1. Choose starting song: moderate energy, gentle intro, comfortable BPM
         let startIdx = bestStartingIndex(unmixed)
         mixed.append(unmixed.remove(at: startIdx))
@@ -278,7 +286,7 @@ final class SmartMixManager {
             let forceDiversity = mixed.count > 0 && mixed.count % 5 == 0
 
             for i in 0..<unmixed.count {
-                var score = compatibility(mixed.last!, unmixed[i], history: mixed, position: mixed.count, total: valid.count)
+                var score = compatibility(mixed.last!, unmixed[i], history: mixed, position: mixed.count, total: valid.count, poolArtistCounts: poolArtistCounts)
                 if forceDiversity && mixed.count >= 2 {
                     let recentKeys = mixed.suffix(3).compactMap(\.key)
                     if let candidateKey = unmixed[i].key, recentKeys.contains(candidateKey) {
@@ -359,6 +367,22 @@ final class SmartMixManager {
     // MARK: - Closing Song Selection
 
     private func bestClosingIndex(_ songs: [AnalyzedSong]) -> Int {
+        // Cool-down real anclado al pool: cuartiles del catálogo concreto en
+        // lugar de thresholds absolutos. Los bonos energy<0.40 / bpm<90 fallan
+        // en catálogos donde la mayoría de pistas ya están en ese rango (Hip-Hop
+        // lento) o donde casi nada lo cumple (workout) — el closer siempre debe
+        // ser lo más bajo disponible del pool concreto.
+        let analyzed = songs.compactMap { $0.analysis != nil ? $0 : nil }
+        guard !analyzed.isEmpty else { return 0 }
+
+        let energies = analyzed.map { $0.energy }.sorted()
+        let bpms = analyzed.map { $0.perceivedBPM }.sorted()
+        let n = analyzed.count
+        let p25Energy = energies[max(0, n / 4 - 1)]
+        let p50Energy = energies[max(0, n / 2 - 1)]
+        let p25Bpm = bpms[max(0, n / 4 - 1)]
+        let p75Bpm = bpms[min(n - 1, (3 * n) / 4)]
+
         var bestIdx = 0
         var bestScore = -Double.infinity
 
@@ -366,15 +390,18 @@ final class SmartMixManager {
             guard song.analysis != nil else { continue }
             var score: Double = 0
 
-            // Prefer low energy
-            if song.energy < 0.40 { score += 8 }
-            if song.energy < 0.55 { score += 4 }
+            // Energy relativa al pool: cuartil bajo = bonus fuerte, peak = penalty
+            if song.energy <= p25Energy { score += 10 }
+            else if song.energy <= p50Energy { score += 4 }
             if song.energy > 0.80 { score -= 20 }
 
-            // Comfortable/slow BPM (use perceived to handle half/double-time)
+            // BPM relativo al pool: cuartil bajo = bonus, cuartil alto = penalty
+            // (un closer no debería ser el track más rápido del set).
             let bpm = song.perceivedBPM
-            if bpm >= 70 && bpm <= 110 { score += 5 }
-            if bpm < 90 { score += 3 }
+            if bpm <= p25Bpm { score += 10 }
+            if bpm >= p75Bpm { score -= 12 }
+            // Bonus extra si BPM en zona absoluta de cool-down (70-100 bpm)
+            if bpm >= 70 && bpm <= 100 { score += 4 }
 
             // Low danceability is fine for closing
             if song.danceability < 0.50 { score += 3 }
@@ -402,6 +429,11 @@ final class SmartMixManager {
                 score -= 4
             }
 
+            // Bonus por duración ≥3 min — un closer de 1:30 corta abrupto la
+            // sesión, dificulta el "cierre natural" que el listener espera.
+            if song.duration >= 180 { score += 4 }
+            else if song.duration < 120 { score -= 8 }
+
             if score > bestScore {
                 bestScore = score
                 bestIdx = i
@@ -413,7 +445,8 @@ final class SmartMixManager {
     // MARK: - Compatibility Score (v4.0 — 9 dimensions)
 
     private func compatibility(_ a: AnalyzedSong, _ b: AnalyzedSong, history: [AnalyzedSong],
-                               position: Int = 0, total: Int = 0) -> Double {
+                               position: Int = 0, total: Int = 0,
+                               poolArtistCounts: [String: Int]? = nil) -> Double {
         guard a.analysis != nil, b.analysis != nil else { return .infinity }
 
         let bpmA = a.bpm
@@ -505,10 +538,33 @@ final class SmartMixManager {
             }
         }
 
-        // ── 5. Artist penalty (unchanged) ──
+        // ── 5. Artist penalty ──
+        // Proporcional al peso del artista en el pool cuando se pasa
+        // `poolArtistCounts`: round-robin con backoff calculado según
+        // `expectedSpacing = poolSize / artistCount`. Si el artista vuelve a
+        // aparecer más cerca que el spacing esperado, penalty proporcional al
+        // déficit. Sin el dict (caller legacy), fallback a fórmula fija
+        // histórica (distancia recientes 4).
         var artistPenalty: Double = 0
         if a.song.artist == b.song.artist {
             artistPenalty = 10
+        } else if let counts = poolArtistCounts {
+            let artistCount = counts[b.song.artist] ?? 1
+            let poolSize = counts.values.reduce(0, +)
+            if artistCount > 1 && poolSize > 0 {
+                let expectedSpacing = max(2.0, Double(poolSize) / Double(artistCount))
+                var lastDistance: Int? = nil
+                for (idx, s) in history.reversed().enumerated() {
+                    if s.song.artist == b.song.artist {
+                        lastDistance = idx + 1
+                        break
+                    }
+                }
+                if let dist = lastDistance, Double(dist) < expectedSpacing {
+                    let deficit = (expectedSpacing - Double(dist)) / expectedSpacing
+                    artistPenalty = 10.0 * deficit
+                }
+            }
         } else {
             let recent = history.suffix(4).reversed()
             if let idx = recent.firstIndex(where: { $0.song.artist == b.song.artist }) {
