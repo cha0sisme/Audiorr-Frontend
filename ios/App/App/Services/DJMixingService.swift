@@ -1094,6 +1094,34 @@ enum DJMixingService {
             tier4Active = false
         }
 
+        // ── 6a. Gate defensivo entryPoint tardío vs vocalStartB ──
+        // Cuando un blend (BEAT_MATCH_BLEND / EQ_MIX) tiene su entryPoint
+        // posterior al inicio de la voz de B + 3s, el blend pisa una vocal
+        // ya cantando ≥3s. Cluster medido sobre N=242 rated (pool acumulado):
+        // 9 pares cumplen el gate con mean 6.00 vs global 8.33 (delta −2.33);
+        // 0 diamantes r=10 entran en el gate. Cobertura 3.7%, daño colateral
+        // nulo en el dataset. Reasigna a SEQUENTIAL para que A acabe natural
+        // y B arranque desde su inicio musical real ("mirar al principio de
+        // playerB").
+        //
+        // No depende de entrySource (la formulación previa con
+        // `entrySource ∈ {chorusFallback, energyBoost, chorusPromotion}` daba
+        // 0 redirects porque otro override upstream ya cubre esos paths).
+        let vocalStartBForLateEntryGate: Double = (safeNext?.hasError != true)
+            ? (safeNext?.vocalStartTime ?? 0)
+            : 0
+        let isBlendyForLateEntryGate =
+            transition.type == .beatMatchBlend || transition.type == .eqMix
+        if isBlendyForLateEntryGate
+            && vocalStartBForLateEntryGate > 0
+            && finalEntry > vocalStartBForLateEntryGate + 3.0 {
+            let oldType = transition.type
+            transition = TransitionTypeResult(
+                type: .sequential,
+                reason: "[Late entry vs vocalStartB (finalEntry=\(String(format: "%.1f", finalEntry))s > vocalStartB+3s=\(String(format: "%.1f", vocalStartBForLateEntryGate + 3.0))s, era \(oldType.rawValue)) → SEQUENTIAL] " + transition.reason
+            )
+        }
+
         // ── 6b. Fade duration overrides per transition type ──
         // calculateAdaptiveFadeDuration assumes a graceful blend and returns
         // 5–15s based on outro structure. Some transition types (decided AFTER
