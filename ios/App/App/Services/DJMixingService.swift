@@ -2723,6 +2723,18 @@ enum DJMixingService {
             decision += " Acortado por B corta (disponible: \(String(format: "%.1f", bAvailable + 2))s) a \(String(format: "%.2f", fadeDuration))s."
         }
 
+        // Cap final por punch B: si entryPoint marca un punto musical concreto
+        // (chorus, vocalStart, energyBoost), fadeDuration no debe pasarse de él
+        // con margen, o el punch queda enterrado bajo B aún subiendo volumen.
+        // Aplicado después de todos los modificadores (introCap, outroLen,
+        // minimal, reducción 20% outro vocal) porque cualquiera de ellos puede
+        // inflar el valor sobre el cap pre-modulaciones del calculo principal.
+        if entryPoint > 0 && fadeDuration > entryPoint / 1.1 {
+            let punchSafeCap = max(2, entryPoint / 1.1)
+            fadeDuration = punchSafeCap
+            decision += " Cap final por punch B (entry=\(String(format: "%.1f", entryPoint))s) a \(String(format: "%.2f", fadeDuration))s."
+        }
+
         return FadeDurationResult(duration: max(2, fadeDuration), decision: decision)
     }
 
