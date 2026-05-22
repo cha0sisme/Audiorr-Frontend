@@ -381,6 +381,24 @@ final class TransitionDiagnostics {
     /// downbeat. Positivo = cuánto se adelantó el ramp para alinearlo con
     /// el compás. Permite auditar cobertura efectiva del path.
     var bassKillRampStartSnappedDelta: Double? = nil
+    /// true cuando el snap al downbeat se ejecutó realmente (downbeats
+    /// poblados y el camino entró en `snappedRampStart`). false cuando
+    /// bassKill estaba activo pero los downbeats llegaron vacíos y el snap
+    /// fue bypassed (delta=0 espurio). nil cuando bassKill no aplicó.
+    /// Desambigua los dos modos que `bassKillRampStartSnappedDelta=0`
+    /// colapsa en uno solo.
+    var bassKillSnapApplied: Bool? = nil
+    /// Tamaño de `realDownbeatsA` (downbeats musicales backend) en el momento
+    /// de la transición. nil cuando no hay análisis. 0 = cache sin downbeats
+    /// poblados. >0 = downbeats disponibles para el path de snap. Permite
+    /// distinguir cobertura del path sin serializar el array entero.
+    var realDownbeatsACount: Int? = nil
+    /// `currentAnalysis.lastVocalTime` cuando `hasVocalEndData=true`, nil en
+    /// caso contrario. Permite distinguir "vocal end no detectado" (nil) de
+    /// "vocal end a 0s" (0 literal). Necesario para auditar el flujo de
+    /// invalidación de caché — sin este campo el valor llegaba siempre
+    /// como null al `TransitionRecord` por ausencia de serialización.
+    var lastVocalTimeA: Double? = nil
     /// true cuando el rampStart de midScoop se adelantó a preRollStart +
     /// cascadeOffsetMidScoop. false cuando no recibió pre-roll (gate
     /// preRollActive=false o useMidScoop=false).
@@ -578,6 +596,9 @@ final class TransitionDiagnostics {
         var rateBRampEndRel: Double? = nil
         var rateBRampDuration: Double? = nil
         var bassKillRampStartSnappedDelta: Double? = nil
+        var bassKillSnapApplied: Bool? = nil
+        var realDownbeatsACount: Int? = nil
+        var lastVocalTimeA: Double? = nil
         var midScoopPreRollApplied: Bool? = nil
         var highShelfPreRollApplied: Bool? = nil
         var filterLeadPreCap: Double? = nil
@@ -1058,6 +1079,9 @@ final class TransitionDiagnostics {
                 rateBRampEndRel: self.rateBRampEndRel,
                 rateBRampDuration: self.rateBRampDuration,
                 bassKillRampStartSnappedDelta: self.bassKillRampStartSnappedDelta,
+                bassKillSnapApplied: self.bassKillSnapApplied,
+                realDownbeatsACount: self.realDownbeatsACount,
+                lastVocalTimeA: self.lastVocalTimeA,
                 midScoopPreRollApplied: self.midScoopPreRollApplied,
                 highShelfPreRollApplied: self.highShelfPreRollApplied,
                 filterLeadPreCap: self.filterLeadPreCap,

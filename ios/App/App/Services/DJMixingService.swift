@@ -1607,12 +1607,22 @@ enum DJMixingService {
         // backend no ha analizado la pista (queda como gap en TransitionRecord).
         let subBassRmsA_outro_telemetry: Double? = safeCurrent?.subBassOutroRms
         let subBassRmsB_intro_telemetry: Double? = safeNext?.subBassIntroRms
+        // `lastVocalTimeA` desambigua "vocal end no detectado" (nil) de "0
+        // literal" via hasVocalEndData. `realDownbeatsACount` permite saber
+        // si el path de snap al downbeat pudo ejecutarse (>0) o quedó
+        // bypassed por cache sin downbeats poblados (0).
+        let lastVocalTimeA_telemetry: Double? = (safeCurrent?.hasVocalEndData == true)
+            ? safeCurrent?.lastVocalTime : nil
+        let realDownbeatsACount_telemetry: Int? = (safeCurrent?.hasError != true)
+            ? realDbA.count : nil
         Task { @MainActor in
             TransitionDiagnostics.shared.bassProminenceB_0_15s = bassProminenceB_telemetry
             TransitionDiagnostics.shared.subBassRmsA_outro = subBassRmsA_outro_telemetry
             TransitionDiagnostics.shared.subBassRmsB_intro = subBassRmsB_intro_telemetry
             TransitionDiagnostics.shared.vocalOverlapRiskCode = vocalOverlapRiskCodeForTelemetry
             TransitionDiagnostics.shared.energyIntroB_telemetry = energyIntroBForTelemetry
+            TransitionDiagnostics.shared.lastVocalTimeA = lastVocalTimeA_telemetry
+            TransitionDiagnostics.shared.realDownbeatsACount = realDownbeatsACount_telemetry
         }
 
         return CrossfadeResult(

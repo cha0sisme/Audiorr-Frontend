@@ -942,9 +942,15 @@ class CrossfadeExecutor {
             // v15.g — delta del snap al downbeat (segundos adelantados desde
             // rawBkRampStart). nil cuando snap no aplicó (downbeats vacíos o
             // bassKill inactivo). 0 cuando target ya coincidía con downbeat.
+            let bkSnapEligible = useBassKill && (bassKillExtendToAnticipation || preRollWillApply)
             TransitionDiagnostics.shared.bassKillRampStartSnappedDelta =
-                (useBassKill && (bassKillExtendToAnticipation || preRollWillApply))
-                    ? max(0.0, rawBkRampStart - bkRampStart) : nil
+                bkSnapEligible ? max(0.0, rawBkRampStart - bkRampStart) : nil
+            // Desambigua delta=0 espurio (downbeats vacíos, snap bypassed)
+            // de delta=0 legítimo (snap ejecutado, target ya alineado al
+            // downbeat). Permite distinguir cobertura efectiva del path
+            // cuando el campo numérico colapsa los dos modos.
+            TransitionDiagnostics.shared.bassKillSnapApplied =
+                bkSnapEligible ? !config.realDownbeatsA.isEmpty : nil
             // filterPreRollEffectiveA se setea desde el pre-roll branch en runtime
             // (no estático: detecta si el primer tick efectivamente cayó dentro
             // de la ventana). Inicializado a false para distinguir "no ejecutado"
