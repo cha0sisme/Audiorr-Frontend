@@ -111,6 +111,17 @@ final class QueueManager: AudioEngineDelegate {
     private var crossfadePreparationTask: Task<Void, Never>?
     private let maxHistorySize = 500
 
+    // MARK: - Network Recovery State
+    @ObservationIgnored private var networkObserverTask: Task<Void, Never>?
+    @ObservationIgnored private var networkRecoveryDebounce: Task<Void, Never>?
+    @ObservationIgnored private var lastNetworkConnected: Bool = true
+    /// Captura isPlaying en transicion connected -> disconnected. En recovery
+    /// solo auto-resume si era true; respeta pausa manual del usuario.
+    @ObservationIgnored private var wasPlayingWhenNetworkLost: Bool = false
+    /// True while prepareNextForCrossfade is awaiting downloads/analysis.
+    /// Recovery skips relaunch when set to avoid clobbering an in-flight prep.
+    private(set) var isPreparingNext: Bool = false
+
     /// Tracks the songId whose background download is in progress so we can cancel it on skip.
     private var activeDownloadSongId: String?
 
@@ -124,6 +135,7 @@ final class QueueManager: AudioEngineDelegate {
 
     private init() {
         restoreState()
+        startNetworkRecoveryObserver()
     }
 
     // MARK: - Play
@@ -754,6 +766,7 @@ final class QueueManager: AudioEngineDelegate {
         Task { await AnalysisCacheService.shared.prefetch(songs: Array(upcoming)) }
 
         // Try to preload the file + calculate crossfade intelligence
+        isPreparingNext = true
         crossfadePreparationTask = Task {
             // Parallel: load file + get analysis for both songs.
             // Analysis uses 8s timeout — if backend is slow/unreachable, we proceed
@@ -772,6 +785,7 @@ final class QueueManager: AudioEngineDelegate {
             let nxtAn = await nextAnalysis
 
             await MainActor.run {
+                defer { self.isPreparingNext = false }
                 // Discard stale results if song changed or another preparation started
                 guard self.crossfadePreparationId == thisPreparationId else {
                     print("[QueueManager] Discarding stale crossfade preparation")
@@ -1859,6 +1873,85 @@ final class QueueManager: AudioEngineDelegate {
             state.queue = queue.map { $0.toQueueSong() }
             state.refreshBpm()
         }
+    }
+
+    // MARK: - Network Recovery
+
+    /// Observa NetworkMonitor.isConnected. En transicion false -> true relanza
+    /// playback parado + prep + precache. Las acciones son idempotentes y los
+    /// guards (isCrossfading, isPreparingNext) protegen el swap path.
+    /// En buena cobertura isConnected se queda true y el observer duerme.
+    private func startNetworkRecoveryObserver() {
+        lastNetworkConnected = NetworkMonitor.shared.isConnected
+        networkObserverTask?.cancel()
+        networkObserverTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                    withObservationTracking {
+                        _ = NetworkMonitor.shared.isConnected
+                    } onChange: {
+                        cont.resume()
+                    }
+                }
+                if Task.isCancelled { return }
+                self.onNetworkStateMightHaveChanged()
+            }
+        }
+    }
+
+    /// Detecta ambos edges: true->false captura wasPlaying para respetar pausa
+    /// manual; false->true dispara recovery con debounce 1s extra (NWPathMonitor
+    /// ya tiene 0.1s en su pathUpdateHandler — el extra evita disparar recovery
+    /// en oscilacion rapida 4G typical 1 raya intermitente).
+    private func onNetworkStateMightHaveChanged() {
+        let nowConnected = NetworkMonitor.shared.isConnected
+        let lossEdge = (lastNetworkConnected && !nowConnected)
+        let recoveryEdge = (!lastNetworkConnected && nowConnected)
+        lastNetworkConnected = nowConnected
+
+        if lossEdge {
+            wasPlayingWhenNetworkLost = self.isPlaying
+            return
+        }
+        guard recoveryEdge else { return }
+
+        networkRecoveryDebounce?.cancel()
+        networkRecoveryDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.executeNetworkRecovery()
+        }
+    }
+
+    /// Acciones de recovery cuando vuelve la red. Guards bloqueantes:
+    ///   - isCrossfading: el swap path NO se interrumpe nunca.
+    ///   - isPreparingNext: evita doble prep concurrente.
+    /// Acciones idempotentes:
+    ///   - playCurrentSong reusa el cache hit / stream mode segun toque.
+    ///   - prepareNextForCrossfade cancela su task anterior y descarta stale via gen-id.
+    ///   - preCacheUpcoming skipea via isSongDownloaded en DownloadManager.
+    private func executeNetworkRecovery() {
+        let engine = AudioEngineManager.shared
+        if engine?.isCrossfading == true {
+            print("[QueueManager] Network restored mid-crossfade — recovery skipped (swap path sagrado)")
+            return
+        }
+        if isPreparingNext {
+            print("[QueueManager] Network restored while preparing next — recovery skipped (prep en vuelo)")
+            return
+        }
+        guard let song = currentSong else { return }
+
+        let shouldAutoResume = wasPlayingWhenNetworkLost && !(engine?.isPlaying ?? false)
+        wasPlayingWhenNetworkLost = false
+        if shouldAutoResume {
+            print("[QueueManager] Network restored, currentSong parado y wasPlaying — relaunch: \(song.title)")
+            playCurrentSong()
+        }
+
+        prepareNextForCrossfade()
+        preCacheUpcoming()
     }
 }
 
