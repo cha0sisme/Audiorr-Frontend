@@ -142,6 +142,11 @@ class AudioEngineManager {
     private var streamItemStatusObservation: NSKeyValueObservation?
     private var streamTimeControlObservation: NSKeyValueObservation?
     private var streamStallReportTask: Task<Void, Never>?
+    /// URL del ultimo stream activo. Persiste mientras streamPlayer != nil
+    /// para que retryStreamPlayback pueda recrear un AVPlayerItem identico
+    /// sin reiniciar la pipeline desde QueueManager.playCurrentSong.
+    private var lastStreamURL: URL?
+    private var lastStreamSongId: String?
 
     // MARK: - Native delegate (replaces plugin for native queue management)
 
@@ -832,6 +837,8 @@ class AudioEngineManager {
         // donde mainMixerNode.outputVolume = volume y mixerA.outputVolume = replayGainMultiplier.
         player.volume = min(1.0, volume * replayGainMultiplier)
         streamPlayer = player
+        lastStreamURL = remoteURL
+        lastStreamSongId = songIdFromURL(remoteURL)
 
         if startAt > 0 {
             player.seek(to: CMTime(seconds: startAt, preferredTimescale: 1000))
@@ -877,7 +884,65 @@ class AudioEngineManager {
         streamStallReportTask = nil
         streamPlayer?.pause()
         streamPlayer = nil
+        lastStreamURL = nil
+        lastStreamSongId = nil
         isStreamMode = false
+    }
+
+    /// Reintento rapido de stream playback cuando el AVPlayer entro en .failed
+    /// o stall. Reusa el streamPlayer existente con un AVPlayerItem nuevo via
+    /// replaceCurrentItem y reinstala los observers KVO. NO destruye el state
+    /// del engine ni reinicia la pipeline (a diferencia de playCurrentSong).
+    /// Devuelve true si pudo intentar el retry; false si no aplica (no estaba
+    /// en stream mode o el player ya se libero) — en ese caso el caller debe
+    /// caer al path generico playCurrentSong.
+    func retryStreamPlayback() -> Bool {
+        guard isStreamMode,
+              let player = streamPlayer,
+              let url = lastStreamURL else {
+            return false
+        }
+        let resumePos = currentTime()
+        let songId = lastStreamSongId
+
+        // Reemplazar el item del player. KVO sobre el item viejo queda inerte
+        // (Apple invalida automaticamente cuando el item se libera, pero
+        // forzamos invalidate explicito para evitar callbacks tardios).
+        streamItemStatusObservation?.invalidate()
+        streamItemStatusObservation = nil
+
+        let newItem = AVPlayerItem(url: url)
+        // Re-instalar end-of-track observer en el item nuevo. El viejo se
+        // limpia al sobrescribir streamPlayerEndObserver justo despues.
+        if let observer = streamPlayerEndObserver {
+            NotificationCenter.default.removeObserver(observer)
+            streamPlayerEndObserver = nil
+        }
+        streamPlayerEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: newItem, queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.isStreamMode else { return }
+            self.isPlaying = false
+            self.isStreamMode = false
+            self.stopProgressTimer()
+            self.updateNowPlayingPlaybackState()
+            self.delegate?.audioEngineDidFinishSong()
+            print("[AudioEngineManager] Stream track terminado (post-retry)")
+        }
+
+        player.replaceCurrentItem(with: newItem)
+        if resumePos > 0 {
+            player.seek(to: CMTime(seconds: resumePos, preferredTimescale: 1000))
+        }
+        player.play()
+        isPlaying = true
+
+        // Re-instalar el observer de status sobre el item nuevo y el de
+        // timeControl sobre el player (que sigue siendo el mismo, pero
+        // tras un fallo el observer previo pudo quedar en estado terminal).
+        installStreamFailureObservers(player: player, item: newItem, songId: songId)
+        print("[AudioEngineManager] retryStreamPlayback OK pos=\(String(format: "%.1f", resumePos))s")
+        return true
     }
 
     /// Instala observers KVO sobre AVPlayer/AVPlayerItem para detectar fallos

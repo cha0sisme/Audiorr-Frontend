@@ -1960,8 +1960,16 @@ final class QueueManager: AudioEngineDelegate {
         wasPlayingWhenNetworkLost = false
         streamFailedSongId = nil
         if shouldAutoResume {
-            print("[QueueManager] Network restored, currentSong parado — relaunch: \(song.title)")
-            playCurrentSong()
+            // Prioridad: retry rapido del stream sin reiniciar pipeline.
+            // Si el engine ya no esta en stream mode (porque hizo handoff o
+            // se detuvo), retryStreamPlayback devuelve false y caemos al
+            // path generico playCurrentSong.
+            if streamFailedHere, engine?.retryStreamPlayback() == true {
+                print("[QueueManager] Network restored — stream retry para: \(song.title)")
+            } else {
+                print("[QueueManager] Network restored, currentSong parado — relaunch: \(song.title)")
+                playCurrentSong()
+            }
         }
 
         prepareNextForCrossfade()
