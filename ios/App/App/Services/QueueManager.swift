@@ -118,6 +118,9 @@ final class QueueManager: AudioEngineDelegate {
     /// Captura isPlaying en transicion connected -> disconnected. En recovery
     /// solo auto-resume si era true; respeta pausa manual del usuario.
     @ObservationIgnored private var wasPlayingWhenNetworkLost: Bool = false
+    /// SongId reportado por audioEngineStreamFailed. Recovery lo consume para
+    /// forzar relanzamiento (la pausa no fue intencional, fue fallo de red).
+    @ObservationIgnored private var streamFailedSongId: String?
     /// True while prepareNextForCrossfade is awaiting downloads/analysis.
     /// Recovery skips relaunch when set to avoid clobbering an in-flight prep.
     private(set) var isPreparingNext: Bool = false
@@ -683,6 +686,14 @@ final class QueueManager: AudioEngineDelegate {
                 persistState()
                 syncNowPlayingState()
             }
+        }
+    }
+
+    nonisolated func audioEngineStreamFailed(songId: String?, reason: String) {
+        Task { @MainActor in
+            let id = songId ?? self.currentSong?.id
+            self.streamFailedSongId = id
+            print("[QueueManager] Stream falla recibida (\(reason)) — marcando intent para songId=\(id ?? "?")")
         }
     }
 
@@ -1943,10 +1954,13 @@ final class QueueManager: AudioEngineDelegate {
         }
         guard let song = currentSong else { return }
 
-        let shouldAutoResume = wasPlayingWhenNetworkLost && !(engine?.isPlaying ?? false)
+        let streamFailedHere = (streamFailedSongId == song.id)
+        let shouldAutoResume = (wasPlayingWhenNetworkLost || streamFailedHere)
+            && !(engine?.isPlaying ?? false)
         wasPlayingWhenNetworkLost = false
+        streamFailedSongId = nil
         if shouldAutoResume {
-            print("[QueueManager] Network restored, currentSong parado y wasPlaying — relaunch: \(song.title)")
+            print("[QueueManager] Network restored, currentSong parado — relaunch: \(song.title)")
             playCurrentSong()
         }
 
@@ -1971,4 +1985,8 @@ protocol AudioEngineDelegate: AnyObject {
     /// Called when resume() is invoked but no file/stream is loaded (cold-start).
     /// Delegate should call playCurrentSong() to load and start playback.
     func audioEngineNeedsReload()
+    /// AVPlayer entro en estado de fallo o stall prolongado (>5s) durante
+    /// stream mode. El delegate marca intent y espera a NetworkMonitor para
+    /// retomar; NO debe avanzar de cancion automaticamente.
+    func audioEngineStreamFailed(songId: String?, reason: String)
 }

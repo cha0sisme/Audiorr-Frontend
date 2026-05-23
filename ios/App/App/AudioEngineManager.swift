@@ -136,6 +136,12 @@ class AudioEngineManager {
     private var streamPlayer: AVPlayer?
     private var streamPlayerEndObserver: Any?
     private(set) var isStreamMode = false
+    // KVO sobre AVPlayer para detectar fallos de stream que dejarian la
+    // reproduccion muda sin notificacion. NSKeyValueObservation block-based
+    // moderno: setear a nil libera el observer sin removeObserver legacy.
+    private var streamItemStatusObservation: NSKeyValueObservation?
+    private var streamTimeControlObservation: NSKeyValueObservation?
+    private var streamStallReportTask: Task<Void, Never>?
 
     // MARK: - Native delegate (replaces plugin for native queue management)
 
@@ -845,6 +851,8 @@ class AudioEngineManager {
             print("[AudioEngineManager] Stream track terminado")
         }
 
+        installStreamFailureObservers(player: player, item: item, songId: songIdFromURL(remoteURL))
+
         startProgressTimer()
         // Actualizar NowPlaying con la nueva canción
         updateNowPlayingMetadata(title: title ?? "", artist: artist ?? "", album: album ?? "",
@@ -858,9 +866,78 @@ class AudioEngineManager {
             NotificationCenter.default.removeObserver(observer)
             streamPlayerEndObserver = nil
         }
+        // Invalidar KVO antes de soltar el AVPlayer evita crash si observer
+        // sobrevive a la liberacion del observado. NSKeyValueObservation
+        // moderno se desregistra al deinicializarse o al ponerse a nil.
+        streamItemStatusObservation?.invalidate()
+        streamItemStatusObservation = nil
+        streamTimeControlObservation?.invalidate()
+        streamTimeControlObservation = nil
+        streamStallReportTask?.cancel()
+        streamStallReportTask = nil
         streamPlayer?.pause()
         streamPlayer = nil
         isStreamMode = false
+    }
+
+    /// Instala observers KVO sobre AVPlayer/AVPlayerItem para detectar fallos
+    /// que dejarian la reproduccion muda sin notificacion al delegate.
+    /// - currentItem.status == .failed -> notificacion inmediata.
+    /// - timeControlStatus == .waitingToPlayAtSpecifiedRate con razon stall
+    ///   por > 5s -> notificacion (microcortes < 5s se ignoran, AVPlayer los
+    ///   resuelve solo y dispararlos seria falso positivo).
+    private func installStreamFailureObservers(player: AVPlayer, item: AVPlayerItem, songId: String?) {
+        streamItemStatusObservation?.invalidate()
+        streamTimeControlObservation?.invalidate()
+        streamStallReportTask?.cancel()
+        streamStallReportTask = nil
+
+        streamItemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard let self else { return }
+            if item.status == .failed {
+                let reason = item.error?.localizedDescription ?? "AVPlayerItem.status = failed"
+                Task { @MainActor in self.notifyStreamFailed(songId: songId, reason: reason) }
+            }
+        }
+
+        streamTimeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.handleStreamTimeControlChange(status: player.timeControlStatus,
+                                                   reason: player.reasonForWaitingToPlay,
+                                                   songId: songId)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleStreamTimeControlChange(status: AVPlayer.TimeControlStatus,
+                                               reason: AVPlayer.WaitingReason?,
+                                               songId: String?) {
+        // Cancelar cualquier vigilia previa: el estado cambio.
+        streamStallReportTask?.cancel()
+        streamStallReportTask = nil
+
+        guard status == .waitingToPlayAtSpecifiedRate,
+              reason == .toMinimizeStalls || reason == .noItemToPlay else {
+            return
+        }
+
+        let watchedSongId = songId
+        streamStallReportTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, let self else { return }
+            // Si el estado mejoro durante la espera el handler lo habria
+            // cancelado. Llegar aqui significa que el stall persiste >5s.
+            self.notifyStreamFailed(songId: watchedSongId,
+                                    reason: "stream stall > 5s (waitingToPlayAtSpecifiedRate)")
+        }
+    }
+
+    @MainActor
+    private func notifyStreamFailed(songId: String?, reason: String) {
+        print("[AudioEngineManager] Stream falla notificada: \(reason) — songId=\(songId ?? "?")")
+        delegate?.audioEngineStreamFailed(songId: songId, reason: reason)
     }
 
     /// Traspasa la reproducción de AVPlayer → AVAudioEngine cuando la descarga completa,
