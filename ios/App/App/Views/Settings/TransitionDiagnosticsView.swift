@@ -28,6 +28,7 @@ import AVFoundation
 struct TransitionDiagnosticsView: View {
     @State private var diag = TransitionDiagnostics.shared
     @State private var showLive = false
+    @State private var showClearCacheConfirm = false
 
     var body: some View {
         TransitionHistoryView()
@@ -56,6 +57,32 @@ struct TransitionDiagnosticsView: View {
                         .accessibilityLabel("Ver transición en curso")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            showClearCacheConfirm = true
+                        } label: {
+                            Label("Clear All Analysis Cache", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Acciones de mantenimiento")
+                }
+            }
+            .confirmationDialog(
+                "Borrar toda la caché de análisis?",
+                isPresented: $showClearCacheConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Borrar caché", role: .destructive) {
+                    Task {
+                        await AnalysisCacheService.shared.invalidateAll()
+                    }
+                }
+                Button("Cancelar", role: .cancel) { }
+            } message: {
+                Text("Forzará refetch fresco del backend en la próxima reproducción de cada pista. Necesario tras backfills de nuevos campos.")
             }
             .sheet(isPresented: $showLive) {
                 NavigationStack {
