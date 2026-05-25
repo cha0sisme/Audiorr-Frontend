@@ -3942,12 +3942,22 @@ enum DJMixingService {
         // exhaustivos en el resto del codebase quedan intactos — futura
         // reintroducción posible si datos lo justifican. Esta capa solo cambia
         // el tipo final pasado al executor.
+        var f5bRetiredFromForTelemetry: String? = nil
         if type == .dropMix {
             type = .sequential
             reason = "[F5b retirar DROP_MIX → SEQUENTIAL] " + reason
+            f5bRetiredFromForTelemetry = "DROP_MIX"
         } else if type == .stemMix {
             type = .sequential
             reason = "[F5b retirar STEM_MIX → SEQUENTIAL] " + reason
+            f5bRetiredFromForTelemetry = "STEM_MIX"
+        }
+        // Telemetría: paralela a sequentialOverrideByVectorD. Permite al
+        // backend atribuir saturacion SEQUENTIAL al path origen (DROP_MIX vs
+        // STEM_MIX) sin parsear el transitionReason.
+        let f5bForCapture = f5bRetiredFromForTelemetry
+        Task { @MainActor in
+            TransitionDiagnostics.shared.f5bRetiredFrom = f5bForCapture
         }
 
         // v15: defensa CUT_A_FADE_IN_B con energyB muy baja. Cuando el tipo

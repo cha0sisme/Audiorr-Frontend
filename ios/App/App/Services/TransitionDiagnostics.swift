@@ -416,6 +416,11 @@ final class TransitionDiagnostics {
     /// escaló el tipo. Permite distinguir SEQUENTIAL orgánico del override
     /// defensivo. nil cuando el override no aplicó.
     var sequentialOverrideByVectorD: Bool? = nil
+    /// Origen del retiro F5b cuando aplicó. Valores: "DROP_MIX" (F5b retiró
+    /// un DROP_MIX original → SEQUENTIAL), "STEM_MIX" (idem para STEM_MIX),
+    /// nil cuando F5b no disparó. Permite atribuir saturación SEQUENTIAL al
+    /// path origen sin parsear strings del transitionReason en el backend.
+    var f5bRetiredFrom: String? = nil
     /// true cuando el branch "A decae natural, B sin fade-in" se activó
     /// (isOutroInstrumental ∧ !tier4Active ∧ !needsAnticipation). Mide
     /// cobertura del flag antes de extensiones futuras.
@@ -605,6 +610,7 @@ final class TransitionDiagnostics {
         var filterLeadCapApplied: Bool? = nil
         var sequentialOverrideByVectorD: Bool? = nil
         var aNaturalDecayActive: Bool? = nil
+        var f5bRetiredFrom: String? = nil
         // v12 (audit 2026-05-05) — opinion del usuario adjunta a la transicion.
         // Persistida en backend desde round 2026-05-10 diagnostics-backend-port
         // (antes en Documents/transition_diagnostics_history.json — eliminado).
@@ -1088,6 +1094,7 @@ final class TransitionDiagnostics {
                 filterLeadCapApplied: self.filterLeadCapApplied,
                 sequentialOverrideByVectorD: self.sequentialOverrideByVectorD,
                 aNaturalDecayActive: self.aNaturalDecayActive,
+                f5bRetiredFrom: self.f5bRetiredFrom,
                 algorithmVersion: DJMixingService.kAlgorithmVersion,
                 buildId: DJMixingService.kBuildId
             )
