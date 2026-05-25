@@ -1480,6 +1480,9 @@ struct TransitionDetailSheet: View {
             rows.append(("Diff", "—"))
         }
         rows.append(("Synced", record.beatSynced ? "Yes" : "No"))
+        if !record.beatSyncInfo.isEmpty {
+            rows.append(("Sync info", record.beatSyncInfo))
+        }
         rows.append(("Time stretch", record.timeStretched
             ? String(format: "rateA=%.3f rateB=%.3f", record.rateA, record.rateB)
             : "Off"))
@@ -1497,6 +1500,11 @@ struct TransitionDetailSheet: View {
         if let s = record.introSlopeB { rows.append(("introSlopeB", String(format: "%.4f /s", s))) }
         if let d = record.downbeatDensityB20s { rows.append(("downbeatDensB20s", String(format: "%.2f", d))) }
         if let eIntro = record.energyIntroB_telemetry { rows.append(("energyIntroB[0..15s]", String(format: "%.3f", eIntro))) }
+        if let sb = record.subBassRmsB_intro { rows.append(("subBassRmsB intro", String(format: "%.2f", sb))) }
+        if let dbs = record.downbeatTimesB, !dbs.isEmpty {
+            let preview = dbs.prefix(3).map { String(format: "%.2f", $0) }.joined(separator: ", ")
+            rows.append(("downbeatTimesB", "n=\(dbs.count) [\(preview)…]"))
+        }
         return rows
     }
 
@@ -1507,6 +1515,8 @@ struct TransitionDetailSheet: View {
         if let r = record.rmsTailCurveA_last { rows.append(("rmsTailCurve last", String(format: "%.3f", r))) }
         if let s = record.rmsTailSlopeA { rows.append(("rmsTailSlope", String(format: "%.4f /s", s))) }
         if let h = record.highShelfGainA_atEnd { rows.append(("highShelfA @end", String(format: "%.2f dB", h))) }
+        if let sb = record.subBassRmsA_outro { rows.append(("subBassRmsA outro", String(format: "%.2f", sb))) }
+        if let lvt = record.lastVocalTimeA { rows.append(("lastVocalTimeA", String(format: "%.1fs", lvt))) }
         return rows
     }
 
@@ -1549,6 +1559,7 @@ struct TransitionDetailSheet: View {
         if let bk = record.bassKillGainA_atSwap { rows.append(("bassKillA @swap", String(format: "%.2f dB", bk))) }
         if let bk = record.bassKillGainA_atVolumeFadeStart { rows.append(("bassKillA @volFade", String(format: "%.2f dB", bk))) }
         if let bk = record.bassKillGainA_atRampStart { rows.append(("bassKillA @rampStart", String(format: "%.2f dB", bk))) }
+        if let ext = record.bassKillRampExtendedA { rows.append(("bassKill ramp extended", ext ? "Yes" : "No")) }
         return rows
     }
 
@@ -1559,8 +1570,13 @@ struct TransitionDetailSheet: View {
         if let r = record.rateBRampActive { rows.append(("rateB ramp", r ? "Active" : "Off")) }
         if let s = record.rateBRampStartRel { rows.append(("rateB ramp start", String(format: "%.2fs", s))) }
         if let e = record.rateBRampEndRel { rows.append(("rateB ramp end", String(format: "%.2fs", e))) }
+        if let d = record.rateBRampDuration { rows.append(("rateB ramp dur", String(format: "%.2fs", d))) }
         if let s = record.sequentialOverrideByVectorD { rows.append(("Vector D override", s ? "Yes" : "No")) }
+        if let f = record.f5bRetiredFrom { rows.append(("F5b retired from", f)) }
         if let n = record.aNaturalDecayActive { rows.append(("A natural decay", n ? "Active" : "Off")) }
+        if let snap = record.bassKillSnapApplied { rows.append(("bassKill snap", snap ? "Applied" : "Bypassed")) }
+        if let delta = record.bassKillRampStartSnappedDelta { rows.append(("bassKill snap delta", String(format: "%.3fs", delta))) }
+        if let count = record.realDownbeatsACount { rows.append(("realDownbeatsA count", "\(count)")) }
         return rows
     }
 
