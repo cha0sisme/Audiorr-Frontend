@@ -1083,7 +1083,7 @@ enum DJMixingService {
             transitionType: transition.type,
             telemetry: &tier4Telemetry
         )
-        let finalEntry: Double
+        var finalEntry: Double
         let tier4Active: Bool
         if let result = tier4Result {
             finalEntry = result.entry
@@ -1116,10 +1116,16 @@ enum DJMixingService {
             && vocalStartBForLateEntryGate > 0
             && finalEntry > vocalStartBForLateEntryGate + 3.0 {
             let oldType = transition.type
+            let oldEntry = finalEntry
             transition = TransitionTypeResult(
                 type: .sequential,
-                reason: "[Late entry vs vocalStartB (finalEntry=\(String(format: "%.1f", finalEntry))s > vocalStartB+3s=\(String(format: "%.1f", vocalStartBForLateEntryGate + 3.0))s, era \(oldType.rawValue)) → SEQUENTIAL] " + transition.reason
+                reason: "[Late entry vs vocalStartB (finalEntry=\(String(format: "%.1f", oldEntry))s > vocalStartB+3s=\(String(format: "%.1f", vocalStartBForLateEntryGate + 3.0))s, era \(oldType.rawValue)) → SEQUENTIAL, entry=0] " + transition.reason
             )
+            // SEQUENTIAL implica que B arranca desde su muestra 0. Sin este
+            // reset finalEntry conserva el valor calculado para el blend
+            // original (puede ser >20s) y B se posicionaria a mitad de la
+            // pista pese al tipo SEQUENTIAL.
+            finalEntry = 0
         }
 
         // ── 6b. Fade duration overrides per transition type ──
