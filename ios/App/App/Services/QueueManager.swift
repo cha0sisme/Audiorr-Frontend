@@ -882,6 +882,14 @@ final class QueueManager: AudioEngineDelegate {
                     if let beats = curAn.beats, beats.count >= 4 {
                         currentSongAnalysis.downbeatTimes = stride(from: 0, to: beats.count, by: 4).map { beats[$0] }
                     }
+                    // realDownbeats: campo musical real del backend, distinto del
+                    // downsample artificial de beats[]. Sin esta copia el campo
+                    // queda [] y la logica downstream que depende de alineacion
+                    // con downbeats reales (beat alignment) no puede disparar.
+                    if let dbs = curAn.downbeats, !dbs.isEmpty {
+                        currentSongAnalysis.realDownbeats = dbs
+                        currentSongAnalysis.meter = curAn.meter ?? 4
+                    }
                     if let segs = curAn.speechSegments {
                         currentSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
                     }
@@ -959,6 +967,12 @@ final class QueueManager: AudioEngineDelegate {
                     nextSongAnalysis.hasIntroData = nxtAn.introEndTime != nil || nxtAn.introEndHeuristic != nil
                     if let beats = nxtAn.beats, beats.count >= 4 {
                         nextSongAnalysis.downbeatTimes = stride(from: 0, to: beats.count, by: 4).map { beats[$0] }
+                    }
+                    // realDownbeats: paralelo a current. Mantiene el campo
+                    // disponible para logica downstream sobre la pista entrante.
+                    if let dbs = nxtAn.downbeats, !dbs.isEmpty {
+                        nextSongAnalysis.realDownbeats = dbs
+                        nextSongAnalysis.meter = nxtAn.meter ?? 4
                     }
                     if let segs = nxtAn.speechSegments {
                         nextSongAnalysis.speechSegments = segs.map { (start: $0.start, end: $0.end) }
