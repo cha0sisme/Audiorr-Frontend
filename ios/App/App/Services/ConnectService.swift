@@ -105,6 +105,24 @@ final class ConnectService {
             return
         }
 
+        // Gate: si el backend ha rechazado nuestra `serverUrl`/username con
+        // 403 recientemente (whitelist Navidrome ajena), no martilleamos
+        // durante el TTL. El flag se libera tras saveCredentials o tras
+        // expirar 24h. Caso tipico: usuario tercero del App Store cuyo
+        // Navidrome no esta en la whitelist del homelab.
+        if let until = AuthTokenStore.shared.backendUnauthorizedUntil() {
+            print("[Connect] Backend authorization denied until \(until) — connect() suprimido")
+            return
+        }
+
+        // Gate: si una llamada previa recibio 429 con Retry-After, respetamos
+        // el lockout sin tocar red. El gate expira automaticamente cuando
+        // `lockedUntil()` detecta que la fecha ya paso.
+        if let until = AuthTokenStore.shared.lockedUntil() {
+            print("[Connect] Rate limited until \(until) — connect() suprimido")
+            return
+        }
+
         isConnecting = true
 
         Task {
@@ -336,12 +354,38 @@ final class ConnectService {
               let navidromeToken = creds.token
         else { throw ConnectError.noCredentials }
 
-        let result = try await BackendService.shared.login(
-            serverUrl: creds.serverUrl,
-            username: creds.username,
-            token: navidromeToken
-        )
-        return result.token
+        do {
+            let result = try await BackendService.shared.login(
+                serverUrl: creds.serverUrl,
+                username: creds.username,
+                token: navidromeToken
+            )
+            // Persiste la sesion en AuthTokenStore solo si el backend devuelve
+            // el par completo del refresh flow. Backends legacy que no emiten
+            // refreshToken (pre-`523d837`) siguen funcionando sin Bearer en el
+            // resto de llamadas REST — el sessionToken se usa solo para el
+            // handshake Socket.IO de abajo, igual que antes de la migracion.
+            if let refreshToken = result.refreshToken {
+                try await AuthTokenStore.shared.save(
+                    sessionToken: result.token,
+                    refreshToken: refreshToken,
+                    expiresIn: result.expiresIn,
+                    refreshExpiresIn: result.refreshExpiresIn ?? result.expiresIn,
+                    isAdmin: result.isAdmin ?? false,
+                    username: result.username
+                )
+            }
+            return result.token
+        } catch BackendError.forbidden {
+            // Whitelist del backend ha rechazado esta serverUrl o username.
+            // Marca el gate con TTL 24h: `connect()` y futuras llamadas via
+            // `ensureSession()` se suprimiran sin tocar red hasta que expire
+            // o el usuario cambie sus credenciales Navidrome. Protege al
+            // homelab de peticiones innecesarias desde clientes con Navidrome
+            // ajena (terceros del App Store).
+            AuthTokenStore.shared.markBackendUnauthorized()
+            throw BackendError.forbidden(reason: nil)
+        }
     }
 
     // MARK: - WebSocket (Engine.IO v4 + Socket.IO v4)

@@ -65,6 +65,10 @@ final class NavidromeService: ObservableObject {
         credentials = creds
         CredentialsStore.shared.save(creds)
         invalidateBackendAvailableCache()
+        // La `serverUrl` nueva puede estar whitelisteada aunque la anterior no.
+        // Libera el gate `backendUnauthorized` para que ConnectService reintente
+        // contra el backend en lugar de quedarse suprimido durante 24h.
+        AuthTokenStore.shared.clearBackendUnauthorized()
         Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
         NotificationCenter.default.post(name: .audiorrDidLogin, object: nil)
     }
