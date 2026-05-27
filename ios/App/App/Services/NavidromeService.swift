@@ -104,19 +104,26 @@ final class NavidromeService: ObservableObject {
 
 
 
-    /// URL base del backend de Audiorr (puerto 2999).
-    /// Uses manual override from UserDefaults if set, otherwise derived from Navidrome host.
+    /// Hostname dedicado del backend Audiorr en produccion. Servicio
+    /// independiente del Navidrome del usuario: vive tras Cloudflare Tunnel
+    /// expuesto en puerto 443. Para uso LAN directo sin round-trip CF, el
+    /// usuario puede setear `audiorr_backend_url` en UserDefaults (Debug
+    /// Settings) — util en sesiones VPN donde se prefiere hablar al backend
+    /// Docker interno via `http://192.168.1.43:2999`.
+    private static let defaultBackendURL = "https://audiorr-api.leandroymayled.info"
+
+    /// URL base del backend de Audiorr.
+    ///
+    /// Antes derivaba de `<navidromeHost>:2999`, lo que rompia fuera de LAN
+    /// porque el puerto 2999 NO esta expuesto via Cloudflare (solo 443).
+    /// Backend Audiorr y Navidrome son servicios separados con dominios
+    /// separados — no se deriva uno del otro.
     func backendURL() -> String? {
-        // Manual override for testing
         if let override = UserDefaults.standard.string(forKey: "audiorr_backend_url"),
            !override.isEmpty {
             return override
         }
-        guard let serverUrl = credentials?.serverUrl,
-              let components = URLComponents(string: serverUrl),
-              let host = components.host else { return nil }
-        let scheme = components.scheme ?? "http"
-        return "\(scheme)://\(host):2999"
+        return Self.defaultBackendURL
     }
 
     /// Whether a manual backend URL override is active.
