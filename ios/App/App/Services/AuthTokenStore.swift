@@ -66,6 +66,16 @@ actor AuthTokenStore {
     private static let lockedUntilKey         = "audiorr_session_locked_until"
     private static let backendUnauthorizedKey = "audiorr_session_backend_unauthorized_until"
     private static let unauthorizedTTL: TimeInterval = 86400  // 24h
+    // Counter cliente preventivo de fallos consecutivos de login (401). Ortogonal
+    // al brute-force guard server-side (que cuenta por username): este cuenta
+    // por dispositivo, parando el ruido antes de que el request salga. Cuando
+    // alcanza el threshold, bloquea login durante `loginFailureTTL`. TTL
+    // alineado con el lockoutMs del servidor (15min) para no penalizar mas alla
+    // de lo que el backend ya hace por su cuenta.
+    private static let loginFailureCountKey = "audiorr_session_login_failure_count"
+    private static let loginFailureUntilKey = "audiorr_session_login_failure_until"
+    private static let loginFailureThreshold: Int = 3
+    private static let loginFailureTTL: TimeInterval = 900  // 15min
 
     // MARK: - State
 
@@ -234,6 +244,9 @@ actor AuthTokenStore {
 
     nonisolated func setLockedUntil(_ date: Date) {
         UserDefaults.standard.set(date.timeIntervalSince1970, forKey: Self.lockedUntilKey)
+        // Fuerza re-evaluacion inmediata de BackendState para que las features
+        // REST se duerman sin esperar al proximo disparador natural de check().
+        Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
     }
 
     nonisolated func clearLockedUntil() {
@@ -252,6 +265,10 @@ actor AuthTokenStore {
         let until = Date().addingTimeInterval(Self.unauthorizedTTL)
         UserDefaults.standard.set(until.timeIntervalSince1970,
                                   forKey: Self.backendUnauthorizedKey)
+        // Fuerza isAvailable=false ya — sin esperar al proximo check(). Cierra
+        // la ventana donde las features REST mandan trafico residual al backend
+        // del operador tras un 403 de whitelist.
+        Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
     }
 
     /// Libera el gate `backendUnauthorized`. Se invoca tras un login exitoso
@@ -273,6 +290,46 @@ actor AuthTokenStore {
             return nil
         }
         return date
+    }
+
+    // MARK: - Login failures counter (cliente, preventivo)
+
+    /// Timestamp hasta cuando el cliente se auto-bloquea por fallos consecutivos
+    /// de login (401). Ortogonal al `lockedUntil()` del 429 server-side: aqui
+    /// paramos antes de mandar la peticion, evitando ruido al backend.
+    nonisolated func consecutiveLoginFailuresUntil() -> Date? {
+        let ts = UserDefaults.standard.double(forKey: Self.loginFailureUntilKey)
+        guard ts > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: ts)
+        if date <= Date() {
+            UserDefaults.standard.removeObject(forKey: Self.loginFailureUntilKey)
+            UserDefaults.standard.removeObject(forKey: Self.loginFailureCountKey)
+            return nil
+        }
+        return date
+    }
+
+    /// Acumula un fallo de login (401). Cuando alcanza `loginFailureThreshold`,
+    /// fija el lock por `loginFailureTTL`. NO debe llamarse para 503 (Navidrome
+    /// caido) ni 429 (ese lockout lo maneja `setLockedUntil`).
+    nonisolated func recordLoginFailure() {
+        let count = UserDefaults.standard.integer(forKey: Self.loginFailureCountKey) + 1
+        UserDefaults.standard.set(count, forKey: Self.loginFailureCountKey)
+        if count >= Self.loginFailureThreshold {
+            let until = Date().addingTimeInterval(Self.loginFailureTTL)
+            UserDefaults.standard.set(until.timeIntervalSince1970, forKey: Self.loginFailureUntilKey)
+            // Fuerza re-evaluacion inmediata al cruzar el threshold (no en
+            // cada fallo individual, solo cuando el gate se activa).
+            Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
+        }
+    }
+
+    /// Resetea el counter (llamar tras login exitoso, tras cambio de
+    /// credenciales Navidrome, y tras `markBackendUnauthorized` para no
+    /// solapar dos gates).
+    nonisolated func clearLoginFailures() {
+        UserDefaults.standard.removeObject(forKey: Self.loginFailureCountKey)
+        UserDefaults.standard.removeObject(forKey: Self.loginFailureUntilKey)
     }
 
     // MARK: - Bootstrap (lazy)

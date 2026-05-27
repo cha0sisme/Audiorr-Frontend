@@ -67,8 +67,11 @@ final class NavidromeService: ObservableObject {
         invalidateBackendAvailableCache()
         // La `serverUrl` nueva puede estar whitelisteada aunque la anterior no.
         // Libera el gate `backendUnauthorized` para que ConnectService reintente
-        // contra el backend en lugar de quedarse suprimido durante 24h.
+        // contra el backend en lugar de quedarse suprimido durante 24h. Limpia
+        // tambien el counter de fallos consecutivos: el usuario acaba de
+        // introducir creds nuevas, no debe heredar el bloqueo del set anterior.
         AuthTokenStore.shared.clearBackendUnauthorized()
+        AuthTokenStore.shared.clearLoginFailures()
         Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
         NotificationCenter.default.post(name: .audiorrDidLogin, object: nil)
     }

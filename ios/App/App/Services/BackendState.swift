@@ -64,6 +64,28 @@ final class BackendState {
     /// Retries once after 3s on failure (transient network issues).
     func check() {
         guard checkTask == nil else { return }
+        // Gate: sin credenciales Navidrome configuradas no hay nada que
+        // autenticar contra el backend Audiorr — pingear /api/health desde
+        // un dispositivo recien instalado solo gasta CF y revela actividad
+        // sin proposito. Cuando el usuario complete el flujo de LoginView,
+        // `saveCredentials` invocara `invalidateAndRecheck()` y entonces si
+        // pingearemos.
+        guard NavidromeService.shared.credentials != nil else {
+            setAvailable(false)
+            return
+        }
+        // Gate anti-trafico: si AuthTokenStore ya sabe que el backend nos
+        // rechaza (403 whitelist 24h) o nos limita (429 Retry-After), no
+        // pierdas un round-trip pingueando /api/health — el resultado va a
+        // ser "available" pero las features REST recibiran 401/403/429 de
+        // todos modos. Marcamos isAvailable=false directamente para que los
+        // callers no intenten requests innecesarias al backend del operador.
+        if AuthTokenStore.shared.backendUnauthorizedUntil() != nil ||
+           AuthTokenStore.shared.lockedUntil() != nil ||
+           AuthTokenStore.shared.consecutiveLoginFailuresUntil() != nil {
+            setAvailable(false)
+            return
+        }
         isChecking = true
         let wasAvailable = isAvailable
         checkTask = Task {

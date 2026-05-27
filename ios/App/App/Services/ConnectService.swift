@@ -123,6 +123,14 @@ final class ConnectService {
             return
         }
 
+        // Gate: counter cliente preventivo. Tras N fallos consecutivos de
+        // login (401), nos auto-bloqueamos durante 15min para no martillear
+        // al backend. Ortogonal al brute-force guard server-side.
+        if let until = AuthTokenStore.shared.consecutiveLoginFailuresUntil() {
+            print("[Connect] Local login failures lockout until \(until) — connect() suprimido")
+            return
+        }
+
         isConnecting = true
 
         Task {
@@ -375,6 +383,8 @@ final class ConnectService {
                     username: result.username
                 )
             }
+            // Login exitoso: limpia el counter de fallos consecutivos.
+            AuthTokenStore.shared.clearLoginFailures()
             return result.token
         } catch BackendError.forbidden {
             // Whitelist del backend ha rechazado esta serverUrl o username.
@@ -382,9 +392,22 @@ final class ConnectService {
             // `ensureSession()` se suprimiran sin tocar red hasta que expire
             // o el usuario cambie sus credenciales Navidrome. Protege al
             // homelab de peticiones innecesarias desde clientes con Navidrome
-            // ajena (terceros del App Store).
+            // ajena (terceros del App Store). Limpia el counter para no
+            // solapar dos gates simultaneos.
             AuthTokenStore.shared.markBackendUnauthorized()
+            AuthTokenStore.shared.clearLoginFailures()
             throw BackendError.forbidden(reason: nil)
+        } catch BackendError.unauthorized {
+            // 401 credenciales Navidrome invalidas. Acumula en el counter
+            // cliente preventivo. Tras 3 consecutivos, gate de 15min sin
+            // tocar el backend (alineado con lockoutMs server-side).
+            AuthTokenStore.shared.recordLoginFailure()
+            throw BackendError.unauthorized
+        } catch BackendError.serviceUnavailable {
+            // 503 Navidrome inalcanzable. NO acumular fallo: el server-side
+            // tampoco lo cuenta en su brute-force guard, y un Navidrome
+            // flaky no debe bloquear localmente al usuario legitimo.
+            throw BackendError.serviceUnavailable
         }
     }
 
