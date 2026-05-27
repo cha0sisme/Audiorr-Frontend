@@ -310,6 +310,12 @@ final class BackendService {
         let token: String
         let username: String
         let expiresIn: Int
+        // Campos additivos del contrato Bearer (Cloudflare Zero Trust migration).
+        // Opcionales por retrocompat: backends previos a `523d837` no los emiten.
+        // JSON Decoder ignora keys ausentes en propiedades Optional.
+        let refreshToken: String?
+        let refreshExpiresIn: Int?
+        let isAdmin: Bool?
     }
 
     func login(serverUrl: String, username: String, token: String) async throws -> LoginResult {
