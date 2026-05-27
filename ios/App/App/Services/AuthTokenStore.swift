@@ -23,12 +23,11 @@ import Security
 /// En ese punto, si el device esta locked, `ensureSession()` falla graceful
 /// y la request sale sin Bearer (degradacion al modo Navidrome puro).
 ///
-/// **Estado inicial**: actor declarado pero INERTE. `save()` se enchufa
-/// posteriormente desde `ConnectService.authenticate()`. `refresh()` se
-/// cablea con `BackendService.refresh(refreshToken:)` — hasta entonces lanza
-/// `AuthTokenError.notWiredYet`. Los gates de `backendUnauthorized` y
-/// `lockedUntil` SI viven aqui desde el principio: cuando se enchufen el
-/// resto de piezas, ya respetan cero trafico innecesario al backend.
+/// **Estado**: `refresh()` operativo contra `BackendService.refresh`. `save()`
+/// queda pendiente de cablear desde `ConnectService.authenticate()` para que
+/// la sesion se persista tras el primer login. Los gates de
+/// `backendUnauthorized` y `lockedUntil` ya estaban activos desde la fase
+/// previa para evitar trafico innecesario al backend.
 actor AuthTokenStore {
 
     static let shared = AuthTokenStore()
@@ -45,13 +44,11 @@ actor AuthTokenStore {
     }
 
     enum AuthTokenError: LocalizedError {
-        case notWiredYet
         case noCredentials
         case persistenceFailed
 
         var errorDescription: String? {
             switch self {
-            case .notWiredYet:       "Auth flow not wired in this build"
             case .noCredentials:     "Navidrome credentials missing for re-login"
             case .persistenceFailed: "Could not persist session to Keychain"
             }
@@ -145,14 +142,38 @@ actor AuthTokenStore {
     /// reciben 401 simultaneo, solo una hace el POST /api/auth/refresh y
     /// las demas await el mismo resultado.
     ///
-    /// **Stub inicial**: lanza `notWiredYet`. El cable real al
-    /// `BackendService.refresh(refreshToken:)` aterriza en un cambio posterior.
+    /// Si no hay sesion cacheada (cold start sin login previo) lanza
+    /// `noCredentials`. El backend reusa el `username` guardado en la sesion
+    /// previa porque el endpoint /api/auth/refresh no lo devuelve.
     func refresh() async throws -> String {
+        bootstrapIfNeeded()
+        guard let snapshot = cachedSession else {
+            throw AuthTokenError.noCredentials
+        }
+
         if let inflight = refreshInFlight {
             return try await inflight.value
         }
-        let task = Task<String, Error> {
-            throw AuthTokenError.notWiredYet
+
+        let task = Task<String, Error> { [weak self] in
+            guard let self else { throw AuthTokenError.noCredentials }
+            do {
+                let result = try await BackendService.shared.refresh(refreshToken: snapshot.refreshToken)
+                try await self.save(
+                    sessionToken: result.token,
+                    refreshToken: result.refreshToken,
+                    expiresIn: result.expiresIn,
+                    refreshExpiresIn: result.refreshExpiresIn,
+                    isAdmin: result.isAdmin ?? snapshot.isAdmin,
+                    username: snapshot.username
+                )
+                return result.token
+            } catch BackendError.unauthorized {
+                // Backend rechaza el refreshToken: invalidado o expirado.
+                // Limpiamos la sesion local para evitar reintentos eternos.
+                await self.clear()
+                throw BackendError.unauthorized
+            }
         }
         refreshInFlight = task
         defer { refreshInFlight = nil }

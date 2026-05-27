@@ -48,8 +48,7 @@ final class BackendService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try jsonEncoder.encode(payload)
         request.timeoutInterval = 15  // Analysis can be slow (ML processing) but shouldn't hang
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         return try jsonDict(from: data)
     }
 
@@ -237,8 +236,7 @@ final class BackendService {
         if let year { params += "&year=\(year)" }
         var request = try makeRequest(path: "/api/stats/wrapped?\(params)", method: "GET")
         for (k, v) in navidromeHeaders { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         return try jsonDict(from: data)
     }
 
@@ -255,8 +253,7 @@ final class BackendService {
     func getDailyMixes() async throws -> [[String: Any]] {
         var request = try makeRequest(path: "/api/daily-mixes", method: "GET")
         for (k, v) in navidromeHeaders { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         let dict = try jsonDict(from: data)
         return dict["mixes"] as? [[String: Any]] ?? []
     }
@@ -265,8 +262,7 @@ final class BackendService {
         var request = try makeRequest(path: "/api/daily-mixes/generate", method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (k, v) in navidromeHeaders { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         return try jsonDict(from: data)
     }
 
@@ -275,8 +271,7 @@ final class BackendService {
     func getSmartPlaylists() async throws -> [[String: Any]] {
         var request = try makeRequest(path: "/api/smart-playlists", method: "GET")
         for (k, v) in navidromeHeaders { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         let dict = try jsonDict(from: data)
         return dict["playlists"] as? [[String: Any]] ?? []
     }
@@ -285,8 +280,7 @@ final class BackendService {
         var request = try makeRequest(path: "/api/smart-playlists/\(key.urlEncoded)/generate", method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (k, v) in navidromeHeaders { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
+        let data = try await performRequest(request)
         return try jsonDict(from: data)
     }
 
@@ -318,10 +312,38 @@ final class BackendService {
         let isAdmin: Bool?
     }
 
+    /// Resultado de `POST /api/auth/refresh`. Mismos campos que `LoginResult`
+    /// salvo `username` (el backend no lo devuelve en refresh — el caller debe
+    /// reusar el guardado de la sesion previa).
+    struct RefreshResult: Decodable {
+        let token: String
+        let refreshToken: String
+        let expiresIn: Int
+        let refreshExpiresIn: Int
+        let isAdmin: Bool?
+    }
+
     func login(serverUrl: String, username: String, token: String) async throws -> LoginResult {
+        var request = try makeRequest(path: "/api/auth/login", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: String] = ["serverUrl": serverUrl, "username": username, "token": token]
-        let data = try await post(path: "/api/auth/login", jsonObject: body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Login NO lleva Bearer (es el que lo emite). performRequest sigue
+        // traduciendo status codes y persistiendo 429 en lockedUntil.
+        let data = try await performRequest(request, injectBearer: false)
         return try jsonDecoder.decode(LoginResult.self, from: data)
+    }
+
+    /// Rota el par sessionToken+refreshToken. El backend acepta solo el
+    /// refreshToken en el body (NO en cabecera Authorization) y devuelve el
+    /// par nuevo. Si responde 401, el refreshToken esta expirado o invalidado
+    /// y el caller (`AuthTokenStore.refresh()`) debe limpiar la sesion.
+    func refresh(refreshToken: String) async throws -> RefreshResult {
+        var request = try makeRequest(path: "/api/auth/refresh", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["refreshToken": refreshToken])
+        let data = try await performRequest(request, injectBearer: false)
+        return try jsonDecoder.decode(RefreshResult.self, from: data)
     }
 
     // MARK: - Global Settings
@@ -367,69 +389,118 @@ final class BackendService {
 
     private func get(path: String) async throws -> Data {
         let request = try makeRequest(path: path, method: "GET")
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func post(path: String, body: some Encodable) async throws -> Data {
         var request = try makeRequest(path: path, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try jsonEncoder.encode(body)
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func post(path: String, jsonObject: Any) async throws -> Data {
         var request = try makeRequest(path: path, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: jsonObject)
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func post(path: String, rawBody: Data) async throws -> Data {
         var request = try makeRequest(path: path, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = rawBody
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func put(path: String, jsonObject: Any) async throws -> Data {
         var request = try makeRequest(path: path, method: "PUT")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: jsonObject)
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func put(path: String, rawBody: Data) async throws -> Data {
         var request = try makeRequest(path: path, method: "PUT")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = rawBody
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
     private func delete(path: String) async throws -> Data {
         let request = try makeRequest(path: path, method: "DELETE")
-        let (data, response) = try await session.data(for: request)
-        try checkResponse(response)
-        return data
+        return try await performRequest(request)
     }
 
+    /// Traduce el status code de la respuesta backend en un error tipado.
+    /// `performRequest()` captura `.unauthorized` y `.rateLimited` para
+    /// orquestar refresh + lockout persistente; el resto sube al caller tal cual.
     private func checkResponse(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else {
             throw BackendError.invalidResponse
         }
-        guard (200...299).contains(http.statusCode) else {
+        switch http.statusCode {
+        case 200...299:
+            return
+        case 401:
+            throw BackendError.unauthorized
+        case 403:
+            throw BackendError.forbidden(reason: nil)
+        case 429:
+            let header = http.value(forHTTPHeaderField: "Retry-After")
+            let retryAfter = header.flatMap { TimeInterval($0) } ?? 60
+            throw BackendError.rateLimited(retryAfter: retryAfter)
+        case 503:
+            throw BackendError.serviceUnavailable
+        default:
             throw BackendError.httpError(http.statusCode)
+        }
+    }
+
+    /// Wrapper async que inyecta `Authorization: Bearer` cuando hay sesion en
+    /// `AuthTokenStore`, ejecuta la request, traduce el status code y orquesta
+    /// el path de recuperacion 401 → refresh → retry una vez.
+    ///
+    /// `injectBearer=false` para endpoints que **emiten** el token (login,
+    /// refresh): sin Bearer, sin retry-on-401 (no tendria sentido). Las
+    /// demas semanticas (status codes tipados, persistir 429 en lockedUntil)
+    /// se mantienen.
+    ///
+    /// Si el refresh falla o el reintento vuelve a recibir 401, limpia la
+    /// sesion en cache. Si recibe 429, persiste el `Retry-After` en
+    /// `AuthTokenStore.setLockedUntil` para que sobreviva cold launch y
+    /// otros callers tambien lo respeten.
+    ///
+    /// Cuando `AuthTokenStore.currentToken()` devuelve `nil` (sin sesion, o
+    /// `backendUnauthorized` activo), la request sale sin Bearer — equivalente
+    /// al comportamiento previo a la migracion, sin overhead anadido.
+    private func performRequest(_ request: URLRequest,
+                                allowRetry: Bool = true,
+                                injectBearer: Bool = true) async throws -> Data {
+        var finalRequest = request
+        if injectBearer, let token = await AuthTokenStore.shared.currentToken() {
+            finalRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (data, response) = try await session.data(for: finalRequest)
+
+        do {
+            try checkResponse(response)
+            return data
+        } catch BackendError.unauthorized {
+            guard injectBearer, allowRetry else {
+                throw BackendError.unauthorized
+            }
+            do {
+                _ = try await AuthTokenStore.shared.refresh()
+            } catch {
+                await AuthTokenStore.shared.clear()
+                throw BackendError.unauthorized
+            }
+            return try await performRequest(request, allowRetry: false, injectBearer: true)
+        } catch BackendError.rateLimited(let retryAfter) {
+            AuthTokenStore.shared.setLockedUntil(Date().addingTimeInterval(retryAfter))
+            throw BackendError.rateLimited(retryAfter: retryAfter)
         }
     }
 
@@ -446,15 +517,23 @@ final class BackendService {
 enum BackendError: LocalizedError {
     case noBaseURL
     case invalidResponse
-    case httpError(Int)
+    case unauthorized                            // 401: sin/mal Bearer y refresh ha fallado
+    case forbidden(reason: String?)              // 403: cuenta no autorizada (whitelist) o sin admin
+    case rateLimited(retryAfter: TimeInterval)   // 429: respeta `Retry-After`
+    case serviceUnavailable                      // 503: backend o Navidrome temporalmente caído
+    case httpError(Int)                          // resto, fallback
     case invalidJSON
 
     var errorDescription: String? {
         switch self {
-        case .noBaseURL: "Audiorr backend URL not configured"
-        case .invalidResponse: "Invalid response from backend"
-        case .httpError(let code): "Backend HTTP error \(code)"
-        case .invalidJSON: "Invalid JSON response"
+        case .noBaseURL:               "Audiorr backend URL not configured"
+        case .invalidResponse:         "Invalid response from backend"
+        case .unauthorized:            "Audiorr backend session unauthorized"
+        case .forbidden(let reason):   reason.map { "Audiorr backend forbidden: \($0)" } ?? "Audiorr backend forbidden"
+        case .rateLimited(let after):  "Audiorr backend rate limited (retry in \(Int(after))s)"
+        case .serviceUnavailable:      "Audiorr backend temporarily unavailable"
+        case .httpError(let code):     "Backend HTTP error \(code)"
+        case .invalidJSON:             "Invalid JSON response"
         }
     }
 }
