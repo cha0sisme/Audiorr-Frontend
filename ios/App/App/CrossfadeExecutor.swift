@@ -1497,6 +1497,19 @@ class CrossfadeExecutor {
     /// High danceability → less aggressive bass cut to preserve groove.
     private var danceabilityBassScale: Float = 1.0
 
+    /// v15.n — vector "anticipación progresiva de band 0 (highpass A)".
+    /// Cuando está activo, A arranca a t=0 casi plena (highpass en
+    /// `band0AntAnchorFreq`) en vez del escalón pleno→startFreq de golpe, y la
+    /// rampa de `applyFiltersA` la adelgaza expInterp hasta startFreq sobre la
+    /// ventana de anticipación. Empalma C0 en preRollStart con el plateau v15.c.
+    /// Computado una sola vez en `setupInitialEQ`; `applyFiltersA` lo lee.
+    private var band0AntExtendActive: Bool = false
+    /// Frecuencia de arranque del highpass A a t=0 cuando band0AntExtendActive.
+    /// Calibración empírica: 90Hz (bajo el fundamental del kick → A casi plena).
+    /// Rango de recalibración 80–130Hz: bajar si el arranque suena abrupto, subir
+    /// si la anticipación no se oye. No pasar de 130Hz (reintroduce escalón a t=0).
+    private static let band0AntAnchorFreq: Float = 90
+
     /// Beat-aligned bass swap: the wall-clock time at which bass should be fully swapped
     /// (nearest downbeat to ~40-50% of the crossfade). Computed once at init.
     private var bassSwapTime: Double = 0
@@ -1550,16 +1563,53 @@ class CrossfadeExecutor {
         // ningun filter movement, lo cual es lo correcto para fades cortos.
         let isCutTransition = config.transitionType == .cut || config.transitionType == .cutAFadeInB
 
+        // v15.n — gate del vector "anticipación progresiva de band 0 A".
+        // Mismo formato de tipos que el branch v15.d de bassKill. Se excluyen
+        // los casos con bassKill ya extendido a la anticipación (no acumular
+        // doble gesto band0+band1) y los presets sin highpass audible
+        // (startFreq<=60 → gentle/energy-down). `applyFiltersA` lee este flag.
+        let band0AntTypeOK: Bool = {
+            switch config.transitionType {
+            case .eqMix, .beatMatchBlend, .crossfade: return true
+            default: return false
+            }
+        }()
+        let antPreRollDur = min(0.9, timings.filterLead * 0.35)
+        let antPreRollActive = !isCutTransition
+            && config.transitionType != .cleanHandoff
+            && config.transitionType != .vinylStop
+            && config.transitionType != .sequential
+            && !useLowpassA
+            && antPreRollDur > 0 && timings.filterLead >= 0.6
+        let bassKillExtendAnt = useBassKill && config.anticipationTime >= 1.5 && band0AntTypeOK
+        band0AntExtendActive = antPreRollActive
+            && !bassKillExtendAnt
+            && preset.highpassA.startFreq > 60
+            && config.anticipationTime >= 1.5
+            && band0AntTypeOK
+
         // v14.04 (R-C): band 0 highpass/lowpass A inicial delegado al manager.
-        let band0Init = DSPFilterManager.band0CoefficientA_initial(
-            isCutTransition: isCutTransition,
-            useLowpassA: useLowpassA,
-            highpassPreset: preset.highpassA,
-            lowpassPreset: preset.lowpassA,
-            sampleRate: sampleRate
-        )
-        let band0A = band0Init.coefficient
-        diagFreqA = band0Init.freq
+        // v15.n — cuando el vector aplica, A arranca en el ancla baja (casi plena)
+        // en vez de startFreq; la rampa de applyFiltersA hace el adelgazamiento.
+        let band0A: BiquadCoefficients
+        if band0AntExtendActive {
+            band0A = BiquadCoefficientCalculator.highpass(
+                frequency: Self.band0AntAnchorFreq,
+                sampleRate: sampleRate,
+                Q: preset.highpassA.q
+            )
+            diagFreqA = Self.band0AntAnchorFreq
+        } else {
+            let band0Init = DSPFilterManager.band0CoefficientA_initial(
+                isCutTransition: isCutTransition,
+                useLowpassA: useLowpassA,
+                highpassPreset: preset.highpassA,
+                lowpassPreset: preset.lowpassA,
+                sampleRate: sampleRate
+            )
+            band0A = band0Init.coefficient
+            diagFreqA = band0Init.freq
+        }
 
         // v14.04 (R-C): band 1 lowshelf A inicial (path normal) delegado al
         // manager. La rama bassKill conserva su lógica legacy en applyFiltersA
@@ -2634,6 +2684,45 @@ class CrossfadeExecutor {
                                  band2: band2AltInitial,
                                  band3: band3AltInitial)
             diagLsGainA = band1Run.gain
+            return
+        }
+
+        // v15.n — rampa anticipatoria de band 0 A en [anticipationStart, preRollStart].
+        // A arranca en band0AntAnchorFreq (plantado por setupInitialEQ a t=0) y trepa
+        // expInterp hasta startFreq, repartiendo el gesto del highpass en vez del
+        // escalón pleno→startFreq de golpe (queja "anticipación no progresiva",
+        // 9/14 comments v15.m). En preRollStart entrega startFreq con la misma Q del
+        // preset → empalme C0 exacto con el plateau v15.c. Bands 1/2/3 en su initial
+        // (este vector solo mueve band 0). Excluyente con el branch bassKill de arriba
+        // por construcción del gate (band0AntExtendActive ⟹ !useBassKill).
+        if band0AntExtendActive,
+           t >= timings.anticipationStartTime && t < preRollStart {
+            let antDur = preRollStart - timings.anticipationStartTime
+            let pAnt = antDur > 0 ? Float((t - timings.anticipationStartTime) / antDur) : 1.0
+            let freqA = expInterp(Self.band0AntAnchorFreq, preset.highpassA.startFreq, min(1, max(0, pAnt)))
+            let band0A = BiquadCoefficientCalculator.highpass(
+                frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
+            let isCutTransition = config.transitionType == .cut || config.transitionType == .cutAFadeInB
+            let band1Pre = DSPFilterManager.band1CoefficientA_initial(
+                isCutTransition: isCutTransition,
+                useBassManagement: useBassManagement,
+                preset: preset.lowshelfA,
+                sampleRate: sampleRate)
+            let band2Init: BiquadCoefficients
+            if !isCutTransition, useMidScoop, let ms = preset.midScoopA {
+                band2Init = BiquadCoefficientCalculator.parametric(
+                    frequency: ms.frequency, sampleRate: sampleRate,
+                    gainDB: ms.startGain, bandwidth: ms.bandwidth)
+            } else {
+                band2Init = .passthrough
+            }
+            let band3Init = DSPFilterManager.highShelfCoefficientA_initial(
+                useHighShelfCut: !isCutTransition && useHighShelfCut,
+                preset: preset.highShelfA,
+                sampleRate: sampleRate)
+            dspA.setCoefficients(band0: band0A, band1: band1Pre.coefficient,
+                                 band2: band2Init, band3: band3Init)
+            diagFreqA = freqA
             return
         }
 
