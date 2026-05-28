@@ -478,7 +478,13 @@ final class BackendService {
                                 allowRetry: Bool = true,
                                 injectBearer: Bool = true) async throws -> Data {
         var finalRequest = request
-        if injectBearer, let token = await AuthTokenStore.shared.currentToken() {
+        // `ensureSession()` devuelve el token cacheado (fast-path) o, si no hay
+        // sesion, hace login + persiste de forma serializada. Asi la primera REST
+        // tras un cold launch ya viaja con Bearer sin depender de que el Connect
+        // Hub haya logueado antes. Si no hay sesion establecible (sin creds, gate
+        // activo, backend legacy), devuelve nil y la request sale sin Bearer
+        // (degradacion a modo Navidrome puro, comportamiento pre-migracion).
+        if injectBearer, let token = try? await AuthTokenStore.shared.ensureSession() {
             finalRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 

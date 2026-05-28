@@ -358,57 +358,17 @@ final class ConnectService {
     // MARK: - Authentication
 
     private func authenticate() async throws -> String {
-        guard let creds = NavidromeService.shared.credentials,
-              let navidromeToken = creds.token
-        else { throw ConnectError.noCredentials }
-
-        do {
-            let result = try await BackendService.shared.login(
-                serverUrl: creds.serverUrl,
-                username: creds.username,
-                token: navidromeToken
-            )
-            // Persiste la sesion en AuthTokenStore solo si el backend devuelve
-            // el par completo del refresh flow. Backends legacy que no emiten
-            // refreshToken (pre-`523d837`) siguen funcionando sin Bearer en el
-            // resto de llamadas REST — el sessionToken se usa solo para el
-            // handshake Socket.IO de abajo, igual que antes de la migracion.
-            if let refreshToken = result.refreshToken {
-                try await AuthTokenStore.shared.save(
-                    sessionToken: result.token,
-                    refreshToken: refreshToken,
-                    expiresIn: result.expiresIn,
-                    refreshExpiresIn: result.refreshExpiresIn ?? result.expiresIn,
-                    isAdmin: result.isAdmin ?? false,
-                    username: result.username
-                )
-            }
-            // Login exitoso: limpia el counter de fallos consecutivos.
-            AuthTokenStore.shared.clearLoginFailures()
-            return result.token
-        } catch BackendError.forbidden {
-            // Whitelist del backend ha rechazado esta serverUrl o username.
-            // Marca el gate con TTL 24h: `connect()` y futuras llamadas via
-            // `ensureSession()` se suprimiran sin tocar red hasta que expire
-            // o el usuario cambie sus credenciales Navidrome. Protege al
-            // homelab de peticiones innecesarias desde clientes con Navidrome
-            // ajena (terceros del App Store). Limpia el counter para no
-            // solapar dos gates simultaneos.
-            AuthTokenStore.shared.markBackendUnauthorized()
-            AuthTokenStore.shared.clearLoginFailures()
-            throw BackendError.forbidden(reason: nil)
-        } catch BackendError.unauthorized {
-            // 401 credenciales Navidrome invalidas. Acumula en el counter
-            // cliente preventivo. Tras 3 consecutivos, gate de 15min sin
-            // tocar el backend (alineado con lockoutMs server-side).
-            AuthTokenStore.shared.recordLoginFailure()
-            throw BackendError.unauthorized
-        } catch BackendError.serviceUnavailable {
-            // 503 Navidrome inalcanzable. NO acumular fallo: el server-side
-            // tampoco lo cuenta en su brute-force guard, y un Navidrome
-            // flaky no debe bloquear localmente al usuario legitimo.
-            throw BackendError.serviceUnavailable
+        // Establecimiento unificado: el login (Navidrome→Bearer), la persistencia
+        // y el manejo de gates 403/401/503 viven en `AuthTokenStore.ensureSession()`,
+        // que tambien sirve a las llamadas REST. Su `ensureInFlight` garantiza un
+        // unico `POST /api/auth/login` compartido por el Hub y las REST aunque ambos
+        // lo invoquen a la vez en cold launch. Si devuelve nil (sin creds, gate
+        // activo o login rechazado) no hay token para el handshake Socket.IO: los
+        // gates de `connect()` suprimen el reintento sin tormenta de reconexion.
+        guard let token = try await AuthTokenStore.shared.ensureSession() else {
+            throw ConnectError.noCredentials
         }
+        return token
     }
 
     // MARK: - WebSocket (Engine.IO v4 + Socket.IO v4)

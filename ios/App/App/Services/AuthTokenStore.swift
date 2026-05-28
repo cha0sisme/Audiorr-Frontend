@@ -23,11 +23,12 @@ import Security
 /// En ese punto, si el device esta locked, `ensureSession()` falla graceful
 /// y la request sale sin Bearer (degradacion al modo Navidrome puro).
 ///
-/// **Estado**: `refresh()` operativo contra `BackendService.refresh`. `save()`
-/// queda pendiente de cablear desde `ConnectService.authenticate()` para que
-/// la sesion se persista tras el primer login. Los gates de
-/// `backendUnauthorized` y `lockedUntil` ya estaban activos desde la fase
-/// previa para evitar trafico innecesario al backend.
+/// `ensureSession()` es el punto unico de establecimiento: hace login con las
+/// credenciales Navidrome y persiste el par. Lo consumen tanto las llamadas
+/// REST (`BackendService.performRequest`) como el Connect Hub
+/// (`ConnectService.authenticate`), compartiendo un solo login via
+/// `ensureInFlight`. Los gates `backendUnauthorized`, `lockedUntil` y el
+/// counter de fallos de login evitan trafico innecesario al backend.
 actor AuthTokenStore {
 
     static let shared = AuthTokenStore()
@@ -190,24 +191,32 @@ actor AuthTokenStore {
         return try await task.value
     }
 
-    /// Asegura que hay un sessionToken valido. Si la sesion ha expirado por
-    /// completo (refreshToken tambien caducado), intenta re-loguear con las
-    /// credenciales Navidrome del `CredentialsStore`. Devuelve `nil` cuando:
+    /// Punto unico de establecimiento de sesion Bearer, compartido por las
+    /// llamadas REST (`BackendService.performRequest`) y por el Connect Hub
+    /// (`ConnectService.authenticate`). Devuelve el sessionToken vigente; si no
+    /// hay sesion cacheada, hace login con las credenciales Navidrome del
+    /// `NavidromeService` y persiste el par. El `ensureInFlight` serializa
+    /// concurrentes: aunque varias REST y el Hub lo invoquen a la vez en cold
+    /// launch, solo sale UN `POST /api/auth/login`.
+    ///
+    /// Devuelve `nil` (degradacion a modo Navidrome puro, request sin Bearer)
+    /// cuando:
     ///
     /// 1. Hay flag `backendUnauthorized` activo (TTL 24h tras un 403 previo).
     /// 2. Hay flag `lockedUntil` activo (TTL del Retry-After de un 429).
-    /// 3. No hay credenciales Navidrome guardadas.
-    /// 4. El re-login responde 401/403 (el caller debe quedarse en modo
-    ///    Navidrome puro sin volver a intentar hasta que cambien las creds).
-    ///
-    /// **Estado inicial**: solo viven los gates anti-trafico
-    /// (backendUnauthorized + lockedUntil) y el fast-path via `currentToken()`.
-    /// El re-login real con CredentialsStore aterriza en un cambio posterior.
+    /// 3. Hay flag de fallos de login consecutivos activo (counter cliente).
+    /// 4. No hay credenciales Navidrome guardadas.
+    /// 5. El login responde 403 (whitelist → marca gate 24h) o 401 (creds
+    ///    invalidas → acumula counter) o 503 (Navidrome caido → no penaliza).
+    /// 6. El backend es legacy y no emite `refreshToken` (sin par persistible).
     func ensureSession() async throws -> String? {
         if let until = backendUnauthorizedUntil(), until > Date() {
             return nil
         }
         if let until = lockedUntil(), until > Date() {
+            return nil
+        }
+        if let until = consecutiveLoginFailuresUntil(), until > Date() {
             return nil
         }
         if let token = await currentToken() {
@@ -216,10 +225,50 @@ actor AuthTokenStore {
         if let inflight = ensureInFlight {
             return try await inflight.value
         }
-        let task = Task<String?, Error> {
-            // TODO: leer CredentialsStore + invocar
-            // BackendService.shared.login(...) + save() + return token.
-            return nil
+        let task = Task<String?, Error> { [weak self] in
+            guard let self else { return nil }
+            // Sin credenciales Navidrome no hay nada que autenticar contra el
+            // backend Audiorr — degradacion a modo Navidrome puro.
+            guard let creds = NavidromeService.shared.credentials,
+                  let navToken = creds.token else {
+                return nil
+            }
+            do {
+                let result = try await BackendService.shared.login(
+                    serverUrl: creds.serverUrl,
+                    username: creds.username,
+                    token: navToken
+                )
+                // Backend legacy sin refresh flow: sin par persistible seguimos
+                // en modo Navidrome puro (REST sin Bearer, igual que pre-migracion).
+                guard let refreshToken = result.refreshToken else {
+                    return nil
+                }
+                try await self.save(
+                    sessionToken: result.token,
+                    refreshToken: refreshToken,
+                    expiresIn: result.expiresIn,
+                    refreshExpiresIn: result.refreshExpiresIn ?? result.expiresIn,
+                    isAdmin: result.isAdmin ?? false,
+                    username: result.username
+                )
+                self.clearLoginFailures()
+                return result.token
+            } catch BackendError.forbidden {
+                // Whitelist del backend rechaza esta serverUrl/username. Gate 24h
+                // para no martillear al homelab desde clientes con Navidrome ajena.
+                self.markBackendUnauthorized()
+                self.clearLoginFailures()
+                return nil
+            } catch BackendError.unauthorized {
+                // 401 credenciales Navidrome invalidas. Counter cliente preventivo.
+                self.recordLoginFailure()
+                return nil
+            } catch BackendError.serviceUnavailable {
+                // 503 Navidrome inalcanzable. NO acumular fallo: un Navidrome
+                // flaky no debe auto-bloquear al usuario legitimo.
+                return nil
+            }
         }
         ensureInFlight = task
         defer { ensureInFlight = nil }
