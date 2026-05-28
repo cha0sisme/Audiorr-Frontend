@@ -863,9 +863,16 @@ final class NavidromeService: ObservableObject {
 
     // MARK: - Home page: backend API endpoints
 
-    /// Build a URLRequest with Navidrome auth headers for backend API calls.
-    /// The backend uses `X-Navidrome-User` / `X-Navidrome-Token` to identify the user.
-    private func backendRequest(url: URL, method: String = "GET") -> URLRequest? {
+    /// Build a URLRequest for backend API calls. Inyecta el `Authorization:
+    /// Bearer` del backend Audiorr (auth canonica tras la migracion Cloudflare
+    /// Zero Trust) cuando hay sesion establecible — `ensureSession()` la crea o
+    /// reutiliza de forma serializada (mismo path que `BackendService`). Mantiene
+    /// las cabeceras `X-Navidrome-*` para el modo soft-auth del backend mientras
+    /// no se exija Bearer global. `async` porque establecer la sesion puede
+    /// requerir un login. Antes era sincrono y sin Bearer: las rutas que usaban
+    /// este builder (daily-mixes, smart-playlists, top-weekly, recent-contexts)
+    /// salian como `soft_auth_no_bearer` frente a las de `BackendService`.
+    func backendRequest(url: URL, method: String = "GET") async -> URLRequest? {
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let creds = credentials {
@@ -874,6 +881,9 @@ final class NavidromeService: ObservableObject {
                 request.setValue(token, forHTTPHeaderField: "X-Navidrome-Token")
             }
         }
+        if let bearer = try? await AuthTokenStore.shared.ensureSession() {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        }
         return request
     }
 
@@ -881,7 +891,7 @@ final class NavidromeService: ObservableObject {
     func getTopWeekly() async -> [TopWeeklySong] {
         guard let base = backendURL(),
               let url = URL(string: "\(base)/api/stats/top-weekly"),
-              let request = backendRequest(url: url)
+              let request = await backendRequest(url: url)
         else { return [] }
 
         guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return [] }
@@ -896,7 +906,7 @@ final class NavidromeService: ObservableObject {
 
         let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? username
         guard let url = URL(string: "\(base)/api/stats/recent-contexts?username=\(encoded)"),
-              let request = backendRequest(url: url)
+              let request = await backendRequest(url: url)
         else { return [] }
 
         guard let (data, resp) = try? await AudiorrNetwork.background.data(for: request) else {
@@ -935,7 +945,7 @@ final class NavidromeService: ObservableObject {
     func getDailyMixes() async -> [DailyMix] {
         guard let base = backendURL(),
               let url = URL(string: "\(base)/api/daily-mixes"),
-              let request = backendRequest(url: url)
+              let request = await backendRequest(url: url)
         else { return [] }
 
         struct Response: Decodable { let mixes: [DailyMix] }
@@ -947,7 +957,7 @@ final class NavidromeService: ObservableObject {
     func generateDailyMixes() async -> GenerateMixesResult? {
         guard let base = backendURL(),
               let url = URL(string: "\(base)/api/daily-mixes/generate"),
-              var request = backendRequest(url: url, method: "POST")
+              var request = await backendRequest(url: url, method: "POST")
         else { return nil }
 
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -983,7 +993,7 @@ final class NavidromeService: ObservableObject {
 
         // ── Layer 1a: Smart playlists JSON ──
         if let url = URL(string: "\(base)/api/smart-playlists"),
-           let request = backendRequest(url: url) {
+           let request = await backendRequest(url: url) {
             do {
                 let (data, _) = try await AudiorrNetwork.background.data(for: request)
                 if let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1133,7 +1143,7 @@ final class NavidromeService: ObservableObject {
 
     private func fetchCoverETag(playlistId: String, base: String) async -> ETagResult {
         guard let url = URL(string: "\(base)/api/playlists/\(playlistId)/cover.png"),
-              var request = backendRequest(url: url, method: "HEAD") else {
+              var request = await backendRequest(url: url, method: "HEAD") else {
             return .failed
         }
         request.timeoutInterval = 10

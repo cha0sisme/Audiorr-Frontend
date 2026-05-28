@@ -398,8 +398,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
     private func fetchHomeJumpBackInData(backendAvailable: Bool, creds: NavidromeCredentials) async -> Data? {
         guard backendAvailable, let backendUrl = NavidromeService.shared.backendURL() else { return nil }
         let urlStr = "\(backendUrl)/api/stats/recent-contexts?username=\(creds.username.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
-        guard let url = URL(string: urlStr) else { return nil }
-        return (try? await AudiorrNetwork.interactive.data(from: url))?.0
+        // Bearer via el builder de NavidromeService (mismo path que el resto de
+        // rutas JSON del backend) para no salir como soft_auth_no_bearer.
+        guard let url = URL(string: urlStr),
+              let request = await NavidromeService.shared.backendRequest(url: url) else { return nil }
+        return (try? await AudiorrNetwork.interactive.data(for: request))?.0
     }
 
     private func fetchHomeLatestAlbumsData(creds: NavidromeCredentials) async -> Data? {

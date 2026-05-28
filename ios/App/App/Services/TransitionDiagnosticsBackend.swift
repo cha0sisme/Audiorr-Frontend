@@ -233,7 +233,7 @@ final class TransitionDiagnosticsBackend {
         _ record: TransitionDiagnostics.TransitionRecord,
         postResetAuditCompleteCrossfade: [String: Any]? = nil
     ) async -> Result<DiagnosticsUploadResponse, DiagnosticsBackendError> {
-        guard let request = makeRequest(path: "/transitions", method: "POST") else {
+        guard let request = await makeRequest(path: "/transitions", method: "POST") else {
             return .failure(.noBaseURL)
         }
         var req = request
@@ -266,7 +266,7 @@ final class TransitionDiagnosticsBackend {
         id: UUID,
         body: [String: [String: Any]]
     ) async -> Result<Void, DiagnosticsBackendError> {
-        guard let request = makeRequest(path: "/transitions/\(id.uuidString)/enrich", method: "PATCH") else {
+        guard let request = await makeRequest(path: "/transitions/\(id.uuidString)/enrich", method: "PATCH") else {
             return .failure(.noBaseURL)
         }
         var req = request
@@ -288,7 +288,7 @@ final class TransitionDiagnosticsBackend {
         rating: Int?,
         comment: String?
     ) async -> Result<TransitionDiagnostics.TransitionRecord, DiagnosticsBackendError> {
-        guard let request = makeRequest(path: "/transitions/\(id.uuidString)", method: "PATCH") else {
+        guard let request = await makeRequest(path: "/transitions/\(id.uuidString)", method: "PATCH") else {
             return .failure(.noBaseURL)
         }
         var req = request
@@ -311,7 +311,7 @@ final class TransitionDiagnosticsBackend {
     nonisolated func deleteComment(
         id: UUID
     ) async -> Result<Void, DiagnosticsBackendError> {
-        guard let request = makeRequest(path: "/transitions/\(id.uuidString)/comment", method: "DELETE") else {
+        guard let request = await makeRequest(path: "/transitions/\(id.uuidString)/comment", method: "DELETE") else {
             return .failure(.noBaseURL)
         }
         return await execute(request) { _ in () }
@@ -352,7 +352,7 @@ final class TransitionDiagnosticsBackend {
         items.append(.init(name: "limit", value: String(limit)))
         items.append(.init(name: "offset", value: String(offset)))
 
-        guard let request = makeRequest(path: "/transitions", method: "GET", queryItems: items) else {
+        guard let request = await makeRequest(path: "/transitions", method: "GET", queryItems: items) else {
             return .failure(.noBaseURL)
         }
         return await execute(request) { data in
@@ -366,7 +366,7 @@ final class TransitionDiagnosticsBackend {
         limit: Int = 20
     ) async -> Result<[DiagnosticsSessionSummary], DiagnosticsBackendError> {
         let items: [URLQueryItem] = [.init(name: "limit", value: String(limit))]
-        guard let request = makeRequest(path: "/sessions", method: "GET", queryItems: items) else {
+        guard let request = await makeRequest(path: "/sessions", method: "GET", queryItems: items) else {
             return .failure(.noBaseURL)
         }
         return await execute(request) { data in
@@ -383,7 +383,7 @@ final class TransitionDiagnosticsBackend {
         path: String,
         method: String,
         queryItems: [URLQueryItem] = []
-    ) -> URLRequest? {
+    ) async -> URLRequest? {
         guard let base = NavidromeService.shared.backendURL() else { return nil }
         var components = URLComponents(string: "\(base)/api/diagnostics\(path)")
         if !queryItems.isEmpty {
@@ -399,6 +399,13 @@ final class TransitionDiagnosticsBackend {
         // y el `execute` lo traduce a `.unauthorized`.
         if let creds = NavidromeService.shared.credentials {
             request.setValue(creds.username, forHTTPHeaderField: "x-navidrome-user")
+        }
+        // Bearer del backend Audiorr (auth canonica tras la migracion CF Zero
+        // Trust). Mismo path serializado que BackendService / backendRequest:
+        // antes /api/diagnostics salia como soft_auth_no_bearer por usar solo la
+        // cabecera legacy x-navidrome-user.
+        if let bearer = try? await AuthTokenStore.shared.ensureSession() {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         }
         return request
     }
