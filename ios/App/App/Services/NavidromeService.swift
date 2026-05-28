@@ -248,8 +248,9 @@ final class NavidromeService: ObservableObject {
     /// Returns empty array if backend is unavailable or the key is not set.
     func getHomepageLayout() async -> [PlaylistSection] {
         guard let base = backendURL(),
-              let url = URL(string: "\(base)/api/settings/homepage_layout") else { return [] }
-        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return [] }
+              let url = URL(string: "\(base)/api/settings/homepage_layout"),
+              let request = await backendRequest(url: url) else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return [] }
         struct Response: Decodable { let value: [PlaylistSection]? }
         return (try? JSONDecoder().decode(Response.self, from: data))?.value ?? []
     }
@@ -263,8 +264,9 @@ final class NavidromeService: ObservableObject {
     func getRankedLayout(username: String) async -> [PlaylistSection] {
         guard let base = backendURL(),
               let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "\(base)/api/user/\(encoded)/ranked-layout") else { return [] }
-        guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return [] }
+              let url = URL(string: "\(base)/api/user/\(encoded)/ranked-layout"),
+              let request = await backendRequest(url: url) else { return [] }
+        guard let (data, _) = try? await AudiorrNetwork.background.data(for: request) else { return [] }
         guard let decoded = try? JSONDecoder().decode(RankedLayoutResponse.self, from: data) else { return [] }
         return decoded.mapToLegacyLayout()
     }
