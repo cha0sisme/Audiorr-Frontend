@@ -582,8 +582,16 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
 
                 var songItems: [CPListItem] = []
 
-                // SmartMix action row — only when backend is available
-                let backendUp = await NavidromeService.shared.checkBackendAvailable()
+                // SmartMix action row — only when backend is available. Usa el
+                // estado central BackendState (misma senal estable que el iPhone en
+                // PlaylistDetailView) en vez de un ping fresco de 2s que en CarPlay
+                // fallaba en frio (primera peticion via CF o cache expirada) y
+                // ocultaba el item. Fallback al ping solo si el estado aun no se
+                // establecio (CarPlay arrancado en frio sin UI de iPhone).
+                var backendUp = await MainActor.run { BackendState.shared.isAvailable }
+                if !backendUp {
+                    backendUp = await NavidromeService.shared.checkBackendAvailable()
+                }
                 if backendUp {
                     let smartMixItem = CPListItem(
                         text: "SmartMix",
