@@ -239,6 +239,14 @@ struct LoginView: View {
                 let creds = NavidromeCredentials(serverUrl: rawUrl, username: user, token: token)
                 NavidromeService.shared.saveCredentials(creds)
 
+                // Establece la sesion Bearer del backend Audiorr como parte del
+                // sign-in: fuerza un POST /api/auth/login fresco con las creds
+                // recien guardadas. Sin esto, el backend solo veia la conexion al
+                // hub (Socket.IO) pero nunca el login, y las REST salian sin
+                // Bearer. Best-effort: si el backend rechaza (whitelist) o no esta
+                // disponible, el login Navidrome sigue siendo valido (modo degradado).
+                await AuthTokenStore.shared.establishOnUserLogin()
+
                 await MainActor.run {
                     status = .success
                     // Animate out, then dismiss

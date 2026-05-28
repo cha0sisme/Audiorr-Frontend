@@ -346,6 +346,16 @@ final class BackendService {
         return try jsonDecoder.decode(RefreshResult.self, from: data)
     }
 
+    /// Invalida la sesion Bearer server-side (`POST /api/auth/logout`).
+    /// Best-effort: el caller pasa el sessionToken ya capturado (no se
+    /// re-establece ni refresca sesion). Si la red falla, el logout local
+    /// —borrar el par del Keychain— ya se ha completado igualmente.
+    func logout(bearer token: String) async {
+        guard var request = try? makeRequest(path: "/api/auth/logout", method: "POST") else { return }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try? await session.data(for: request)
+    }
+
     // MARK: - Global Settings
 
     func getGlobalSetting(key: String) async -> Any? {

@@ -148,6 +148,18 @@ actor AuthTokenStore {
         didLoadFromKeychain = true
     }
 
+    /// Devuelve el sessionToken vigente (sin refrescar) y limpia la sesion en el
+    /// mismo paso atomico del actor. Para logout: el caller usa el token devuelto
+    /// para invalidar la sesion server-side mientras la local ya queda borrada.
+    /// Atomico evita la carrera en la que un re-login inmediato reestablece la
+    /// sesion y un `clear()` diferido la borraria.
+    func takeSessionTokenAndClear() -> String? {
+        bootstrapIfNeeded()
+        let token = cachedSession?.sessionToken
+        clear()
+        return token
+    }
+
     /// Dispara refresh del par sessionToken+refreshToken contra el backend.
     /// Serializa concurrentes via shared in-flight Task: si varias Tasks
     /// reciben 401 simultaneo, solo una hace el POST /api/auth/refresh y
@@ -273,6 +285,28 @@ actor AuthTokenStore {
         ensureInFlight = task
         defer { ensureInFlight = nil }
         return try await task.value
+    }
+
+    /// Establecimiento explicito de la sesion Bearer cuando el usuario inicia
+    /// sesion deliberadamente (LoginView, tras validar contra Navidrome).
+    ///
+    /// El path perezoso (`ensureSession` desde REST/Hub) puede reusar una sesion
+    /// Bearer obsoleta persistida en Keychain — `logout` NO la limpiaba — y por
+    /// eso `currentToken()` la devolvia (o intentaba refrescarla) sin disparar
+    /// nunca un `POST /api/auth/login` nuevo: el sintoma observado en backend era
+    /// "hub conecta, cero login, REST sin Bearer".
+    ///
+    /// Aqui, al ser un login deliberado, limpiamos los gates de cliente (lockout
+    /// 429, gate 403 de whitelist, counter de fallos) y descartamos cualquier
+    /// sesion previa para forzar un login fresco con las credenciales recien
+    /// guardadas. Devuelve `true` si la sesion Bearer quedo establecida.
+    @discardableResult
+    func establishOnUserLogin() async -> Bool {
+        clearLockedUntil()
+        clearBackendUnauthorized()
+        clearLoginFailures()
+        clear()
+        return (try? await ensureSession()) != nil
     }
 
     // MARK: - Lockout (429) — UserDefaults para sobrevivir cold launch

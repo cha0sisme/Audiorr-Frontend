@@ -126,6 +126,17 @@ final class SettingsViewModel: ObservableObject {
     // MARK: - Logout
 
     func logout() {
+        // Logout del backend Audiorr SOLO si hay sesion Bearer: si existe, se
+        // captura el token y se borra la sesion local de forma atomica, y luego
+        // se invalida server-side best-effort (POST /api/auth/logout). Si NO hay
+        // backend/sesion, `takeSessionTokenAndClear` devuelve nil y esto es un
+        // no-op: queda una salida normal de Navidrome (clearCredentials abajo).
+        Task {
+            if let token = await AuthTokenStore.shared.takeSessionTokenAndClear() {
+                await BackendService.shared.logout(bearer: token)
+            }
+        }
+
         NavidromeService.shared.clearCredentials()
         UserDefaults.standard.removeObject(forKey: "navidromeConfig")
         UserDefaults.standard.removeObject(forKey: "audiorr_backend_url")
