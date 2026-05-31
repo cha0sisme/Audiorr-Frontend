@@ -2657,7 +2657,8 @@ class CrossfadeExecutor {
                 lsA: lsA,
                 rampStart: timings.anticipationStartTime,
                 rampEnd: timings.transitionEndTime,
-                sampleRate: sampleRate
+                sampleRate: sampleRate,
+                easeOut: true
             )
             let band0AltInitial = DSPFilterManager.band0CoefficientA_initial(
                 isCutTransition: isCutTransition,
@@ -2776,7 +2777,8 @@ class CrossfadeExecutor {
                         lsA: lsA,
                         rampStart: bkStart,
                         rampEnd: timings.transitionEndTime,
-                        sampleRate: sampleRate
+                        sampleRate: sampleRate,
+                        easeOut: bassKillExtendToAnticipation
                     )
                     band1A = band1Run.coefficient
                     diagLsGainA = band1Run.gain
@@ -2961,7 +2963,8 @@ class CrossfadeExecutor {
                     lsA: lsA,
                     rampStart: bkRampStart,
                     rampEnd: rampEnd,
-                    sampleRate: sampleRate
+                    sampleRate: sampleRate,
+                    easeOut: bassKillExtendToAnticipation
                 )
                 band1A = band1Run.coefficient
                 diagLsGainA = band1Run.gain

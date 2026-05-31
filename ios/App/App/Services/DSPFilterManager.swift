@@ -342,16 +342,28 @@ final class DSPFilterManager {
 
     /// Coeficiente runtime band 1 A cuando `useBassKill=true` (v14.05).
     /// Reemplaza la curva legacy "hold + 100 ms lineal a -60 dB" por una
-    /// rampa cosSquared 0 → -16 dB sobre TODO el fade (sin gesto seco).
+    /// rampa progresiva 0 → -16 dB sobre TODO el fade (sin gesto seco).
     /// Mantiene la firma del gate DJ pero sin el snap perceptual.
-    /// Fórmula: gain(p) = sin²(p · π/2) · target, con p = (t − rampStart) /
-    /// (rampEnd − rampStart). p=0 → 0 dB, p=1 → target.
+    /// p = (t − rampStart) / (rampEnd − rampStart). Extremos intactos en
+    /// ambas curvas: p=0 → 0 dB, p=1 → target (swap path y profundidad final
+    /// sin cambios).
+    ///
+    /// v15.o — `easeOut` selecciona la forma de la curva:
+    ///  - `false` (legacy): `gain(p) = sin²(p·π/2) · target`, ease-in-out.
+    ///    Se conserva para la rampa bassKill NO extendida (pre-roll normal,
+    ///    bass swap puro) que nunca tuvo queja perceptual.
+    ///  - `true`: `gain(p) = p^0.65 · target`, ease-out. SOLO para la rampa
+    ///    extendida a la anticipación (`bassKillExtendToAnticipation`). La
+    ///    sin² concentraba el descenso en p≈0.5 y sobre la ventana larga
+    ///    (~10s) se percibía "rápido / no progresivo"; la ease-out reparte el
+    ///    gesto desde el primer instante. k=0.65 calibrable en coche.
     static func band1CoefficientA_bassKill(
         at t: Double,
         lsA: CrossfadeExecutor.FilterPreset.Lowshelf,
         rampStart: Double,
         rampEnd: Double,
-        sampleRate: Float
+        sampleRate: Float,
+        easeOut: Bool = false
     ) -> (coefficient: BiquadCoefficients, gain: Float) {
         let totalDur = rampEnd - rampStart
         guard totalDur > 0 else {
@@ -363,9 +375,15 @@ final class DSPFilterManager {
             )
         }
         let p = Float(min(1, max(0, (t - rampStart) / totalDur)))
-        let angle = p * .pi / 2
-        let sinSq = sinf(angle) * sinf(angle)
-        let lsGain = sinSq * bassKillTargetDepth
+        // v15.o — ease-out p^0.65 (extendida) vs sin² ease-in-out (legacy).
+        let shaped: Float
+        if easeOut {
+            shaped = powf(p, 0.65)
+        } else {
+            let angle = p * .pi / 2
+            shaped = sinf(angle) * sinf(angle)
+        }
+        let lsGain = shaped * bassKillTargetDepth
         return (
             BiquadCoefficientCalculator.lowShelf(
                 frequency: lsA.frequency, sampleRate: sampleRate, gainDB: lsGain
