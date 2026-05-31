@@ -1001,6 +1001,36 @@ enum DJMixingService {
             }
         }
 
+        // ── 6b-quinquies. Entry chorus tardío sin drop → SEQUENTIAL ──
+        //
+        // Cuando el entryPoint se calcula vía chorus (punchChorusPromotion /
+        // punchChorusFallback) y supera 30s sin que B sea drop-driven, la
+        // entrada cae en mitad de un verso/pre-chorus y el oyente no reconoce
+        // dónde está la canción. SEQUENTIAL preserva el material introductorio
+        // de B: A termina natural y B arranca desde el inicio.
+        //
+        // Exime drop-driven (mismo criterio percusivo que el gate 6b-ter y el
+        // cap final): ahí el entry tardío apunta a un drop legítimo. El umbral
+        // 30s queda al filo de algún caso bien valorado, aceptable por el
+        // balance. Va ANTES del 6b-bis para que el reset entry=0 lo recoja.
+        if let next = safeNext, next.hasError != true,
+           transition.type != .sequential,
+           transition.type != .vinylStop,
+           transition.type != .cut,
+           transition.type != .cutAFadeInB,
+           (entry.entrySource == .punchChorusPromotion || entry.entrySource == .punchChorusFallback),
+           entry.entryPoint > 30.0 {
+            let (bIsDropDriven, _) = Self.isBDropDrivenByPercussive(next.percussiveCurve)
+            if !bIsDropDriven {
+                let oldReason = transition.reason
+                transition = TransitionTypeResult(
+                    type: .sequential,
+                    reason: "Entry chorus tardío sin drop (entry=\(String(format: "%.1f", entry.entryPoint))s, source=\(entry.entrySource.rawValue)) → SEQUENTIAL [old: \(oldReason)]"
+                )
+                print("[DJMixingService] 🎯→📼 Entry chorus tardío sin drop → SEQUENTIAL")
+            }
+        }
+
         // ── 6b-bis. v14.09: SEQUENTIAL fuerza entry=0 ──
         //
         // `decideTransitionType` puede redirigir DROP_MIX/STEM_MIX → .sequential
