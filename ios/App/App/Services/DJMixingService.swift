@@ -3856,9 +3856,25 @@ enum DJMixingService {
         // ── Safety: extreme BPM jump override ──
         let bpmCutThreshold: Double = useFilters ? 35 : 20
         if profile.bpmDiff > bpmCutThreshold && fadeDuration > 3 && type != .cut {
-            type = .cut
             let normalizedNote = profile.bpmBNormalized != profile.bpmB ? " (norm:\(Int(profile.bpmBNormalized)))" : ""
-            reason = "Polirritmia evitada (A:\(Int(profile.bpmA)) B:\(Int(profile.bpmB))\(normalizedNote) diff=\(String(format: "%.1f", profile.bpmDiff))) → CUT forzado"
+            // Discriminante isOutroInstrumental:
+            //   outroInstrumental=True  → CUT limpio: A sale por zona sin voz,
+            //     el corte seco sobre material instrumental no se percibe como error.
+            //   outroInstrumental=False → cortar a A en seco con voz/drums activos
+            //     suena a error. SEQUENTIAL deja a A terminar natural y B arranca
+            //     desde su intro, sin overlap de grids polirrítmicos (lo que este
+            //     branch evita) ni trauma de corte. NATURAL_BLEND descartado:
+            //     superpondría dos grooves incompatibles, justo lo que se evita.
+            // Nota: la rama CUT sigue siendo elegible al override energy-crash
+            // →FADE_OUT_A_CUT_B de más abajo, igual que antes (no-cambio); la
+            // rama SEQUENTIAL no lo es (su gate no incluye .sequential).
+            if outroInstrumental {
+                type = .cut
+                reason = "Polirritmia evitada (A:\(Int(profile.bpmA)) B:\(Int(profile.bpmB))\(normalizedNote) diff=\(String(format: "%.1f", profile.bpmDiff))) outroInst → CUT forzado"
+            } else {
+                type = .sequential
+                reason = "Polirritmia + A no instrumental (A:\(Int(profile.bpmA)) B:\(Int(profile.bpmB))\(normalizedNote) diff=\(String(format: "%.1f", profile.bpmDiff))) → SEQUENTIAL"
+            }
         }
 
         // ── Override: energy crash A → instrumental B ──
@@ -3886,7 +3902,12 @@ enum DJMixingService {
         // ── Safety: vocal trainwreck — refine with actual fade zone ──
         if let current = currentAnalysis, current.hasError != true,
            let next = nextAnalysis, next.hasError != true,
-           type != .cut && type != .stemMix {
+           type != .cut && type != .stemMix && type != .sequential {
+            // `type != .sequential` añadido: el redirect Polirritmia→SEQUENTIAL
+            // (branch de arriba cuando !outroInstrumental) NO debe ser reprocesado
+            // a CUT/EQ_MIX por el trainwreck. SEQUENTIAL no tiene overlap (A
+            // termina, B desde 0) → no hay colisión vocal posible. Inseparable
+            // del vector anterior: mismo flujo de control.
 
             // vocalStart unwrap: nil → 0 (safe sentinel for arithmetic).
             // The `> 0` guard below filters both nil and the literal 0.0
