@@ -222,7 +222,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             }
 
             await MainActor.run {
-                playlistsTemplate?.updateSections(sections)
+                playlistsTemplate?.updateSections(cappedSections(sections))
             }
         } catch {
             print("[CarPlay] Error de red: \(error.localizedDescription)")
@@ -372,7 +372,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 accessoryType: .disclosureIndicator
             )
             nowPlayingItem.handler = { [weak self] _, completion in
-                self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                self?.pushNowPlaying()
                 completion()
             }
 
@@ -436,7 +436,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
         )
         playAllItem.handler = { [weak self] _, completion in
             self?.playPlaylistSongs(songs, startIndex: 0)
-            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            self?.pushNowPlaying()
             completion()
         }
 
@@ -449,7 +449,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
         )
         shuffleItem.handler = { [weak self] _, completion in
             self?.playPlaylistSongs(songs.shuffled(), startIndex: 0)
-            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            self?.pushNowPlaying()
             completion()
         }
 
@@ -494,11 +494,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
 
         let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
             self?.playPlaylistSongs(songs, startIndex: 0)
-            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            self?.pushNowPlaying()
         }
         let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
             self?.playPlaylistSongs(songs.shuffled(), startIndex: 0)
-            self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+            self?.pushNowPlaying()
         }
         songsTemplate.leadingNavigationBarButtons = [playAllButton]
         songsTemplate.trailingNavigationBarButtons = [shuffleButton]
@@ -518,7 +518,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             )
             item.handler = { [weak self] _, completion in
                 self?.playPlaylistSongs(songs, startIndex: index)
-                self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                self?.pushNowPlaying()
                 completion()
             }
             return item
@@ -624,7 +624,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                     )
                     item.handler = { [weak self] _, completion in
                         self?.playPlaylistSongs(songs, startIndex: index)
-                        self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                        self?.pushNowPlaying()
                         completion()
                     }
                     songItems.append(item)
@@ -635,7 +635,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                         let empty = CPListItem(text: "Playlist vacía", detailText: nil, image: nil)
                         songsTemplate.updateSections([CPListSection(items: [empty])])
                     } else {
-                        songsTemplate.updateSections([CPListSection(items: songItems)])
+                        songsTemplate.updateSections(cappedSections([CPListSection(items: songItems)]))
                     }
                 }
             } catch {
@@ -685,7 +685,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                     )
                     item.handler = { [weak self] _, completion in
                         self?.playPlaylistSongs(songs, startIndex: index)
-                        self?.interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+                        self?.pushNowPlaying()
                         completion()
                     }
                     return item
@@ -696,7 +696,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                         let empty = CPListItem(text: "Álbum vacío", detailText: nil, image: nil)
                         songsTemplate.updateSections([CPListSection(items: [empty])])
                     } else {
-                        songsTemplate.updateSections([CPListSection(items: songItems)])
+                        songsTemplate.updateSections(cappedSections([CPListSection(items: songItems)]))
                     }
                 }
             } catch {
@@ -719,7 +719,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 print("[CarPlay] Error cargando playlist: \(error)")
             }
         }
-        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        pushNowPlaying()
     }
 
     private func playPlaylistShuffled(id: String, name: String) {
@@ -735,7 +735,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 print("[CarPlay] Error cargando playlist: \(error)")
             }
         }
-        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        pushNowPlaying()
     }
 
     private func playAlbum(id: String) {
@@ -750,7 +750,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 print("[CarPlay] Error cargando álbum: \(error)")
             }
         }
-        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        pushNowPlaying()
     }
 
     private func playAlbumShuffled(id: String) {
@@ -766,12 +766,12 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 print("[CarPlay] Error cargando álbum: \(error)")
             }
         }
-        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        pushNowPlaying()
     }
 
     private func playSmartMix(playlistId: String, playlistName: String, songs: [NavidromeSong]) {
         print("[CarPlay] SmartMix playlist: \(playlistName)")
-        interfaceController?.pushTemplate(CPNowPlayingTemplate.shared, animated: true, completion: nil)
+        pushNowPlaying()
         Task { @MainActor in
             SmartMixManager.shared.generate(playlistId: playlistId, songs: songs)
             // Wait for SmartMix to finish analyzing
@@ -791,6 +791,76 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
         Task { @MainActor in
             PlayerService.shared.playPlaylist(songs, startingAt: startIndex)
         }
+    }
+
+    // MARK: - NowPlaying push seguro
+
+    /// Empuja `CPNowPlayingTemplate` sin reventar el límite de CarPlay.
+    ///
+    /// CarPlay solo permite 5 templates en el stack de navegación; empujar el
+    /// 6º lanza una NSException no capturable y la app peta. El flujo
+    /// Explorar → Artistas → Álbumes del artista → Canciones del álbum ya
+    /// ocupa 5 (contando el TabBar raíz), así que reproducir una canción
+    /// intentaba empujar NowPlaying como 6º → crash. Además, empujar dos veces
+    /// la misma instancia compartida de NowPlaying también lanza excepción.
+    ///
+    /// Estrategia: si NowPlaying ya está en el stack se trae al frente; si no,
+    /// se colapsa al root antes de empujarlo. Así NowPlaying queda siempre a
+    /// profundidad 2 y los menús que cuelgan de él (artista/álbum, up-next)
+    /// nunca pueden exceder el límite. UX coherente con Apple Music: reproducir
+    /// lleva al reproductor y "atrás" vuelve a la raíz.
+    private func pushNowPlaying() {
+        guard let ic = interfaceController else { return }
+        let nowPlaying = CPNowPlayingTemplate.shared
+
+        // Ya en el stack: traerlo al frente (re-empujar la misma instancia peta).
+        if ic.templates.contains(where: { $0 === nowPlaying }) {
+            if ic.topTemplate !== nowPlaying {
+                ic.pop(to: nowPlaying, animated: true, completion: nil)
+            }
+            return
+        }
+
+        if ic.templates.count > 1 {
+            ic.popToRootTemplate(animated: false) { _, _ in
+                ic.pushTemplate(nowPlaying, animated: true, completion: nil)
+            }
+        } else {
+            ic.pushTemplate(nowPlaying, animated: true, completion: nil)
+        }
+    }
+
+    // MARK: - Límite de items por lista
+
+    /// Trunca defensivamente un conjunto de secciones para no exceder los
+    /// límites de CarPlay (`maximumItemCount` total y `maximumSectionCount`).
+    /// Con bibliotecas grandes, listas sin acotar — todos los artistas, todas
+    /// las playlists, o un álbum/playlist con cientos de canciones — pueden
+    /// superar el límite, que en algunas versiones de iOS lanza excepción.
+    /// Mantiene el orden y reparte el presupuesto de items respetando secciones.
+    private func cappedSections(_ sections: [CPListSection]) -> [CPListSection] {
+        let maxItems = CPListTemplate.maximumItemCount
+        let maxSections = CPListTemplate.maximumSectionCount
+
+        var result: [CPListSection] = []
+        var itemBudget = maxItems
+
+        for section in sections.prefix(maxSections) {
+            if itemBudget <= 0 { break }
+            if section.items.count <= itemBudget {
+                result.append(section)
+                itemBudget -= section.items.count
+            } else {
+                let trimmed = Array(section.items.prefix(itemBudget))
+                result.append(CPListSection(
+                    items: trimmed,
+                    header: section.header,
+                    sectionIndexTitle: section.sectionIndexTitle
+                ))
+                itemBudget = 0
+            }
+        }
+        return result
     }
 
     // MARK: - Explorar (browse)
@@ -911,7 +981,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                         let empty = CPListItem(text: "Sin artistas", detailText: nil, image: nil)
                         template.updateSections([CPListSection(items: [empty])])
                     } else {
-                        template.updateSections(sections)
+                        template.updateSections(cappedSections(sections))
                     }
                 }
             } catch {
