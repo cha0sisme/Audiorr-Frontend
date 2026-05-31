@@ -492,11 +492,11 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             sections: [CPListSection(items: [])]
         )
 
-        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
+        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill") ?? UIImage()) { [weak self] _ in
             self?.playPlaylistSongs(songs, startIndex: 0)
             self?.pushNowPlaying()
         }
-        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle") ?? UIImage()) { [weak self] _ in
             self?.playPlaylistSongs(songs.shuffled(), startIndex: 0)
             self?.pushNowPlaying()
         }
@@ -565,10 +565,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             sections: [CPListSection(items: [loadingItem])]
         )
 
-        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
+        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill") ?? UIImage()) { [weak self] _ in
             self?.playPlaylist(id: playlistId, name: playlistName)
         }
-        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle") ?? UIImage()) { [weak self] _ in
             self?.playPlaylistShuffled(id: playlistId, name: playlistName)
         }
         songsTemplate.leadingNavigationBarButtons = [playAllButton]
@@ -653,10 +653,10 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
             sections: [CPListSection(items: [loadingItem])]
         )
 
-        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill")!) { [weak self] _ in
+        let playAllButton = CPBarButton(image: UIImage(systemName: "play.fill") ?? UIImage()) { [weak self] _ in
             self?.playAlbum(id: albumId)
         }
-        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle")!) { [weak self] _ in
+        let shuffleButton = CPBarButton(image: UIImage(systemName: "shuffle") ?? UIImage()) { [weak self] _ in
             self?.playAlbumShuffled(id: albumId)
         }
         songsTemplate.leadingNavigationBarButtons = [playAllButton]
