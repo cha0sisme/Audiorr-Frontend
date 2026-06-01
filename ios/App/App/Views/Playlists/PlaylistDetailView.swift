@@ -184,9 +184,11 @@ final class PlaylistDetailViewModel: ObservableObject {
         var urls: [URL] = []
         if BackendState.shared.isAvailable,
            let u = api.playlistBackendCoverURL(playlistId: initialPlaylist.id, contentHash: hash) { urls.append(u) }
-        if let u = api.coverURL(id: initialPlaylist.coverArt, size: 600) { urls.append(u) }
+        // size=1000 para el cover del hero (~236pt @3x ≈ 708px).
+        // El prefetch de miniaturas de listado sigue en 600 (no se toca).
+        if let u = api.coverURL(id: initialPlaylist.coverArt, size: 1000) { urls.append(u) }
         return await cache.loadCover(
-            playlistId: initialPlaylist.id, urls: urls, maxPixels: 600
+            playlistId: initialPlaylist.id, urls: urls, maxPixels: 1000
         )
     }
 }
@@ -216,10 +218,38 @@ struct PlaylistDetailView: View {
     private var scrollProgress: CGFloat { min(max(scrollY / heroHeight, 0), 1) }
     private var heroOpacity: CGFloat    { 1 - min(scrollProgress * 1.2, 0.92) }
     private var stickyOpacity: CGFloat  { min(max((scrollProgress - 0.55) / 0.25, 0), 1) }
-    private var overscrollScale: CGFloat { 1 + max(0, -scrollY) / 900 }
+    /// Stretchy header scale: proporcional al pull-down. Anchor `.bottom`
+    /// para que el header gane altura hacia arriba en el rebound.
+    private var stretchScale: CGFloat {
+        let pullDown = max(0, -scrollY)
+        return (heroHeight + pullDown) / heroHeight
+    }
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
+
+    /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
+    /// estilo Apple Music: ~55% del width con cap a 260pt para no inflar
+    /// en iPad. En iPhone 15/16 ≈ 216pt, en Pro Max ≈ 236pt, en SE ≈ 206pt.
+    /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
+    private var coverSize: CGFloat {
+        let width: CGFloat = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.bounds.width ?? 393
+        return min(width * 0.55, 260)
+    }
+
+    /// Safe area top de la ventana actual. Necesario para extender el
+    /// heroBackground HASTA el notch — el ScrollView con `.ignoresSafeArea`
+    /// no propaga insets cero a sus children dentro del scroll content,
+    /// lo que dejaba un gap visible bajo la status bar.
+    private var safeAreaTop: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.top ?? 47
+    }
 
     // MARK: Body
 
@@ -304,15 +334,20 @@ struct PlaylistDetailView: View {
 
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
-            // Background only gets the fade mask
+            // Stretchy header + extensión al notch + heroFade hacia pageBg.
+            // Mismo patrón que AlbumDetailView: frame extendido + overlay del
+            // fade ANTES del offset (viaja con el backdrop) + offset compensatorio.
+            // El ZStack mantiene `frame(height: heroHeight)` para no romper el
+            // flow del scroll content; el offset es puramente visual.
             heroBackground
-                .scaleEffect(overscrollScale, anchor: .top)
-                .frame(height: heroHeight)
+                .frame(height: heroHeight + safeAreaTop)
                 .overlay(alignment: .bottom) {
                     LinearGradient.heroFade(to: pageBg)
                         .frame(height: heroHeight * 0.55)
+                        .allowsHitTesting(false)
                 }
-                .clipped()
+                .offset(y: -safeAreaTop)
+                .scaleEffect(stretchScale, anchor: .bottom)
 
             // Content sits above the masked background — no fade applied to it
             heroContent
@@ -320,7 +355,6 @@ struct PlaylistDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
-        .clipped()
     }
 
     @ViewBuilder
@@ -370,8 +404,8 @@ struct PlaylistDetailView: View {
 
             // Cover art — centered
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
-                .frame(width: 190, height: 190)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(width: coverSize, height: coverSize)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
 
             Spacer(minLength: 20)
@@ -390,10 +424,11 @@ struct PlaylistDetailView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
 
-            // Action buttons — centered
+            // Action buttons — centered. Más aire respecto al songlist
+            // de debajo (estilo Apple Music iOS 26.4).
             actionButtons
                 .padding(.top, 18)
-                .padding(.bottom, 28)
+                .padding(.bottom, 44)
         }
         .frame(maxWidth: .infinity)
     }
@@ -462,8 +497,14 @@ struct PlaylistDetailView: View {
     }
 
     private var actionButtons: some View {
-        let fillColor: Color  = Color(vm.palette.buttonFillColor)
-        let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
+        // Mismo estilo Apple Music iOS 26.4 (centralizado en `AlbumPalette`).
+        // PlaylistDetail no expone motion artwork hoy (no hay endpoint backend),
+        // así que motionPresent es siempre false. SmartMix recibe el mismo
+        // par accent (shuffleBg/shuffleFg) para mantener consistencia visual.
+        let playBg = Color(vm.palette.playButtonBackground(motionPresent: false))
+        let playFg = Color(vm.palette.playButtonForeground(motionPresent: false))
+        let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: false))
+        let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: false))
         let nowPlaying = NowPlayingState.shared
         let isPlaylistContext = nowPlaying.isVisible && nowPlaying.contextUri == "playlist:\(vm.displayPlaylist.id)"
         let isPlaylistPlaying = isPlaylistContext && nowPlaying.isPlaying
@@ -484,7 +525,7 @@ struct PlaylistDetailView: View {
                     PlayerService.shared.playPlaylist(vm.songs, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
                 }
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     Image(systemName: isPlaylistPlaying ? "pause.fill" : "play.fill")
                     if !collapsePlay {
                         Text(isPlaylistContext ? L.pause : L.play)
@@ -492,12 +533,12 @@ struct PlaylistDetailView: View {
                             .transition(.blurReplace)
                     }
                 }
-                .font(.system(size: 15))
-                .foregroundStyle(labelColor)
-                .padding(.horizontal, collapsePlay ? 0 : 22)
-                .padding(.vertical, 10)
-                .frame(width: collapsePlay ? 40 : nil, height: 40)
-                .background(fillColor, in: Capsule())
+                .font(.system(size: 17))
+                .foregroundStyle(playFg)
+                .padding(.horizontal, collapsePlay ? 0 : 28)
+                .padding(.vertical, 13)
+                .frame(width: collapsePlay ? 48 : nil, height: 48)
+                .background(playBg, in: Capsule())
                 .animation(Anim.moderate, value: isPlaylistPlaying)
             }
 
@@ -507,15 +548,16 @@ struct PlaylistDetailView: View {
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 Image(systemName: "shuffle")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(labelColor)
-                    .frame(width: 40, height: 40)
-                    .background(fillColor, in: Circle())
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(shuffleFg)
+                    .frame(width: 48, height: 48)
+                    .background(shuffleBg, in: Circle())
             }
 
-            // SmartMix (only when backend is available)
+            // SmartMix (only when backend is available) — usa el par accent
+            // del shuffle para que se integre visualmente con el resto.
             if BackendState.shared.isAvailable {
-                smartMixButton(fillColor: fillColor, labelColor: labelColor)
+                smartMixButton(fillColor: shuffleBg, labelColor: shuffleFg)
             }
         }
         .animation(Anim.moderate, value: smartMixReady)
@@ -610,24 +652,24 @@ struct PlaylistDetailView: View {
                 }
             }
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 ZStack {
                     if isSmartMixPlaying {
                         Image(systemName: "pause.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(labelColor)
                             .transition(.blurReplace)
                     } else if isSmartMixContext {
                         // Paused but still the active context
                         Image(systemName: "play.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(labelColor)
                             .transition(.blurReplace)
                     } else {
                         switch status {
                         case .idle:
                             Image(systemName: "wand.and.stars")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(labelColor)
                                 .transition(.blurReplace)
 
@@ -639,13 +681,13 @@ struct PlaylistDetailView: View {
 
                         case .ready:
                             Image(systemName: "play.fill")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(labelColor)
                                 .transition(.blurReplace)
 
                         case .error:
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(labelColor.opacity(0.6))
                                 .transition(.blurReplace)
                         }
@@ -654,14 +696,14 @@ struct PlaylistDetailView: View {
 
                 if isExpanded {
                     Text("SmartMix")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(labelColor)
                         .transition(.blurReplace)
                 }
             }
-            .padding(.horizontal, isExpanded ? 22 : 0)
-            .padding(.vertical, 10)
-            .frame(width: isExpanded ? nil : 40, height: 40)
+            .padding(.horizontal, isExpanded ? 28 : 0)
+            .padding(.vertical, 13)
+            .frame(width: isExpanded ? nil : 48, height: 48)
             .background(fillColor, in: Capsule())
             .animation(Anim.moderate, value: status)
             .animation(Anim.moderate, value: isSmartMixPlaying)
