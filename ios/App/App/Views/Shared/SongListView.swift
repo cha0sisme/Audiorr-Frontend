@@ -20,6 +20,10 @@ struct SongListView: View {
     var showCover: Bool = false
     var contextUri: String? = nil
     var contextName: String? = nil
+    /// Si se proporciona, el artista solo se muestra cuando hay featurings
+    /// (artistas distintos del titular del álbum) — formato Apple Music
+    /// "Drake feat. Snoop Dogg". Sobrescribe a `showArtist`.
+    var albumArtist: String? = nil
 
     @State private var navAlbum:  NavidromeAlbum?  = nil
     @State private var navArtist: NavidromeArtist? = nil
@@ -74,7 +78,7 @@ struct SongListView: View {
             Button {
                 PlayerService.shared.playPlaylist(songs, startingAt: idx, contextUri: contextUri, contextName: contextName)
             } label: {
-                SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist, showCover: showCover)
+                SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist, showCover: showCover, albumArtist: albumArtist)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
@@ -176,6 +180,24 @@ private struct SongRowView: View {
     let palette: AlbumPalette
     var showArtist: Bool = true
     var showCover: Bool = false
+    /// Cuando se pasa, el artista solo se renderiza si la canción tiene
+    /// featurings (artistas distintos al titular del álbum). Estilo
+    /// Apple Music en album page.
+    var albumArtist: String? = nil
+
+    /// Texto del artista a mostrar bajo el título. Devuelve nil si no
+    /// se debe mostrar nada.
+    private var artistText: String? {
+        if let albumArtist {
+            return ItemArtist.featuringText(
+                artists: song.artists ?? [],
+                fallback: song.artist,
+                albumArtist: albumArtist
+            )
+        }
+        guard showArtist else { return nil }
+        return ItemArtist.displayName(of: song.artists ?? [], fallback: song.artist)
+    }
 
     private enum CacheState: Equatable {
         case none
@@ -246,8 +268,8 @@ private struct SongRowView: View {
                     }
                 }
 
-                if showArtist {
-                    Text(song.artist)
+                if let artistText {
+                    Text(artistText)
                         .font(.system(size: 13))
                         .foregroundStyle(secondaryText)
                         .lineLimit(1)

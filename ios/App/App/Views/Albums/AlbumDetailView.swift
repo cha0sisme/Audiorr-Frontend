@@ -583,7 +583,8 @@ struct AlbumDetailView: View {
             ExpandableBio(
                 text: cleanNotes(notes),
                 pageBg: pageBg,
-                textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
+                textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75),
+                sheetTitle: vm.displayAlbum.name
             )
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -624,7 +625,10 @@ struct AlbumDetailView: View {
                     showArtist: false
                 )
             } else {
-                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
+                // `albumArtist` activa el modo "solo featurings": el
+                // artista de cada canción solo se renderiza si difiere del
+                // titular del álbum o trae invitados (Drake feat. Snoop Dogg).
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: false, showArtist: false, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name, albumArtist: vm.displayAlbum.artist)
 
                 albumStatsLine
 
