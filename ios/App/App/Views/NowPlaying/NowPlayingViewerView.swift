@@ -35,7 +35,20 @@ struct NowPlayingViewerView: View {
     @State private var canvasUrl: URL?
     @State private var lastCanvasSongId: String?
 
-    private var hasCanvas: Bool { canvasUrl != nil }
+    // Animated artwork (motion artwork por álbum, estilo Apple Music iOS 26)
+    @State private var animatedArtworkUrl: URL?
+    @State private var lastArtworkAlbumId: String?
+
+    /// Hay vídeo de fondo si existe canvas o animated artwork. Controla el
+    /// layout bottom-grouped (sin cover estático) y el scrim extra de lyrics.
+    private var hasBackdropVideo: Bool { canvasUrl != nil || animatedArtworkUrl != nil }
+
+    /// Firma que cambia cuando aparece/desaparece un backdrop de vídeo o
+    /// cuando se sustituye por otro. Permite que la animación del body
+    /// dispare crossfade en cualquiera de esas transiciones.
+    private var backdropVideoSignature: String {
+        (canvasUrl?.absoluteString ?? "") + "|" + (animatedArtworkUrl?.absoluteString ?? "")
+    }
 
     // Lyrics (Fase 5)
     @State private var lyricsResult: LyricsService.LyricsResult = .empty
@@ -51,21 +64,14 @@ struct NowPlayingViewerView: View {
                 Color.black
                     .ignoresSafeArea()
 
-                // Backdrop: canvas video or blurred artwork
+                // Backdrop tiers: Canvas (canción) > Animated Artwork (álbum) > cover difuminado.
+                // El Canvas de Spotify es por canción y más específico, así que
+                // manda cuando exista. El animated artwork (motion artwork de
+                // Apple Music, ratio 3:4) es la segunda fuente, por álbum.
                 if let canvasUrl {
-                    CanvasView(url: canvasUrl)
-                        .ignoresSafeArea()
-                        .transition(.opacity)
-
-                    canvasGradient
-                        .ignoresSafeArea()
-
-                    // Extra scrim when lyrics are visible over canvas
-                    if showLyrics && hasLyrics {
-                        Color.black.opacity(0.45)
-                            .ignoresSafeArea()
-                            .transition(.opacity)
-                    }
+                    videoBackdrop(url: canvasUrl)
+                } else if let animatedArtworkUrl {
+                    videoBackdrop(url: animatedArtworkUrl)
                 } else {
                     // Blurred artwork backdrop
                     if let img = fullArtworkImage {
@@ -106,12 +112,12 @@ struct NowPlayingViewerView: View {
                             .frame(height: 12)
 
                         // Playback controls
-                        PlaybackControlsView(glassStyle: hasCanvas)
+                        PlaybackControlsView(glassStyle: hasBackdropVideo)
 
                         // Push bottom actions down
                         Spacer()
 
-                    } else if hasCanvas {
+                    } else if hasBackdropVideo {
                         // Canvas mode: all controls grouped at bottom (Spotify-style)
                         Spacer()
 
@@ -184,6 +190,9 @@ struct NowPlayingViewerView: View {
             resolveCanvas(songId: songId)
             resolveLyrics(songId: songId)
         }
+        .onChange(of: state.albumId) { _, albumId in
+            resolveAnimatedArtwork(albumId: albumId)
+        }
         .onChange(of: state.title) { _, _ in
             // Title arrives via nativeUpdateNowPlaying (separate from songId).
             // Retry lyrics if we have a songId but lyrics are still empty.
@@ -195,17 +204,19 @@ struct NowPlayingViewerView: View {
         .onAppear {
             dragOffset = 0
             print("[Viewer] onAppear: songId='\(state.songId)' albumId='\(state.albumId)' artistId='\(state.artistId)' title='\(state.title)' coverArt='\(state.coverArt.prefix(20))' queueCount=\(state.queue.count)")
-            // Reset dedup guards so lyrics/canvas resolve fresh on each open
+            // Reset dedup guards so lyrics/canvas/artwork resolve fresh on each open
             lastLyricsSongId = nil
             lastCanvasSongId = nil
+            lastArtworkAlbumId = nil
             lastLoadedCoverArt = nil
             lastExtractedUrl = nil
             loadArtwork()
             resolveCanvas(songId: state.songId)
             resolveLyrics(songId: state.songId)
+            resolveAnimatedArtwork(albumId: state.albumId)
             // Queue is already synced natively by QueueManager
         }
-        .animation(.easeInOut(duration: 0.5), value: hasCanvas)
+        .animation(.easeInOut(duration: 0.5), value: backdropVideoSignature)
         .sheet(isPresented: $showQueue) {
             QueuePanelView()
         }
@@ -329,6 +340,28 @@ struct NowPlayingViewerView: View {
             }
 
             return UIMenu(children: sections)
+        }
+    }
+
+    // MARK: - Video Backdrop (Canvas / Animated Artwork)
+
+    /// Backdrop común para canvas y animated artwork: vídeo edge-to-edge,
+    /// gradiente oscuro abajo para legibilidad, scrim extra si lyrics activas.
+    /// Apple Music hace lo mismo: vídeo fullscreen + gradiente abajo, sin
+    /// adornos sobre el clip (ningún botón "X" explícito).
+    @ViewBuilder
+    private func videoBackdrop(url: URL) -> some View {
+        CanvasView(url: url)
+            .ignoresSafeArea()
+            .transition(.opacity)
+
+        canvasGradient
+            .ignoresSafeArea()
+
+        if showLyrics && hasLyrics {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .transition(.opacity)
         }
     }
 
@@ -638,6 +671,30 @@ struct NowPlayingViewerView: View {
                 withAnimation { canvasUrl = nil }
             case .none:
                 withAnimation { canvasUrl = nil }
+            }
+        }
+    }
+
+    // MARK: - Animated Artwork Resolution
+
+    private func resolveAnimatedArtwork(albumId: String) {
+        guard albumId != lastArtworkAlbumId else { return }
+        lastArtworkAlbumId = albumId
+
+        // Sin albumId: limpiar el vídeo si lo había, para no arrastrar el motion
+        // del álbum anterior cuando el siguiente track no expone albumId.
+        guard !albumId.isEmpty else {
+            withAnimation { animatedArtworkUrl = nil }
+            return
+        }
+
+        Task {
+            let result = await AlbumArtworkService.shared.resolve(albumId: albumId)
+            switch result {
+            case .video(let url):
+                withAnimation { animatedArtworkUrl = url }
+            case .none:
+                withAnimation { animatedArtworkUrl = nil }
             }
         }
     }
