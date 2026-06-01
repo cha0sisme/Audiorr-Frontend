@@ -177,11 +177,28 @@ struct ArtistDetailView: View {
     private var scrollProgress: CGFloat  { min(max(scrollY / heroHeight, 0), 1) }
     private var heroOpacity: CGFloat     { 1 - min(scrollProgress * 1.3, 0.92) }
     private var stickyOpacity: CGFloat   { min(max((scrollProgress - 0.50) / 0.30, 0), 1) }
-    private var overscrollScale: CGFloat { 1 + max(0, -scrollY) / 900 }
+    /// Stretchy header scale: proporcional al pull-down. Anchor `.bottom`
+    /// para que el header gane altura hacia arriba en el rebound.
+    private var stretchScale: CGFloat {
+        let pullDown = max(0, -scrollY)
+        return (heroHeight + pullDown) / heroHeight
+    }
 
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
     private var skeletonColor: Color { isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.10) }
+
+    /// Safe area top de la ventana actual. Necesario para extender el
+    /// heroBackground HASTA el notch — el ScrollView con `.ignoresSafeArea`
+    /// no propaga insets cero a sus children dentro del scroll content,
+    /// lo que dejaba un gap visible bajo la status bar.
+    private var safeAreaTop: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first(where: { $0.isKeyWindow })?
+            .safeAreaInsets.top ?? 47
+    }
 
     // Deterministic color from artist name (fallback when no avatar)
     private var nameColor: Color {
@@ -249,21 +266,26 @@ struct ArtistDetailView: View {
 
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
+            // Stretchy header + extensión al notch + heroFade hacia pageBg.
+            // Mismo patrón que AlbumDetailView: frame extendido + overlay del
+            // fade ANTES del offset (viaja con el backdrop) + offset compensatorio.
+            // El ZStack mantiene `frame(height: heroHeight)` para no romper el
+            // flow del scroll content; el offset es puramente visual.
             heroBackground
-                .scaleEffect(overscrollScale, anchor: .top)
-                .frame(height: heroHeight)
+                .frame(height: heroHeight + safeAreaTop)
                 .overlay(alignment: .bottom) {
                     LinearGradient.heroFade(to: pageBg)
                         .frame(height: heroHeight * 0.55)
+                        .allowsHitTesting(false)
                 }
-                .clipped()
+                .offset(y: -safeAreaTop)
+                .scaleEffect(stretchScale, anchor: .bottom)
 
             heroContent
                 .opacity(heroOpacity)
         }
         .frame(maxWidth: .infinity)
         .frame(height: heroHeight)
-        .clipped()
     }
 
     @ViewBuilder
@@ -334,8 +356,9 @@ struct ArtistDetailView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 18)
 
+            // Más aire respecto a la lista de debajo (estilo Apple Music iOS 26.4).
             playButtons
-                .padding(.bottom, 28)
+                .padding(.bottom, 44)
         }
     }
 
@@ -343,8 +366,13 @@ struct ArtistDetailView: View {
     /// patrón que AlbumDetailView.playButtons. Shuffle dispara `loadAndShuffle`
     /// que reusa la carga del primer álbum pero envía la tracklist barajada.
     private var playButtons: some View {
-        let fillColor  = Color(vm.palette.buttonFillColor)
-        let labelColor: Color = vm.palette.buttonUsesBlackText ? .black : .white
+        // Mismo estilo Apple Music iOS 26.4 que AlbumDetailView (centralizado
+        // en `AlbumPalette`). El artist page no tiene motion artwork hoy
+        // (no hay endpoint backend), así que motionPresent es siempre false.
+        let playBg = Color(vm.palette.playButtonBackground(motionPresent: false))
+        let playFg = Color(vm.palette.playButtonForeground(motionPresent: false))
+        let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: false))
+        let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: false))
 
         return HStack(spacing: 14) {
             Button {
@@ -352,29 +380,29 @@ struct ArtistDetailView: View {
             } label: {
                 Group {
                     if vm.isLoadingPlayback {
-                        ProgressView().tint(labelColor)
+                        ProgressView().tint(playFg)
                     } else {
-                        HStack(spacing: 7) {
+                        HStack(spacing: 8) {
                             Image(systemName: "play.fill")
                             Text(L.play).fontWeight(.semibold)
                         }
-                        .font(.system(size: 15))
+                        .font(.system(size: 17))
                     }
                 }
-                .foregroundStyle(labelColor)
-                .padding(.horizontal, 22)
-                .padding(.vertical, 10)
-                .background(fillColor, in: Capsule())
+                .foregroundStyle(playFg)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 13)
+                .background(playBg, in: Capsule())
             }
 
             Button {
                 Task { await vm.loadAndShuffle() }
             } label: {
                 Image(systemName: "shuffle")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(labelColor)
-                    .frame(width: 40, height: 40)
-                    .background(fillColor, in: Circle())
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(shuffleFg)
+                    .frame(width: 48, height: 48)
+                    .background(shuffleBg, in: Circle())
             }
         }
         .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
