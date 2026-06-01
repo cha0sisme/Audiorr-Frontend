@@ -395,7 +395,12 @@ struct DownloadsPlaylistView: View {
     private var scrollProgress: CGFloat { min(max(scrollY / heroHeight, 0), 1) }
     private var heroOpacity: CGFloat    { 1 - min(scrollProgress * 1.2, 0.92) }
     private var stickyOpacity: CGFloat  { min(max((scrollProgress - 0.55) / 0.25, 0), 1) }
-    private var overscrollScale: CGFloat { 1 + max(0, -scrollY) / 900 }
+    /// Stretchy header scale: proporcional al pull-down. Anchor `.bottom`
+    /// para que el header gane altura hacia arriba en el rebound.
+    private var stretchScale: CGFloat {
+        let pullDown = max(0, -scrollY)
+        return (heroHeight + pullDown) / heroHeight
+    }
 
     private var pageBg: Color { Color(palette.pageBackgroundColor) }
 
@@ -462,7 +467,6 @@ struct DownloadsPlaylistView: View {
                 )
             }
             .ignoresSafeArea(edges: .top)
-            .scaleEffect(overscrollScale, anchor: .top)
             .frame(height: heroHeight)
             .overlay(alignment: .bottom) {
                 LinearGradient(
@@ -471,7 +475,7 @@ struct DownloadsPlaylistView: View {
                 )
                 .frame(height: heroHeight * 0.35)
             }
-            .clipped()
+            .scaleEffect(stretchScale, anchor: .bottom)
 
             // Content
             VStack(spacing: 0) {
