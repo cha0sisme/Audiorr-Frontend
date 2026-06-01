@@ -19,6 +19,61 @@ struct NavidromeCredentials: Codable {
 struct ItemArtist: Identifiable, Codable, Hashable {
     let id: String
     let name: String
+
+    /// Formatea una lista de artistas al estilo Apple Music:
+    /// 1 → "A", 2 → "A & B", 3+ → "A, B & C" (último con `&`, resto comas).
+    /// El `feat.` (lowercase, en inglés) lo manda Apple en el TÍTULO de la
+    /// canción, no en el campo de artista, así que aquí solo concatenamos
+    /// nombres con el separador correcto.
+    static func displayName(of artists: [ItemArtist], fallback: String = "") -> String {
+        let names = artists.map(\.name).filter { !$0.isEmpty }
+        switch names.count {
+        case 0: return fallback
+        case 1: return names[0]
+        case 2: return "\(names[0]) & \(names[1])"
+        default:
+            let head = names.dropLast().joined(separator: ", ")
+            return "\(head) & \(names.last!)"
+        }
+    }
+
+    /// Para una canción dentro del contexto de un álbum, devuelve el texto
+    /// del artista solo si hay **featurings reales** (artistas distintos del
+    /// principal del álbum), formateado Apple-style: "Drake feat. Snoop Dogg".
+    /// Si la canción es del artista del álbum sin invitados, devuelve nil
+    /// (el caller no renderiza nada — coincide con cómo Apple Music
+    /// omite el artista en las pistas que son solo del titular del álbum).
+    static func featuringText(
+        artists: [ItemArtist],
+        fallback: String,
+        albumArtist: String
+    ) -> String? {
+        let names = artists.map(\.name).filter { !$0.isEmpty }
+
+        // Solo 1 artista — coincide con el del álbum → ocultar.
+        if names.count <= 1 {
+            let only = names.first ?? fallback
+            return only == albumArtist || only.isEmpty ? nil : only
+        }
+
+        // Múltiples artistas. Si el álbum aparece, los demás son featurings.
+        if names.contains(albumArtist) {
+            let featuring = names.filter { $0 != albumArtist }
+            guard !featuring.isEmpty else { return nil }
+            let featList: String
+            switch featuring.count {
+            case 1: featList = featuring[0]
+            case 2: featList = "\(featuring[0]) & \(featuring[1])"
+            default:
+                let head = featuring.dropLast().joined(separator: ", ")
+                featList = "\(head) & \(featuring.last!)"
+            }
+            return "\(albumArtist) feat. \(featList)"
+        }
+
+        // El álbum no está en la lista → canción de invitado, mostrar todo.
+        return displayName(of: artists, fallback: fallback)
+    }
 }
 
 struct NavidromeSong: Identifiable, Decodable, Hashable {
