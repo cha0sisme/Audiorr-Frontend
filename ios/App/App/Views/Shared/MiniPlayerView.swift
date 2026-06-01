@@ -52,7 +52,7 @@ struct MiniPlayerView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 5) {
                         Text(state.title)
-                            .font(.system(size: 13.5, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
 
@@ -61,8 +61,8 @@ struct MiniPlayerView: View {
                         }
                     }
 
-                    Text(state.artist)
-                        .font(.system(size: 12, weight: .regular))
+                    Text(ItemArtist.displayName(of: state.currentArtists, fallback: state.artist))
+                        .font(.system(size: 13, weight: .regular))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 

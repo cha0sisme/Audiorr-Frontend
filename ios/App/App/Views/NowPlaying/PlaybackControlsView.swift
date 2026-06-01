@@ -30,7 +30,7 @@ struct PlaybackControlsView: View {
                 PlayerService.shared.togglePlayPause()
             } label: {
                 Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 46, weight: .regular))
+                    .font(.system(size: 56, weight: .regular))
                     .foregroundStyle(.white)
                     .frame(width: 64, height: 64)
                     .contentShape(Rectangle())

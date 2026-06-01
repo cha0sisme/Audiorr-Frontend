@@ -30,6 +30,9 @@ struct NowPlayingViewerView: View {
     // Accent color extracted from artwork
     @State private var accentColor: Color = .white
     @State private var lastExtractedUrl: String?
+    /// Paleta completa de la cover — alimenta el MeshGradient de fondo
+    /// (estilo Apple Music iOS 26.4, sin blur).
+    @State private var palette: AlbumPalette = .default
 
     // Canvas video (Fase 4)
     @State private var canvasUrl: URL?
@@ -73,19 +76,16 @@ struct NowPlayingViewerView: View {
                 } else if let animatedArtworkUrl {
                     videoBackdrop(url: animatedArtworkUrl)
                 } else {
-                    // Blurred artwork backdrop
-                    if let img = fullArtworkImage {
-                        Image(uiImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .blur(radius: 45)
-                            .saturation(1.4)
-                            .scaleEffect(1.2)
-                            .ignoresSafeArea()
-                    }
+                    // MeshGradient con los colores extraídos de la cover.
+                    // Apple Music iOS 26 no usa blur del cover: construye un
+                    // gradient cromático con los tonos dominantes. La grid
+                    // 3×3 entrelaza primary/secondary/accent para evitar
+                    // bandas planas y dar la sensación "flowing" de Apple.
+                    meshBackground
+                        .ignoresSafeArea()
+                        .animation(.easeInOut(duration: 0.6), value: palette.primary)
 
-                    Color.black.opacity(0.45)
+                    Color.black.opacity(0.30)
                         .ignoresSafeArea()
                 }
 
@@ -167,6 +167,7 @@ struct NowPlayingViewerView: View {
                         .padding(.bottom, geo.safeAreaInsets.bottom)
                 }
                 .padding(.horizontal, 28)
+
             }
             .offset(y: dragOffset)
             .gesture(dismissDragGesture(screenHeight: geo.size.height))
@@ -216,6 +217,13 @@ struct NowPlayingViewerView: View {
             resolveAnimatedArtwork(albumId: state.albumId)
             // Queue is already synced natively by QueueManager
         }
+        // Animaciones para los cambios de layout/modo del viewer.
+        // Una `value:` cada cambio importante — SwiftUI las apila y aplica
+        // según corresponda. Spring con bounce moderado para los reflows
+        // de posición (sensación elástica natural), easeInOut para el
+        // crossfade de backdrop (no es un cambio de posición).
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: hasBackdropVideo)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: showLyrics)
         .animation(.easeInOut(duration: 0.5), value: backdropVideoSignature)
         .sheet(isPresented: $showQueue) {
             QueuePanelView()
@@ -343,6 +351,33 @@ struct NowPlayingViewerView: View {
         }
     }
 
+    // MARK: - Mesh Gradient Backdrop (Apple Music style, sin blur)
+
+    /// `MeshGradient` 3×3 con los colores de la cover. Apple Music iOS 26
+    /// construye un gradient fluido a partir de los tonos dominantes en
+    /// lugar de difuminar la imagen. La grid entrelaza `primary`,
+    /// `secondary` y `accent` para dar profundidad sin bandas planas.
+    private var meshBackground: some View {
+        let primary = Color(palette.primary)
+        let secondary = Color(palette.secondary)
+        let accent = Color(palette.accent)
+
+        return MeshGradient(
+            width: 3,
+            height: 3,
+            points: [
+                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
+                [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
+            ],
+            colors: [
+                primary, accent,    secondary,
+                accent,  primary,   accent,
+                secondary, accent,  primary
+            ]
+        )
+    }
+
     // MARK: - Video Backdrop (Canvas / Animated Artwork)
 
     /// Backdrop común para canvas y animated artwork: vídeo edge-to-edge,
@@ -429,7 +464,7 @@ struct NowPlayingViewerView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(state.title)
-                        .font(.title2.weight(.bold))
+                        .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
@@ -438,8 +473,8 @@ struct NowPlayingViewerView: View {
                     }
                 }
 
-                Text(state.artist)
-                    .font(.title3)
+                Text(ItemArtist.displayName(of: state.currentArtists, fallback: state.artist))
+                    .font(.system(size: 18))
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
 
@@ -457,7 +492,9 @@ struct NowPlayingViewerView: View {
     /// Lyrics mode header: small cover + title/artist + 3-dot menu (Apple Music style)
     private var lyricsHeader: some View {
         HStack(spacing: 12) {
-            // Small album cover
+            // Small album cover. `matchedGeometryEffect` con el mismo id
+            // que el mini cover para que la animación zoom funcione también
+            // cuando el usuario abre el viewer en modo lyrics.
             Group {
                 if let img = fullArtworkImage {
                     Image(uiImage: img)
@@ -479,7 +516,7 @@ struct NowPlayingViewerView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(state.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
 
@@ -488,8 +525,8 @@ struct NowPlayingViewerView: View {
                     }
                 }
 
-                Text(state.artist)
-                    .font(.subheadline)
+                Text(ItemArtist.displayName(of: state.currentArtists, fallback: state.artist))
+                    .font(.system(size: 14))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
             }
@@ -599,13 +636,14 @@ struct NowPlayingViewerView: View {
             guard let (data, _) = try? await AudiorrNetwork.interactive.data(for: request),
                   !Task.isCancelled,
                   let image = UIImage(data: data) else { return }
-            let palette = ColorExtractor.extract(from: image)
-            let color = Color(palette.accent)
+            let extractedPalette = ColorExtractor.extract(from: image)
+            let color = Color(extractedPalette.accent)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 fullArtworkImage = image
                 withAnimation(.easeInOut(duration: 0.4)) {
                     accentColor = color
+                    palette = extractedPalette
                 }
             }
         }
@@ -615,15 +653,17 @@ struct NowPlayingViewerView: View {
 
     private var bottomActionsRow: some View {
         HStack(spacing: 32) {
-            // Lyrics
-            if hasLyrics {
-                bottomActionButton(
-                    icon: showLyrics ? "quote.bubble.fill" : "quote.bubble",
-                    isActive: showLyrics
-                ) {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                        showLyrics.toggle()
-                    }
+            // Lyrics — SIEMPRE visible para no remontar el HStack cuando
+            // termina la resolución de la letra. Disabled hasta que haya
+            // letras (Apple Music: el icono ocupa su sitio desde el primer
+            // frame, solo cambia su estado activable).
+            bottomActionButton(
+                icon: showLyrics ? "quote.bubble.fill" : "quote.bubble",
+                isActive: showLyrics,
+                isEnabled: hasLyrics
+            ) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
+                    showLyrics.toggle()
                 }
             }
 
@@ -642,18 +682,23 @@ struct NowPlayingViewerView: View {
         }
     }
 
-    private func bottomActionButton(icon: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+    private func bottomActionButton(icon: String, isActive: Bool, isEnabled: Bool = true, action: @escaping () -> Void) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             action()
         } label: {
             Image(systemName: icon)
-                .font(.system(size: 20))
-                .foregroundStyle(isActive ? .white : .white.opacity(0.5))
+                .font(.system(size: 22))
+                .foregroundStyle(
+                    isEnabled
+                        ? (isActive ? .white : .white.opacity(0.5))
+                        : .white.opacity(0.25)
+                )
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 
     // MARK: - Canvas Resolution
