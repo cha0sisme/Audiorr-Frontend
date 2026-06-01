@@ -165,8 +165,29 @@ struct ArtistDetailView: View {
     /// Use parent namespace when available, local fallback otherwise.
     private var heroNS: Namespace.ID { heroNamespace ?? localHeroNS }
 
-    private let heroHeight: CGFloat = 400
-    private let avatarSize: CGFloat = 160
+    /// Espacio bajo la foto para los botones de Play/Shuffle: alto del
+    /// botón (48) + padding bottom (20) + margen sobre el bottom de la
+    /// foto (22) = 90pt.
+    private let bottomArea: CGFloat = 90
+
+    /// Ancho visual de la pantalla.
+    private var screenWidth: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.bounds.width ?? 393
+    }
+
+    /// Altura de la foto del artista. Apple Music iOS 26 sube la foto
+    /// hasta el TOP de la pantalla cubriendo el notch (no deja la
+    /// status bar con un color sólido distinto). Por eso el alto lógico
+    /// de la foto es `screenWidth + safeAreaTop`: visualmente es
+    /// ligeramente más alta que ancha, pero permite que la cara
+    /// (situada en el upper 40% del cuadrado de Apple) quede
+    /// principalmente debajo del notch sin recortes severos.
+    private var photoHeight: CGFloat { screenWidth + safeAreaTop }
+
+    /// Altura total del hero = foto + área de botones.
+    private var heroHeight: CGFloat { photoHeight + bottomArea }
 
     init(artist: NavidromeArtist, heroNamespace: Namespace.ID? = nil, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: ArtistDetailViewModel(artist: artist))
@@ -266,19 +287,22 @@ struct ArtistDetailView: View {
 
     private var heroSection: some View {
         ZStack(alignment: .bottom) {
-            // Stretchy header + extensión al notch + heroFade hacia pageBg.
-            // Mismo patrón que AlbumDetailView: frame extendido + overlay del
-            // fade ANTES del offset (viaja con el backdrop) + offset compensatorio.
-            // El ZStack mantiene `frame(height: heroHeight)` para no romper el
-            // flow del scroll content; el offset es puramente visual.
+            // ArtistDetail: la foto vive DENTRO del heroBackground (no en
+            // heroContent como en AlbumDetail). Por eso el truco del
+            // doble offset (frame +safeAreaTop + offset -safeAreaTop) que
+            // usa AlbumDetail NO se aplica aquí: desplazaría la foto y
+            // dejaría el nombre/scrim donde la imagen ya no está. La
+            // extensión al notch se resuelve internamente en `heroBackground`
+            // poniendo `Color.clear.frame(height: safeAreaTop)` al top del
+            // VStack y `Color(palette.primary)` detrás cubriendo el área
+            // del notch.
             heroBackground
-                .frame(height: heroHeight + safeAreaTop)
+                .frame(height: heroHeight)
                 .overlay(alignment: .bottom) {
                     LinearGradient.heroFade(to: pageBg)
                         .frame(height: heroHeight * 0.55)
                         .allowsHitTesting(false)
                 }
-                .offset(y: -safeAreaTop)
                 .scaleEffect(stretchScale, anchor: .bottom)
 
             heroContent
@@ -288,78 +312,74 @@ struct ArtistDetailView: View {
         .frame(height: heroHeight)
     }
 
-    @ViewBuilder
     private var heroBackground: some View {
-        if vm.palette.isSolid {
-            // Flat-cover avatars — match album/playlist page, use the solid primary.
+        // Banner Apple Music iOS 26: foto edge-to-edge SUBIDA AL TOP del
+        // todo (cubre incluso el área del notch). `Color(palette.primary)`
+        // sigue de fondo por si la foto no llena el frame del banner.
+        //
+        // El contenido de la imagen se alinea al TOP del frame con
+        // `aspectRatio(.fill)` + `frame(alignment: .top)`: preserva el
+        // upper 40% del cuadrado de Apple (la cara) cuando el backend
+        // devuelve una imagen con aspect ratio distinto de 1:1.
+        ZStack(alignment: .top) {
             Color(vm.palette.primary)
-                .ignoresSafeArea(edges: .top)
-        } else if let img = vm.avatarImage {
-            ZStack {
-                // Gradient overlay at 140° (top-trailing → bottom-leading)
-                LinearGradient(
-                    colors: [
-                        Color(vm.palette.primary).opacity(0.82),
-                        Color(vm.palette.secondary).opacity(0.76)
-                    ],
-                    startPoint: .topTrailing, endPoint: .bottomLeading
-                )
 
-                // Dark scrim for legible text (same as album/playlist)
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.38),
-                        Color.black.opacity(0.22),
-                        Color.black.opacity(0.06)
-                    ],
-                    startPoint: .top, endPoint: .bottom
-                )
-            }
-            .background {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 55)
-                    .scaleEffect(1.25)
-            }
-            .clipped()
-            .ignoresSafeArea(edges: .top)
-        } else {
-            ZStack {
-                LinearGradient(
-                    colors: [nameColor.opacity(0.9), nameColor.opacity(0.55)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                Color.black.opacity(0.20)
-            }
-            .ignoresSafeArea(edges: .top)
+            artistPhotoView
+                .frame(width: screenWidth, height: photoHeight, alignment: .top)
+                .clipped()
+                .overlay(alignment: .bottom) {
+                    // Único fade hacia `palette.primary` — el color del
+                    // área debajo de la foto. La opacidad final llega a
+                    // 1.0 exacto, por lo que el último pixel de la foto
+                    // ES `palette.primary` sólido, idéntico al área de
+                    // botones. CERO escalón visual independientemente
+                    // del color de la imagen.
+                    LinearGradient(
+                        stops: [
+                            .init(color: Color(vm.palette.primary).opacity(0.00), location: 0.00),
+                            .init(color: Color(vm.palette.primary).opacity(0.40), location: 0.45),
+                            .init(color: Color(vm.palette.primary).opacity(0.85), location: 0.80),
+                            .init(color: Color(vm.palette.primary).opacity(1.00), location: 1.00)
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    .frame(height: 320)
+                    .allowsHitTesting(false)
+                }
         }
     }
 
     private var heroContent: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 90)
-
-            avatarView
-                .shadow(color: .black.opacity(0.45), radius: 20, y: 8)
-
-            Spacer(minLength: 16)
-
-            VStack(spacing: 4) {
-                Text(vm.artist.name)
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(isLight ? Color.black : .white)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.75)
+        // Dos capas superpuestas:
+        //  1. Nombre del artista anclado al BOTTOM-IZQUIERDA del cuadrado
+        //     de la foto, en blanco sobre el scrim oscuro (Apple Music style).
+        //  2. Botones de Play/Shuffle al BOTTOM del hero entero.
+        ZStack {
+            VStack(spacing: 0) {
+                Spacer()
+                HStack(spacing: 0) {
+                    Text(vm.artist.name)
+                        .font(.system(size: 32, weight: .heavy))
+                        .foregroundStyle(isLight ? Color.black : .white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.70)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 22)
+                // Reserva el espacio del bottomArea para que el nombre
+                // quede anclado justo encima del bottom de la foto.
+                Color.clear.frame(height: bottomArea)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 18)
 
-            // Más aire respecto a la lista de debajo (estilo Apple Music iOS 26.4).
-            playButtons
-                .padding(.bottom, 44)
+            VStack(spacing: 0) {
+                Spacer()
+                playButtons
+                    .padding(.bottom, 20)
+            }
         }
+        .frame(height: heroHeight)
     }
 
     /// Reproducir (cápsula principal) + Shuffle (círculo) en HStack. Mismo
@@ -374,7 +394,7 @@ struct ArtistDetailView: View {
         let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: false))
         let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: false))
 
-        return HStack(spacing: 14) {
+        return HStack(spacing: 10) {
             Button {
                 Task { await vm.loadAndPlay() }
             } label: {
@@ -408,23 +428,29 @@ struct ArtistDetailView: View {
         .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
     }
 
+    /// Foto del artista en formato cuadrado 1:1, edge-to-edge horizontal,
+    /// estilo Apple Music iOS 26. `aspectRatio(.fill)` permite que la
+    /// imagen llene el frame del padre independientemente de su aspect
+    /// nativo, y el `alignment: .top` que el caller aplica al frame
+    /// preserva el upper 40% (donde Apple obliga al artista a colocar la
+    /// cara). Si no hay imagen, fallback con gradient determinístico
+    /// (basado en hash del nombre) y la inicial centrada.
     @ViewBuilder
-    private var avatarView: some View {
+    private var artistPhotoView: some View {
         if let img = vm.avatarImage {
             Image(uiImage: img)
                 .resizable()
-                .scaledToFill()
-                .frame(width: avatarSize, height: avatarSize)
-                .clipShape(Circle())
+                .aspectRatio(contentMode: .fill)
         } else {
-            Circle()
-                .fill(nameColor.opacity(0.35))
-                .frame(width: avatarSize, height: avatarSize)
-                .overlay(
-                    Text(String(vm.artist.name.prefix(1)).uppercased())
-                        .font(.system(size: 64, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+            ZStack {
+                LinearGradient(
+                    colors: [nameColor.opacity(0.95), nameColor.opacity(0.55)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
                 )
+                Text(String(vm.artist.name.prefix(1)).uppercased())
+                    .font(.system(size: 120, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
         }
     }
 
@@ -655,7 +681,8 @@ struct ArtistDetailView: View {
                 ExpandableBio(
                     text: cleanBiography(bio),
                     pageBg: pageBg,
-                    textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
+                    textColor: isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75),
+                    sheetTitle: vm.artist.name
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, 18)
