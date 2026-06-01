@@ -21,6 +21,7 @@
 		3400EE062FA7000000000005 /* PlaybackControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE052FA7000000000005 /* PlaybackControlsView.swift */; };
 		3400EE082FA7000000000007 /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE072FA7000000000007 /* CanvasView.swift */; };
 		3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE092FA7000000000009 /* CanvasService.swift */; };
+		3400EE2A2FA7000000000029 /* AlbumArtworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE292FA7000000000029 /* AlbumArtworkService.swift */; };
 		3400EE0C2FA700000000000B /* LyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0B2FA700000000000B /* LyricsView.swift */; };
 		3400EE0E2FA700000000000D /* LyricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400EE0D2FA700000000000D /* LyricsService.swift */; };
 		34AABB022FAC000000000002 /* AudiorrNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AABB012FAC000000000001 /* AudiorrNetwork.swift */; };
@@ -95,6 +96,7 @@
 		3400EE052FA7000000000005 /* PlaybackControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackControlsView.swift; sourceTree = "<group>"; };
 		3400EE072FA7000000000007 /* CanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
 		3400EE092FA7000000000009 /* CanvasService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasService.swift; sourceTree = "<group>"; };
+		3400EE292FA7000000000029 /* AlbumArtworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumArtworkService.swift; sourceTree = "<group>"; };
 		3400EE0B2FA700000000000B /* LyricsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsView.swift; sourceTree = "<group>"; };
 		3400EE0D2FA700000000000D /* LyricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricsService.swift; sourceTree = "<group>"; };
 		34AABB012FAC000000000001 /* AudiorrNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudiorrNetwork.swift; sourceTree = "<group>"; };
@@ -230,6 +232,7 @@
 				342286D02F920A0000785736 /* CredentialsStore.swift */,
 				3400DD002FA6000000000001 /* NowPlayingState.swift */,
 				3400EE092FA7000000000009 /* CanvasService.swift */,
+				3400EE292FA7000000000029 /* AlbumArtworkService.swift */,
 				3400EE0D2FA700000000000D /* LyricsService.swift */,
 				34AABB012FAC000000000001 /* AudiorrNetwork.swift */,
 				3400FF002FA8000000000001 /* BackendService.swift */,
@@ -501,6 +504,7 @@
 				3400EE062FA7000000000005 /* PlaybackControlsView.swift in Sources */,
 				3400EE082FA7000000000007 /* CanvasView.swift in Sources */,
 				3400EE0A2FA7000000000009 /* CanvasService.swift in Sources */,
+				3400EE2A2FA7000000000029 /* AlbumArtworkService.swift in Sources */,
 				3400EE0C2FA700000000000B /* LyricsView.swift in Sources */,
 				3400EE0E2FA700000000000D /* LyricsService.swift in Sources */,
 				34AABB022FAC000000000002 /* AudiorrNetwork.swift in Sources */,
