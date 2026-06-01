@@ -45,10 +45,30 @@ struct ContentView: View {
             }
             .tabBarMinimizeBehavior(.onScrollDown)
 
-            // Now Playing Viewer — overlay (no .fullScreenCover, control total de la transición)
+            // Now Playing Viewer — overlay con transición de scale+opacity
+            // anclada a la posición del cover del miniplayer. El viewer
+            // "explota" desde el cover del mini al abrir y colapsa de vuelta
+            // al cerrar — sensación zoom estilo Apple Music sin las
+            // complicaciones de `matchedGeometryEffect` cruzando jerarquías
+            // de SwiftUI (TabView accessory ↔ overlay).
+            //
+            // `anchor: (0.12, 0.95)` aproxima la posición visual del artwork
+            // del miniplayer (esquina inferior izquierda del tabbar).
+            // `scale: 0.10` da una expansión visible pero sin distorsión.
+            // Asymmetric: entrada con bounce sutil, salida más rápida.
             if nowPlaying.viewerIsOpen {
+                // Transiciones NATIVAS de SwiftUI: `move(edge: .bottom)` +
+                // `opacity`. SwiftUI las maneja internamente sin pases
+                // extra de render al final — no hay "snap" perceptible en
+                // ningún extremo de la animación. La curva `.spring` con
+                // damping crítica (bounce=0) es la que iOS 26 usa para
+                // modal-like sheets.
                 NowPlayingViewerView()
-                    .transition(.move(edge: .bottom))
+                    .transition(
+                        .move(edge: .bottom)
+                            .combined(with: .opacity)
+                            .animation(.spring(duration: 0.45, bounce: 0))
+                    )
                     .zIndex(10)
             }
 
@@ -98,7 +118,10 @@ struct ContentView: View {
         .task { BackendState.shared.check() }
         .preferredColorScheme(theme.colorScheme)
         .animation(.easeInOut(duration: 0.3), value: network.isConnected)
-        .animation(.spring(response: 0.4, dampingFraction: 0.88), value: nowPlaying.viewerIsOpen)
+        // Sin `.animation(value: viewerIsOpen)` — la transición del viewer
+        // gestiona su animación internamente. Una segunda animación aquí
+        // creaba un efecto de "dos fases" porque ambas se aplicaban a la
+        // vez al toggle de `viewerIsOpen`.
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: navigationAlbum != nil)
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: navigationArtist != nil)
         .onChange(of: nowPlaying.viewerIsOpen) { _, isOpen in
@@ -145,5 +168,39 @@ struct ContentView: View {
             Task { @MainActor in PlayerService.shared.play(song: song) }
         }
         return view
+    }
+}
+
+// MARK: - Viewer expand transition
+
+/// Modifier animable para la transición de entrada/salida del
+/// NowPlayingViewer. Imita la sensación de "sheet from bottom" que usa
+/// Apple Music iOS 26: slide vertical sutil + scale mínimo + fade,
+/// todo animado como UN ÚNICO movimiento continuo.
+///
+/// Decisiones clave:
+///  - `scale` solo entre 0.94 y 1.0 (muy sutil). Un scale dramático
+///    crea "dos fases" perceptuales: un pop inicial + el final del
+///    movimiento.
+///  - `offset` slide-up suave de 80pt → 0. Más impactante visualmente
+///    que el scale, da la sensación de "subir desde el miniplayer".
+///  - `opacity` 0 → 1 ligero para fade-in.
+///  - Sin `clipShape`: rompe `ignoresSafeArea` y bloquea el fullscreen.
+private struct ViewerExpandTransition: ViewModifier, Animatable {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let scale = 0.94 + 0.06 * progress
+        let offsetY = (1 - progress) * 80
+        let opacity = progress
+        return content
+            .scaleEffect(scale, anchor: .center)
+            .offset(y: offsetY)
+            .opacity(opacity)
     }
 }

@@ -95,70 +95,50 @@ struct ExpandableBio: View {
     let text: String
     let pageBg: Color
     var textColor: Color = .secondary
-    @State private var expanded: Bool = false
+    /// Título del sheet que se abre al pulsar "MÁS". Apple Music usa el
+    /// nombre del álbum o del artista; el caller lo pasa explícitamente.
+    var sheetTitle: String = ""
+
+    @State private var showSheet: Bool = false
 
     var body: some View {
-        if expanded {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(text)
-                    .font(.system(size: 15))
-                    .foregroundStyle(textColor)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    withAnimation(Anim.content) { expanded = false }
-                } label: {
-                    Text("OCULTAR")
+        Text(text)
+            .font(.system(size: 15))
+            .foregroundStyle(textColor)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+            .overlay(alignment: .bottomTrailing) {
+                // Trailing inline "MÁS" con fade horizontal amplio (~110pt)
+                // que se desvanece suavemente sobre las últimas palabras de
+                // la segunda línea. 7 stops smoothstep (3t²−2t³) para que el
+                // degradado opacity 0 → pageBg sea perceptualmente lineal
+                // sin bandas, mismo patrón que el hero-fade.
+                HStack(spacing: 0) {
+                    LinearGradient(
+                        stops: Self.maslFadeStops(pageBg: pageBg),
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: 110, height: 22)
+                    Text("MÁS")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
+                        .padding(.leading, 2)
+                        .frame(height: 22, alignment: .bottom)
+                        .background(pageBg)
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
             }
-        } else {
-            Text(text)
-                .font(.system(size: 15))
-                .foregroundStyle(textColor)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .multilineTextAlignment(.leading)
-                .overlay(alignment: .bottomTrailing) {
-                    // Trailing inline "MÁS" con fade horizontal amplio (~110pt)
-                    // que se desvanece suavemente sobre las últimas palabras de
-                    // la segunda línea. El fade anterior de 28pt creaba un seam
-                    // visible: las letras a la izquierda del fade quedaban a
-                    // plena opacidad y contrastaban con la palabra "MÁS" como
-                    // un parche encima. El stack actual usa 7 stops smoothstep
-                    // (3t²−2t³) para que el degradado opacity 0 → pageBg sea
-                    // perceptualmente lineal sin bandas, mismo patrón que el
-                    // hero-fade canónico de `LinearGradient.heroFade(to:)`.
-                    // Frame height 22pt > line-height natural del texto 15pt
-                    // (~18pt). Sin esto, el HStack toma solo la altura de la
-                    // fuente del MÁS y los descenders/ascenders del texto
-                    // truncado detrás asoman fuera del background → seam
-                    // visible arriba/abajo. El Text "MÁS" dentro mantiene
-                    // alignment .bottom para que su baseline coincida con
-                    // la baseline del texto padre (la 2ª línea).
-                    HStack(spacing: 0) {
-                        LinearGradient(
-                            stops: Self.maslFadeStops(pageBg: pageBg),
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        .frame(width: 110, height: 22)
-                        Text("MÁS")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.leading, 2)
-                            .frame(height: 22, alignment: .bottom)
-                            .background(pageBg)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    withAnimation(Anim.content) { expanded = true }
-                }
-        }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showSheet = true
+            }
+            .sheet(isPresented: $showSheet) {
+                BioSheetView(title: sheetTitle, text: text)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(20)
+            }
     }
 
     /// Stops smoothstep `3t²−2t³` para el fade horizontal del MÁS. 7 stops dan
@@ -169,6 +149,64 @@ struct ExpandableBio: View {
         return ts.map { t in
             let smooth = t * t * (3 - 2 * t)
             return Gradient.Stop(color: pageBg.opacity(smooth), location: t)
+        }
+    }
+}
+
+/// Sheet de bio a pantalla completa. Apple Music abre la biografía del
+/// álbum / artista en un sheet propio en vez de expandir inline.
+/// Título centrado con el nombre del álbum o del artista, botón de
+/// cerrar arriba a la derecha, cuerpo de texto scrollable.
+private struct BioSheetView: View {
+    let title: String
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                if text.isEmpty {
+                    // Fallback cuando la bio resulta vacía tras limpiar HTML.
+                    VStack(spacing: 8) {
+                        Image(systemName: "text.alignleft")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.tertiary)
+                        Text("Sin información disponible")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 60)
+                } else {
+                    Text(text)
+                        .font(.system(size: 17))
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 40)
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                // Botón cerrar estilo iOS 26 nativo: `xmark.circle.fill` con
+                // rendering hierarchical (dos tonos automáticos del color de
+                // foregroundStyle). Es el patrón que Apple usa en sus sheets
+                // del sistema (Photos, Music, Mail).
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel(L.close)
+                }
+            }
         }
     }
 }
