@@ -146,6 +146,118 @@ struct AlbumPalette {
         buttonFillColor.getRed(&r, green: &g, blue: &b, alpha: nil)
         return (r * 0.299 + g * 0.587 + b * 0.114) > 0.706  // > 180/255
     }
+
+    // MARK: Apple Music-style buttons (iOS 26.4)
+    //
+    // Apple Music NO usa "el píxel más vibrante" como acento. Usa un color
+    // **en la misma familia que el primary** (mismo HUE de la cover),
+    // saturación boosteada y luminancia opuesta al fondo donde se renderiza.
+    // De ese modo el botón siempre queda coherente con la cover y legible.
+    //
+    // Play = pill cuyo background contrasta con el fondo del hero
+    //        (blanco sobre hero oscuro/motion, negro sobre hero claro)
+    //        con texto en harmonic accent.
+    // Shuffle = círculo de harmonic accent con icono blanco/negro según
+    //           la luminancia del propio harmonic accent.
+
+    /// Luminancia perceptual de un UIColor (Rec. 709).
+    private func luminance(of color: UIColor) -> CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: nil)
+        return r * 0.299 + g * 0.587 + b * 0.114
+    }
+
+    /// Acento armónico — algoritmo en 3 tiers, alineado con el approach
+    /// conservador de Apple Music y la Palette API de Android.
+    ///
+    /// Principios:
+    ///  - La "identidad" cromática de un álbum es su color dominante con
+    ///    HUE robusto y brightness en RANGO NATURAL [0.20, 0.85]. Brightness
+    ///    fuera de este rango indica "casi blanco/negro" — un tinte que el
+    ///    averaging del extractor puede haber amplificado artificialmente
+    ///    (ej. cover negra con halo rosa de aliasing) y NO debe usarse.
+    ///  - Los detalles minoritarios (logo rosa en cover blanca, texto rojo
+    ///    en cover negra) NO son la identidad del álbum y se descartan.
+    ///  - Cuando el primary no es fiable, se cae a un monocromático sutil
+    ///    (gris #333 o #DBDBDB) — exactamente como hace Apple en Abbey Road
+    ///    o White Album.
+    ///
+    ///  Tier 1: primary con saturación ≥ 0.20 y brightness ∈ [0.20, 0.85].
+    ///  Tier 2: accent con saturación ≥ 0.55 y brightness ∈ [0.25, 0.85],
+    ///          SOLO si el primary no es extremo y no es gris.
+    ///  Tier 3: monocromático, gris contrastante con el button bg.
+    ///
+    /// El parámetro `targetBrightness` permite que Play (texto) use uno
+    /// más oscuro/profundo (0.38–0.74) y Shuffle (background) use uno
+    /// más medio (0.55) — más vivo, sin parecer vino tinto saturado.
+    private func harmonicAccent(buttonBgIsLight: Bool, targetBrightness: CGFloat) -> UIColor {
+        let minSaturation: CGFloat = 0.55
+
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+
+        // Tier 1 — primary saturado con brightness natural.
+        primary.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        if s >= 0.20 && b >= 0.20 && b <= 0.85 {
+            return UIColor(hue: h, saturation: max(s, minSaturation), brightness: targetBrightness, alpha: 1)
+        }
+
+        // Detectar si el primary es "no informativo": brightness extrema
+        // (blanco/negro) o saturación muy baja (gris). En ambos casos NO
+        // se debe rescatar con accent — el accent representaría un detalle,
+        // no la identidad del álbum.
+        let primaryIsExtreme = b < 0.20 || b > 0.85
+        let primaryIsGray = s < 0.10
+
+        // Tier 2 — accent muy saturado SOLO si primary aporta algo de color
+        // (cuasi-neutro intermedio, ni extremo ni gris puro).
+        if !primaryIsExtreme && !primaryIsGray {
+            accent.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            if s >= 0.55 && b >= 0.25 && b <= 0.85 {
+                return UIColor(hue: h, saturation: max(s, minSaturation), brightness: targetBrightness, alpha: 1)
+            }
+        }
+
+        // Tier 3 — monocromático. Sin tint. Apple-style para covers neutras.
+        return buttonBgIsLight
+            ? UIColor(white: 0.20, alpha: 1)
+            : UIColor(white: 0.86, alpha: 1)
+    }
+
+    /// Background del botón Play. Contrasta con el fondo del hero. Con motion
+    /// el hero se trata como oscuro (scrim oscuro debajo del vídeo destaca
+    /// siempre el blanco).
+    func playButtonBackground(motionPresent: Bool) -> UIColor {
+        let heroIsLight = !motionPresent && isPrimaryLight
+        return heroIsLight ? .black : .white
+    }
+
+    /// Foreground del botón Play. Brightness profunda (0.38 sobre blanco,
+    /// 0.74 sobre negro) para garantizar contraste WCAG AA (4.5:1) con el
+    /// button bg, sin caer en colores "vino tinto" demasiado oscuros.
+    func playButtonForeground(motionPresent: Bool) -> UIColor {
+        let bg = playButtonBackground(motionPresent: motionPresent)
+        let bgIsLight = luminance(of: bg) > 0.5
+        let targetBrightness: CGFloat = bgIsLight ? 0.38 : 0.74
+        return harmonicAccent(buttonBgIsLight: bgIsLight, targetBrightness: targetBrightness)
+    }
+
+    /// Background del botón Shuffle. Brightness MEDIA (0.55) para que el
+    /// shuffle se vea vivo y diferenciado del Play (cuyo bg es blanco/negro
+    /// puro), sin parecer un "vino tinto" oscuro saturado. El threshold de
+    /// luminancia del fg (0.45) permite que texto NEGRO se use sobre HUEs
+    /// medios-claros, lo que da una estética más natural.
+    func shuffleButtonBackground(motionPresent: Bool) -> UIColor {
+        let heroIsLight = !motionPresent && isPrimaryLight
+        return harmonicAccent(buttonBgIsLight: heroIsLight, targetBrightness: 0.55)
+    }
+
+    /// Foreground del botón Shuffle. Negro si el bg es medio-claro (lum
+    /// > 0.45), blanco si es oscuro. Threshold más permisivo que 0.55
+    /// para favorecer texto negro sobre HUEs medios (más Apple-style).
+    func shuffleButtonForeground(motionPresent: Bool) -> UIColor {
+        let bg = shuffleButtonBackground(motionPresent: motionPresent)
+        return luminance(of: bg) > 0.45 ? .black : .white
+    }
 }
 
 // MARK: - Extractor
