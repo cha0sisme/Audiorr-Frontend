@@ -69,6 +69,9 @@ final class PlaylistDetailViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                // También la versión #hires del hero (clave separada), si no
+                // el detalle seguiría mostrando la portada antigua tras cambiar.
+                PlaylistCoverCache.shared.invalidate(playlistId: myId + "#hires")
                 self.coverImage = nil
                 self.paletteReady = false
                 Task { await self.loadCover() }
@@ -184,11 +187,18 @@ final class PlaylistDetailViewModel: ObservableObject {
         var urls: [URL] = []
         if BackendState.shared.isAvailable,
            let u = api.playlistBackendCoverURL(playlistId: initialPlaylist.id, contentHash: hash) { urls.append(u) }
-        // size=1000 para el cover del hero (~236pt @3x ≈ 708px).
-        // El prefetch de miniaturas de listado sigue en 600 (no se toca).
-        if let u = api.coverURL(id: initialPlaylist.coverArt, size: 1000) { urls.append(u) }
+        // size=1200 para el hero del detalle, nítido @3x (igual calidad que
+        // AlbumDetail). El prefetch de miniaturas de listado sigue en 600.
+        if let u = api.coverURL(id: initialPlaylist.coverArt, size: 1200) { urls.append(u) }
+        // Clave de caché SEPARADA (#hires): el cache de la card/grid guarda la
+        // cover a baja resolución (300/600px) bajo el id pelado; si el detalle
+        // la reutilizara, el hero saldría blando (loadCover devuelve lo cacheado
+        // sin mirar maxPixels). Con clave propia el detalle descarga su alta
+        // resolución del MISMO origen (coincide con la card), sin colisionar.
+        // El preview instantáneo de la transición sigue usando el cache de la
+        // card (ver init).
         return await cache.loadCover(
-            playlistId: initialPlaylist.id, urls: urls, maxPixels: 1000
+            playlistId: initialPlaylist.id + "#hires", urls: urls, maxPixels: 1200
         )
     }
 }
