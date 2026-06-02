@@ -92,9 +92,21 @@ struct SessionsView: View {
                 sessionsList
             }
         }
-        .navigationTitle("Dispositivos")
+        .navigationTitle("Sesiones")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await vm.load() }
+        .task {
+            // Refresco periódico mientras la pantalla está abierta: el estado
+            // "activa" (vista hace <5s) depende del `lastSeen` del servidor, así
+            // que repescamos cada pocos segundos para que la presencia en vivo
+            // sea fiable (como los indicadores de sesión "pro"). El bucle se
+            // cancela solo al salir de la vista.
+            await vm.load()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                if Task.isCancelled { break }
+                await vm.load()
+            }
+        }
         .refreshable { await vm.load() }
     }
 
@@ -188,13 +200,28 @@ struct SessionsView: View {
 
             Spacer()
 
-            if isCurrent {
-                Text("Activa")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
+            if isActive(session) {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 6, height: 6)
+                    Text("Activa")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                }
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Una sesión está "activa" si es la de este dispositivo o si el servidor
+    /// la vio hace menos de 5 segundos (presencia en vivo, estilo apps pro).
+    /// Como `lastSeen` lo refresca el backend, la pantalla repesca cada pocos
+    /// segundos para que el indicador siga la realidad.
+    private func isActive(_ session: SessionInfo) -> Bool {
+        if session.current { return true }
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        return (nowMs - session.lastSeen) < 5000
     }
 
     // MARK: - Formatters
@@ -233,7 +260,7 @@ struct SessionsView: View {
     @ViewBuilder
     private func lastSeenLabel(_ session: SessionInfo, isCurrent: Bool) -> some View {
         let date = Date(timeIntervalSince1970: session.lastSeen / 1000)
-        if isCurrent {
+        if isActive(session) {
             Text("En uso ahora")
         } else {
             Text("Vista \(date, format: .relative(presentation: .named))")

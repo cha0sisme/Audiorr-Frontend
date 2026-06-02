@@ -475,16 +475,16 @@ struct SettingsView: View {
                 }
             }  // end if BackendState.shared.isAvailable (Diagnostics section)
 
-            // ── Dispositivos ──
+            // ── Sesiones ──
             // Gestión de sesiones Bearer activas. Solo con backend Audiorr:
             // un usuario Navidrome puro no tiene sesiones que gestionar.
             if BackendState.shared.isAvailable {
-                settingsSection(header: "Dispositivos") {
+                settingsSection(header: "Sesiones") {
                     NavigationLink {
                         SessionsView()
                     } label: {
                         settingsRow {
-                            Label("Dispositivos", systemImage: "iphone.gen3")
+                            Label("Sesiones", systemImage: "iphone.gen3")
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
