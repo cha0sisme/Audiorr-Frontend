@@ -42,6 +42,7 @@
 		3400FF372FA8000000000037 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF362FA8000000000036 /* DownloadManager.swift */; };
 		3400FF392FA8000000000039 /* DownloadButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF382FA8000000000038 /* DownloadButton.swift */; };
 		3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF3A2FA800000000003A /* StorageManagementView.swift */; };
+		3400FF5B2FA800000000005B /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF5A2FA800000000005A /* SessionsView.swift */; };
 		3400FF3D2FA800000000003D /* OfflineContentProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF3C2FA800000000003C /* OfflineContentProvider.swift */; };
 		3400FF412FA8000000000041 /* BackendState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF402FA8000000000040 /* BackendState.swift */; };
 		3400FFA12FA80000000000A1 /* AuthTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FFA02FA80000000000A0 /* AuthTokenStore.swift */; };
@@ -117,6 +118,7 @@
 		3400FF362FA8000000000036 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		3400FF382FA8000000000038 /* DownloadButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadButton.swift; sourceTree = "<group>"; };
 		3400FF3A2FA800000000003A /* StorageManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageManagementView.swift; sourceTree = "<group>"; };
+		3400FF5A2FA800000000005A /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		3400FF3C2FA800000000003C /* OfflineContentProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineContentProvider.swift; sourceTree = "<group>"; };
 		3400FF402FA8000000000040 /* BackendState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendState.swift; sourceTree = "<group>"; };
 		3400FFA02FA80000000000A0 /* AuthTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthTokenStore.swift; sourceTree = "<group>"; };
@@ -315,6 +317,7 @@
 				342286D22F920B0000785736 /* LoginView.swift */,
 				3400BB002FA2000000000001 /* SettingsView.swift */,
 				3400FF3A2FA800000000003A /* StorageManagementView.swift */,
+				3400FF5A2FA800000000005A /* SessionsView.swift */,
 				3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */,
 				3400FF462FA8000000000046 /* TransitionOpinionViews.swift */,
 			);
@@ -492,6 +495,7 @@
 				3400FFA12FA80000000000A1 /* AuthTokenStore.swift in Sources */,
 				3400FF372FA8000000000037 /* DownloadManager.swift in Sources */,
 				3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */,
+				3400FF5B2FA800000000005B /* SessionsView.swift in Sources */,
 				3400FF3D2FA800000000003D /* OfflineContentProvider.swift in Sources */,
 				3400FF392FA8000000000039 /* DownloadButton.swift in Sources */,
 				3400FF332FA8000000000033 /* OfflineStorageManager.swift in Sources */,

@@ -356,6 +356,47 @@ final class BackendService {
         _ = try? await session.data(for: request)
     }
 
+    // MARK: - Active Sessions
+
+    /// Una sesión Bearer activa del propio usuario, tal como la devuelve el
+    /// backend en `GET /api/auth/sessions`. El `id` es un hash público estable
+    /// (NO el token) — sirve para el DELETE. `current` lo decide el backend
+    /// leyendo el Bearer de la request; el cliente NO debe calcularlo.
+    struct SessionView: Decodable, Identifiable {
+        let id: String          // hash público estable (NO es el token) → úsalo para el DELETE
+        let current: Bool       // true = sesión de ESTE dispositivo
+        let platform: String?   // "web" | "ios" | "android" | null
+        let country: String?    // ISO alpha-2 | null → "Desconocido" (solo se puebla en prod tras Cloudflare)
+        let ip: String?
+        let userAgent: String?
+        let createdAt: Double    // epoch ms
+        let lastSeen: Double     // epoch ms
+        let expiresAt: Double    // epoch ms
+    }
+
+    /// Lista las sesiones activas del propio usuario. Bajo Bearer (lo añade
+    /// `performRequest`); NO se manda `?user=` — ese parámetro es solo para el
+    /// panel web admin, iOS solo gestiona lo suyo.
+    func getSessions() async throws -> [SessionView] {
+        let data = try await get(path: "/api/auth/sessions")
+        struct Response: Decodable { let sessions: [SessionView] }
+        return try jsonDecoder.decode(Response.self, from: data).sessions
+    }
+
+    /// Cierra una sesión concreta por su `id` público. El backend responde 204
+    /// de forma idempotente (cerrar una sesión ya cerrada no es un error).
+    func closeSession(id: String) async throws {
+        _ = try await delete(path: "/api/auth/sessions/\(id.urlEncoded)")
+    }
+
+    /// Cierra todas las sesiones del usuario salvo la actual ("cerrar el
+    /// resto"). Devuelve cuántas se cerraron (`{ closed: n }`).
+    func closeOtherSessions() async throws -> Int {
+        let data = try await delete(path: "/api/auth/sessions")
+        let dict = try jsonDict(from: data)
+        return dict["closed"] as? Int ?? 0
+    }
+
     // MARK: - Global Settings
 
     func getGlobalSetting(key: String) async -> Any? {
