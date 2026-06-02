@@ -107,7 +107,10 @@ struct AlbumCardView: View {
             coverImage = cached
             return
         }
-        guard let url = NavidromeService.shared.coverURL(id: album.coverArt, size: 300) else { return }
+        // size=400 (antes 300): un poco más de nitidez en la card sin inflar
+        // el grid. Sube además el "suelo" de calidad del preview instantáneo
+        // que reutiliza el detalle desde este mismo cache.
+        guard let url = NavidromeService.shared.coverURL(id: album.coverArt, size: 400) else { return }
 
         // Retry up to 2 times with backoff
         for attempt in 0..<3 {

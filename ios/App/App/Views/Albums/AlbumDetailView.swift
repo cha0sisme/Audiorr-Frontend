@@ -90,14 +90,21 @@ final class AlbumDetailViewModel: ObservableObject {
     }
 
     private func fetchCover() async -> UIImage? {
-        if let cached = AlbumCoverCache.shared.image(for: initialAlbum.coverArt) {
+        // Cache propio del detalle (`#hires`): el cache de la card guarda la
+        // cover a baja resolución (300/400px) bajo el id pelado; si el detalle
+        // lo reutilizara —flujo normal grid→tap— se vería blando. Con una clave
+        // separada el detalle pide su propia resolución sin colisionar. El
+        // preview instantáneo durante la transición sí usa el cache de la card
+        // (ver init), y aquí se sustituye por la versión nítida al cargar.
+        let hiresKey = initialAlbum.coverArt.map { $0 + "#hires" }
+        if let cached = AlbumCoverCache.shared.image(for: hiresKey) {
             return cached
         }
-        // size=1000 para acomodar el cover header escalado (~236pt @3x ≈ 708px).
-        guard let url = api.coverURL(id: initialAlbum.coverArt, size: 1000) else { return nil }
+        // size=1200 para el cover de detalle grande (~267–300pt) nítido @3x.
+        guard let url = api.coverURL(id: initialAlbum.coverArt, size: 1200) else { return nil }
         guard let (data, _) = try? await AudiorrNetwork.background.data(from: url) else { return nil }
         guard let img = UIImage(data: data) else { return nil }
-        AlbumCoverCache.shared.setImage(img, for: initialAlbum.coverArt)
+        AlbumCoverCache.shared.setImage(img, for: hiresKey)
         return img
     }
 }
