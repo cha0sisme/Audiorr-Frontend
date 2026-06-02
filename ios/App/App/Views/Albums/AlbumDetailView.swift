@@ -35,6 +35,16 @@ final class AlbumDetailViewModel: ObservableObject {
             if let id = album.coverArt, let p = PaletteCache.shared.palette(for: id) {
                 self.palette = p
                 self.paletteReady = true
+            } else {
+                // Cover en caché pero paleta no: extraer YA (síncrono, ~200px,
+                // unos ms) para conocer `isSolid` desde el PRIMER frame. Sin
+                // esto, el detalle arranca con la paleta por defecto (no-solid →
+                // layout normal) y al resolver la extracción salta al layout
+                // isSolid (el "expandirse" al entrar desde la card).
+                let extracted = ColorExtractor.extract(from: cached)
+                self.palette = extracted
+                self.paletteReady = true
+                if let id = album.coverArt { PaletteCache.shared.set(extracted, for: id) }
             }
         }
     }
