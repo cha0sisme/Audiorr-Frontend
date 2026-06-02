@@ -111,12 +111,6 @@ final class AlbumDetailViewModel: ObservableObject {
 
 // MARK: - Main View
 
-/// Propaga la altura medida del bloque de título del hero hacia AlbumDetailView.
-private struct TitleBlockHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 52
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
@@ -125,17 +119,13 @@ struct AlbumDetailView: View {
     // after the user navigates back, causing the next tap on a different
     // card to fire this view's playPlaylist action.
     @State private var isViewVisible = false
-    /// Altura medida del bloque de título+metadata (para que heroHeight la
-    /// incluya y los huecos del hero no dependan del nº de líneas del título).
-    @State private var titleBlockHeight: CGFloat = 52
     var onDismiss: (() -> Void)?
 
-    /// Altura del hero = inset + cover + título (medido) + huecos fijos. Incluir
-    /// la altura REAL del título (`titleBlockHeight`) hace que el hueco entre los
-    /// botones y la lista sea constante sea cual sea el nº de líneas del título,
-    /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra. El 196
-    /// = inset extra (88) + 3 huecos de 20 + alto del bloque de botones (~48).
-    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
+    /// Altura del hero = ancho de pantalla. El cover se muestra a pantalla
+    /// completa (edge-to-edge) como un cuadrado que llena el header, estilo
+    /// Apple Music iOS 26.4. Estable (no depende de datos async) → la
+    /// geometría inicial del ScrollView no se rompe.
+    private var heroHeight: CGFloat { screenWidth }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -147,7 +137,6 @@ struct AlbumDetailView: View {
     /// 0 at top → 1 when hero fully scrolled past
     private var scrollProgress: CGFloat { min(max(scrollY / heroHeight, 0), 1) }
     /// Hero content opacity
-    private var heroOpacity: CGFloat { 1 - min(scrollProgress * 1.2, 0.92) }
     /// Sticky header opacity — fades in after 55% scroll
     private var stickyOpacity: CGFloat { min(max((scrollProgress - 0.55) / 0.25, 0), 1) }
     /// Stretchy header scale: proporcional al pull-down. Con anchor .bottom
@@ -163,15 +152,12 @@ struct AlbumDetailView: View {
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
 
-    /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
-    /// estilo Apple Music: ~72% del width con cap a 320pt para no inflar
-    /// en iPad. En iPhone 15/16 ≈ 283pt, en Pro Max ≈ 310pt, en SE ≈ 270pt.
+    /// Ancho de pantalla — usado para el cover a pantalla completa (edge-to-edge).
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
-    private var coverSize: CGFloat {
-        let width: CGFloat = UIApplication.shared.connectedScenes
+    private var screenWidth: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
-        return min(width * 0.72, 320)
     }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -197,6 +183,7 @@ struct AlbumDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
+                    titleButtonsSection
                     albumNotesSection
                     songListSection
                     Spacer(minLength: 120) // mini-player clearance
@@ -253,224 +240,78 @@ struct AlbumDetailView: View {
     // MARK: - Hero
 
     private var heroSection: some View {
-        ZStack(alignment: .bottom) {
-            // Stretchy header + extensión al notch + heroFade hacia pageBg.
-            //
-            // Mecánica:
-            //  - `frame(height: heroHeight + safeAreaTop)` da al backdrop
-            //    el espacio para cubrir también el área del notch.
-            //  - `.overlay(alignment: .bottom)` con heroFade dimensionado a
-            //    `heroHeight * 0.55` se aplica ANTES del offset, así que el
-            //    fade queda alineado al bottom del frame extendido y viaja
-            //    con el view cuando se aplica el offset (se mantiene en su
-            //    sitio relativo al bottom visual del hero, donde están los
-            //    botones — exactamente como antes del notch fix).
-            //  - `.offset(y: -safeAreaTop)` desplaza todo visualmente hacia
-            //    arriba para cubrir el notch. El layout del ZStack sigue
-            //    siendo `heroHeight` (frame externo), así que el flow del
-            //    scroll content NO cambia.
-            //  - `.scaleEffect(anchor: .bottom)` aplica el stretchy desde el
-            //    bottom del view ya offseteado (y=heroHeight).
-            heroBackground
-                .frame(height: heroHeight + safeAreaTop)
-                .overlay(alignment: .bottom) {
-                    LinearGradient.heroFade(to: pageBg)
-                        .frame(height: heroHeight * 0.55)
-                        .allowsHitTesting(false)
-                }
-                .offset(y: -safeAreaTop)
-                .scaleEffect(stretchScale, anchor: .bottom)
-
-            heroContent
-                .opacity(heroOpacity)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: heroHeight)
+        // Cover a pantalla completa (edge-to-edge) que llena el header y se
+        // funde al color de página por abajo (heroFade). Stretchy al pull-down.
+        // El título/botones van DEBAJO (titleButtonsSection), no encima.
+        //  - `frame(heroHeight + safeAreaTop)` + `offset(-safeAreaTop)` extienden
+        //    el cover bajo el notch sin alterar el flow del scroll (layout final
+        //    = heroHeight).
+        heroBackground
+            .overlay(alignment: .bottom) {
+                // Fundido SUTIL al color de página solo en el borde inferior del
+                // cover (Apple apenas funde: el fondo deriva del cover y encaja).
+                LinearGradient.heroFade(to: pageBg)
+                    .frame(height: heroHeight * 0.2)
+                    .allowsHitTesting(false)
+            }
+            .offset(y: -safeAreaTop)
+            .scaleEffect(stretchScale, anchor: .bottom)
+            .frame(maxWidth: .infinity)
+            .frame(height: heroHeight)
     }
 
     @ViewBuilder
     private var heroBackground: some View {
-        // Prioridad de backdrop (Apple Music iOS 26):
-        //  1. Motion artwork — vídeo edge-to-edge. Sin gradientes de color
-        //     encima que lo tapen; el vídeo es la identidad visual del header.
-        //     Solo un scrim oscuro en el tercio inferior para legibilidad
-        //     del título/metadata sobre el clip.
-        //  2. Paleta solid (covers planos tipo cream/blanco) — flat color.
-        //  3. Resto — gradientes de paleta sobre blurred cover (comportamiento
-        //     histórico cuando no hay motion).
-        if let motionUrl = vm.animatedArtworkUrl {
-            ZStack(alignment: .bottom) {
-                // `videoOffsetY: 80` baja el centro del clip 40pt — Apple
-                // Music compone la parte clave de la cover algo más abajo
-                // del centro geométrico del header para dar respiro al
-                // título y los botones. Sin gap visible: el layer se
-                // extiende hacia abajo, recortado por `masksToBounds`.
-                CanvasView(url: motionUrl, autoplay: true, videoOffsetY: 80)
-
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0),
-                        Color.black.opacity(0.18),
-                        Color.black.opacity(0.45)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 220)
-                .allowsHitTesting(false)
-            }
-            .ignoresSafeArea(edges: .top)
-        } else if vm.palette.isSolid {
-            Color(vm.palette.primary)
-                .ignoresSafeArea(edges: .top)
-        } else {
-            ZStack {
-                // Gradient overlay at 140° (top-trailing → bottom-leading)
-                LinearGradient(
-                    colors: [
-                        Color(vm.palette.primary).opacity(0.82),
-                        Color(vm.palette.secondary).opacity(0.76)
-                    ],
-                    startPoint: .topTrailing,
-                    endPoint: .bottomLeading
-                )
-
-                // Dark scrim for legible text
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.38),
-                        Color.black.opacity(0.22),
-                        Color.black.opacity(0.06)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            // Blurred cover backdrop tras los gradientes. `.background()`
-            // evita que el contenido infle el layout del padre. El
-            // `.clipped()` contiene el halo del blur al frame natural; el
-            // stretchy header se aplica con `.scaleEffect` externo en el
-            // chain del `heroSection` y no se ve afectado.
-            .background {
-                if let img = vm.coverImage {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
-                        .blur(radius: 55)
-                        .scaleEffect(1.25)
-                } else {
-                    Color(vm.palette.primary)
+        // El cover (motion o estático) llena el header edge-to-edge, como Apple
+        // Music iOS 26.4. Se funde al color de página con el heroFade del
+        // heroSection. Sin scrim: el título va DEBAJO sobre el color, no encima.
+        Group {
+            if let motionUrl = vm.animatedArtworkUrl {
+                CanvasView(url: motionUrl, autoplay: true, videoOffsetY: 0)
+            } else if let img = vm.coverImage {
+                // `Color.clear.overlay` evita que scaledToFill infle el ANCHO del
+                // layout (lo que desbordaba bio/lista por los laterales).
+                Color.clear.overlay {
+                    Image(uiImage: img).resizable().scaledToFill()
                 }
+            } else {
+                Color(vm.palette.primary)
             }
-            .clipped()
-            .ignoresSafeArea(edges: .top)
         }
+        .frame(width: screenWidth, height: heroHeight + safeAreaTop)
+        .clipped()
+        .ignoresSafeArea(edges: .top)
     }
 
-    private var heroContent: some View {
-        VStack(spacing: 0) {
-            if vm.animatedArtworkUrl == nil {
-                // Sin motion: cover JUSTO por debajo de la barra de navegación.
-                // CLAVE (medido en simulador): la barra ocupa ~44pt por debajo
-                // del safe area (botones terminan en ~safeAreaTop+44 ≈ y106), y
-                // la ScrollView con `ignoresSafeArea(.top)` arranca su contenido
-                // con un origen global ~32pt POR ENCIMA del top de pantalla, así
-                // que la cover acaba en `inset − 32`. Con inset safeAreaTop+88 la
-                // cover queda en ~y118: justo debajo de los botones, sin solapar.
-                Spacer().frame(height: safeAreaTop + 88)
+    /// Título + metadata + botones, DEBAJO del cover, sobre el color de página.
+    /// Colores según la luminancia del fondo (texto negro sobre claro, blanco
+    /// sobre oscuro), estilo Apple Music iOS 26.4.
+    private var titleButtonsSection: some View {
+        VStack(alignment: .center, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(vm.displayAlbum.name)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
 
-                // When the cover is solid + light (white, cream, warm pastels), drop the
-                // shadow so the artwork blends seamlessly into the background.
-                coverArtImage
-                    .frame(width: coverSize, height: coverSize)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(
-                        color: vm.palette.isSolid
-                            ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
-                            : .black.opacity(0.55),
-                        radius: vm.palette.isSolid ? 8 : 22,
-                        x: 0,
-                        y: vm.palette.isSolid ? 2 : 8
-                    )
-                    .coverParallax()   // animated artwork sintético (giroscopio)
-
-                Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
-            } else {
-                // Con motion: el vídeo es la identidad visual del header.
-                // Empujamos título/botones al fondo del hero, sobre el scrim.
-                Spacer(minLength: 0)
+                if vm.displayAlbum.isExplicit {
+                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75), size: 18)
+                }
             }
 
-            // Title + metadata — centered.
-            // Con motion, forzamos blanco siempre: el vídeo de fondo puede
-            // tener cualquier dominante de color y `isLight` (calculado desde
-            // la cover estática) no es fiable sobre el clip.
-            let titleColor: Color = vm.animatedArtworkUrl != nil
-                ? .white
-                : (isLight ? Color.black : .white)
-            let badgeColor: Color = vm.animatedArtworkUrl != nil
-                ? Color.white.opacity(0.75)
-                : (isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75))
+            metadataLine
 
-            VStack(alignment: .center, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(vm.displayAlbum.name)
-                        .font(.system(size: 26, weight: .bold))
-                        .foregroundStyle(titleColor)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.75)
-
-                    if vm.displayAlbum.isExplicit {
-                        ExplicitBadge(color: badgeColor, size: 18)
-                    }
-                }
-
-                metadataLine
-            }
-            // Altura natural del título; la medimos (abajo) para que heroHeight
-            // la incluya y el hueco hacia la lista no dependa del nº de líneas.
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 20)
-            .background(
-                GeometryReader { g in
-                    Color.clear.preference(key: TitleBlockHeightKey.self, value: g.size.height)
-                }
-            )
-
-            // Play + shuffle buttons. Huecos iguales (20pt) a ambos lados: el de
-            // arriba es este padding; el de abajo lo da el spacer final (con
-            // motion mantenemos el padding inferior sobre el scrim).
             playButtons
-                .padding(.top, 20)
-                .padding(.bottom, vm.animatedArtworkUrl != nil ? 44 : 0)
-
-            if vm.animatedArtworkUrl == nil {
-                // Hueco FIJO botones↔lista (= resto). Con heroHeight calculado a
-                // partir del título medido, este spacer queda en ~20pt constante.
-                Spacer(minLength: 8)
-            }
+                .padding(.top, 16)
         }
         .frame(maxWidth: .infinity)
-        .onPreferenceChange(TitleBlockHeightKey.self) { titleBlockHeight = $0 }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
-    @ViewBuilder
-    private var coverArtImage: some View {
-        if let img = vm.coverImage {
-            Image(uiImage: img)
-                .resizable()
-                .scaledToFill()
-        } else {
-            // Placeholder while loading
-            ZStack {
-                Color(vm.palette.primary).opacity(0.4)
-                Image(systemName: "music.note")
-                    .font(.system(size: 52))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-        }
-    }
 
     private var metadataLine: some View {
         let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
@@ -491,11 +332,13 @@ struct AlbumDetailView: View {
         // hero claro), texto en color de acento. Shuffle = círculo del
         // color de acento con icono blanco/negro según luminancia del accent.
         // Lógica centralizada en `AlbumPalette` (ver ColorExtractor.swift).
-        let motionPresent = vm.animatedArtworkUrl != nil
-        let playBg = Color(vm.palette.playButtonBackground(motionPresent: motionPresent))
-        let playFg = Color(vm.palette.playButtonForeground(motionPresent: motionPresent))
-        let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: motionPresent))
-        let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: motionPresent))
+        // Botones DEBAJO del cover, sobre el color de página → colores según la
+        // luminancia del fondo (motionPresent: false): Play sólido contrastado
+        // + texto neutro, Shuffle translúcido sutil.
+        let playBg = Color(vm.palette.playButtonBackground(motionPresent: false))
+        let playFg = Color(vm.palette.playButtonForeground(motionPresent: false))
+        let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: false))
+        let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: false))
 
         return HStack(spacing: 14) {
             Button {
