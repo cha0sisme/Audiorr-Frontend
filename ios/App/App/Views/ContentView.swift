@@ -58,17 +58,17 @@ struct ContentView: View {
             // Asymmetric: entrada con bounce sutil, salida más rápida.
             if nowPlaying.viewerIsOpen {
                 // Transiciones NATIVAS de SwiftUI: `move(edge: .bottom)` +
-                // `opacity`. SwiftUI las maneja internamente sin pases
-                // extra de render al final — no hay "snap" perceptible en
-                // ningún extremo de la animación. La curva `.spring` con
-                // damping crítica (bounce=0) es la que iOS 26 usa para
-                // modal-like sheets.
+                // `opacity`. La animación la conduce una ÚNICA transacción de
+                // contenedor (`.animation(value: viewerIsOpen)` más abajo), NO
+                // una animación adosada a la transición. Adosarla hacía la
+                // transición frágil ante interrupciones: abrir/cerrar rápido
+                // varias veces interrumpía la salida con la entrada y el viewer
+                // quedaba "a medio abrir". Con una sola transacción de
+                // contenedor, SwiftUI resuelve la interrupción de forma
+                // determinista y cubre por igual todos los orígenes del toggle
+                // (miniplayer, drag, menú contextual, Dynamic Island…).
                 NowPlayingViewerView()
-                    .transition(
-                        .move(edge: .bottom)
-                            .combined(with: .opacity)
-                            .animation(.spring(duration: 0.45, bounce: 0))
-                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(10)
             }
 
@@ -118,10 +118,11 @@ struct ContentView: View {
         .task { BackendState.shared.check() }
         .preferredColorScheme(theme.colorScheme)
         .animation(.easeInOut(duration: 0.3), value: network.isConnected)
-        // Sin `.animation(value: viewerIsOpen)` — la transición del viewer
-        // gestiona su animación internamente. Una segunda animación aquí
-        // creaba un efecto de "dos fases" porque ambas se aplicaban a la
-        // vez al toggle de `viewerIsOpen`.
+        // Única fuente de animación del viewer: la transición ya NO lleva
+        // animación adosada (ver arriba), así que esta transacción de
+        // contenedor es la que conduce entrada y salida. No hay "dos fases"
+        // porque solo existe esta.
+        .animation(.spring(duration: 0.45, bounce: 0), value: nowPlaying.viewerIsOpen)
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: navigationAlbum != nil)
         .animation(.spring(response: 0.35, dampingFraction: 0.88), value: navigationArtist != nil)
         .onChange(of: nowPlaying.viewerIsOpen) { _, isOpen in

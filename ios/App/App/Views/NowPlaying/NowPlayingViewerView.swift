@@ -176,11 +176,15 @@ struct NowPlayingViewerView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onChange(of: state.viewerIsOpen) { _, isOpen in
-            // Si el viewer se cierra externamente (Dynamic Island, Remote Command, etc.)
-            // mientras hay un drag en curso, resetear el offset para que la transición
-            // de salida arranque desde la posición correcta.
+            // Al cerrar, reseteamos el offset del drag SIN animar: la salida la
+            // conduce la transición de contenedor (move + opacity), y animar el
+            // offset a la vez crearía un tirón (sube por el offset mientras la
+            // transición baja). Con la transacción no-animada el offset salta a
+            // 0 y la transición se encarga del movimiento de salida limpio.
             if !isOpen {
-                dragOffset = 0
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { dragOffset = 0 }
                 isDragging = false
             }
         }
