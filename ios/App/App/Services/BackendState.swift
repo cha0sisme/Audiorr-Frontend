@@ -118,8 +118,45 @@ final class BackendState {
     func reset() {
         checkTask?.cancel()
         checkTask = nil
+        consecutiveInBandFailures = 0
         setAvailable(false)
         isChecking = false
+    }
+
+    // MARK: - In-band reachability (VPN → Cloudflare, audit 2026-06)
+
+    /// Con Cloudflare el transporte es estable y ya no pingeamos /api/health
+    /// de forma proactiva en cada flap. En su lugar, el propio tráfico REST
+    /// informa del estado: `BackendService.performRequest` llama a estos
+    /// hooks. El health-check proactivo queda reducido al arranque
+    /// (`ContentView .task`) y al re-check de foreground.
+    private var consecutiveInBandFailures = 0
+    /// Fallos de transporte seguidos antes de marcar no-disponible. >1 para
+    /// no parpadear ante un 502/timeout puntual de Cloudflare.
+    private let inBandFailureThreshold = 2
+
+    /// Una request REST real ha respondido 2xx: el backend está vivo y nos
+    /// atiende. Confirma disponibilidad sin gastar un ping y resetea el
+    /// contador de fallos. Un usuario sin backend (Navidrome puro) nunca llega
+    /// aquí — sus requests reciben 401/403, que NO pasan por este hook —, así
+    /// que el gate de UI no se enciende por error.
+    func noteRequestSucceeded() {
+        consecutiveInBandFailures = 0
+        if !isAvailable {
+            setAvailable(true)
+        }
+    }
+
+    /// Una request REST ha fallado por transporte (sin red, timeout, 5xx).
+    /// Tras `inBandFailureThreshold` fallos seguidos marcamos no-disponible.
+    /// Los errores de auth/cuota (401/403/429) NO llaman aquí: ya los
+    /// gestionan AuthTokenStore y sus gates, y no implican que el backend
+    /// esté caído.
+    func noteRequestFailed() {
+        consecutiveInBandFailures += 1
+        if consecutiveInBandFailures >= inBandFailureThreshold && isAvailable {
+            setAvailable(false)
+        }
     }
 
     // MARK: - Private

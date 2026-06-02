@@ -545,10 +545,23 @@ final class BackendService {
         // makeRequest— para que viaje en TODAS las requests del cliente.
         finalRequest.setValue("iOS", forHTTPHeaderField: "X-Client-Platform")
 
-        let (data, response) = try await session.data(for: finalRequest)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: finalRequest)
+        } catch {
+            // Fallo de transporte (sin red, timeout, conexion perdida): senal
+            // in-band de posible caida del backend. BackendState lo contabiliza
+            // y, tras varios seguidos, marca isAvailable=false sin pingear.
+            await BackendState.shared.noteRequestFailed()
+            throw error
+        }
 
         do {
             try checkResponse(response)
+            // 2xx: el backend esta vivo y nos atiende → confirma disponibilidad
+            // in-band, sin gastar un /api/health proactivo.
+            await BackendState.shared.noteRequestSucceeded()
             return data
         } catch BackendError.unauthorized {
             guard injectBearer, allowRetry else {
@@ -564,6 +577,18 @@ final class BackendService {
         } catch BackendError.rateLimited(let retryAfter) {
             AuthTokenStore.shared.setLockedUntil(Date().addingTimeInterval(retryAfter))
             throw BackendError.rateLimited(retryAfter: retryAfter)
+        } catch BackendError.serviceUnavailable {
+            // 503: backend o Navidrome temporalmente caido → senal in-band.
+            await BackendState.shared.noteRequestFailed()
+            throw BackendError.serviceUnavailable
+        } catch BackendError.httpError(let code) {
+            // 5xx (p. ej. 502 Bad Gateway de Cloudflare con el homelab apagado)
+            // cuenta como caida; otros codigos (4xx no-auth) suben tal cual sin
+            // tocar la disponibilidad. 401/403/429 ya tienen sus propios catch.
+            if code >= 500 {
+                await BackendState.shared.noteRequestFailed()
+            }
+            throw BackendError.httpError(code)
         }
     }
 
