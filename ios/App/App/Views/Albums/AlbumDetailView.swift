@@ -111,6 +111,12 @@ final class AlbumDetailViewModel: ObservableObject {
 
 // MARK: - Main View
 
+/// Propaga la altura medida del bloque de título del hero hacia AlbumDetailView.
+private struct TitleBlockHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 52
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct AlbumDetailView: View {
     @StateObject private var vm: AlbumDetailViewModel
     @State private var scrollY: CGFloat = 0
@@ -119,17 +125,17 @@ struct AlbumDetailView: View {
     // after the user navigates back, causing the next tap on a different
     // card to fire this view's playPlaylist action.
     @State private var isViewVisible = false
+    /// Altura medida del bloque de título+metadata (para que heroHeight la
+    /// incluya y los huecos del hero no dependan del nº de líneas del título).
+    @State private var titleBlockHeight: CGFloat = 52
     var onDismiss: (() -> Void)?
 
-    /// Altura del hero. Se ata a `safeAreaTop + coverSize` (ambos estables
-    /// desde el arranque, NO dependen de datos async como el motion artwork,
-    /// así que la geometría inicial del ScrollView no se rompe). Como el
-    /// contenido del hero está anclado abajo, fijar la altura en función de
-    /// `safeAreaTop` garantiza que la cover quede SIEMPRE por debajo de la
-    /// barra de navegación —botón atrás y menú— en cualquier dispositivo y
-    /// largo de título. El espacio sobrante queda como aire sobre la cover
-    /// (estilo Apple Music), no como hueco antes de la lista.
-    private var heroHeight: CGFloat { safeAreaTop + coverSize + 270 }
+    /// Altura del hero = inset + cover + título (medido) + huecos fijos. Incluir
+    /// la altura REAL del título (`titleBlockHeight`) hace que el hueco entre los
+    /// botones y la lista sea constante sea cual sea el nº de líneas del título,
+    /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra. El 196
+    /// = inset extra (88) + 3 huecos de 20 + alto del bloque de botones (~48).
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -158,16 +164,14 @@ struct AlbumDetailView: View {
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
 
     /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
-    /// estilo Apple Music: ~68% del width con cap a 300pt para no inflar
-    /// en iPad. En iPhone 15/16 ≈ 267pt, en Pro Max ≈ 292pt, en SE ≈ 255pt.
-    /// Más grande que antes (55%/260) para aprovechar los bordes y que la
-    /// cover suba hacia la barra de navegación, como hace Apple Music.
+    /// estilo Apple Music: ~72% del width con cap a 320pt para no inflar
+    /// en iPad. En iPhone 15/16 ≈ 283pt, en Pro Max ≈ 310pt, en SE ≈ 270pt.
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
     private var coverSize: CGFloat {
         let width: CGFloat = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
-        return min(width * 0.68, 300)
+        return min(width * 0.72, 320)
     }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -366,13 +370,14 @@ struct AlbumDetailView: View {
     private var heroContent: some View {
         VStack(spacing: 0) {
             if vm.animatedArtworkUrl == nil {
-                // Sin motion: cover estática grande, anclada abajo (los botones
-                // quedan sobre la lista). SOLO este spacer superior es flexible;
-                // absorbe todo el sobrante, de modo que la cover queda por debajo
-                // de la barra. El hueco cover↔título es FIJO: si fuera flexible,
-                // SwiftUI repartiría el sobrante entre ambos spacers y la cover
-                // subiría a media altura, solapando el botón atrás y el menú.
-                Spacer(minLength: 40)
+                // Sin motion: cover JUSTO por debajo de la barra de navegación.
+                // CLAVE (medido en simulador): la barra ocupa ~44pt por debajo
+                // del safe area (botones terminan en ~safeAreaTop+44 ≈ y106), y
+                // la ScrollView con `ignoresSafeArea(.top)` arranca su contenido
+                // con un origen global ~32pt POR ENCIMA del top de pantalla, así
+                // que la cover acaba en `inset − 32`. Con inset safeAreaTop+88 la
+                // cover queda en ~y118: justo debajo de los botones, sin solapar.
+                Spacer().frame(height: safeAreaTop + 88)
 
                 // When the cover is solid + light (white, cream, warm pastels), drop the
                 // shadow so the artwork blends seamlessly into the background.
@@ -388,7 +393,7 @@ struct AlbumDetailView: View {
                         y: vm.palette.isSolid ? 2 : 8
                     )
 
-                Spacer().frame(height: 14)   // hueco FIJO cover↔título
+                Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
             } else {
                 // Con motion: el vídeo es la identidad visual del header.
                 // Empujamos título/botones al fondo del hero, sobre el scrim.
@@ -422,16 +427,31 @@ struct AlbumDetailView: View {
 
                 metadataLine
             }
+            // Altura natural del título; la medimos (abajo) para que heroHeight
+            // la incluya y el hueco hacia la lista no dependa del nº de líneas.
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: TitleBlockHeightKey.self, value: g.size.height)
+                }
+            )
 
-            // Play + shuffle buttons — centered. Más aire respecto al
-            // songlist de debajo (estilo Apple Music iOS 26.4).
+            // Play + shuffle buttons. Huecos iguales (20pt) a ambos lados: el de
+            // arriba es este padding; el de abajo lo da el spacer final (con
+            // motion mantenemos el padding inferior sobre el scrim).
             playButtons
-                .padding(.top, 18)
-                .padding(.bottom, 44)
+                .padding(.top, 20)
+                .padding(.bottom, vm.animatedArtworkUrl != nil ? 44 : 0)
+
+            if vm.animatedArtworkUrl == nil {
+                // Hueco FIJO botones↔lista (= resto). Con heroHeight calculado a
+                // partir del título medido, este spacer queda en ~20pt constante.
+                Spacer(minLength: 8)
+            }
         }
         .frame(maxWidth: .infinity)
+        .onPreferenceChange(TitleBlockHeightKey.self) { titleBlockHeight = $0 }
     }
 
     @ViewBuilder
