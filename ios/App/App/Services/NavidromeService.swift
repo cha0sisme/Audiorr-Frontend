@@ -159,7 +159,14 @@ final class NavidromeService: ObservableObject {
 
     /// Check if the Audiorr backend is reachable and verified.
     /// Validates `service: "audiorr"` in the response body to avoid connecting to unrelated services.
-    /// Positive results cached for 30s, negative for 10s (retry sooner on failure).
+    ///
+    /// TTL del cache (VPN → Cloudflare, audit 2026-06): cuando el transporte
+    /// era VPN, un TTL corto (30s) compensaba sus fluctuaciones. Ahora el
+    /// acceso es por dominio propio tras Cloudflare (HTTPS estable), así que el
+    /// resultado positivo se cachea como el resto (`cacheTTL`, 5 min): no tiene
+    /// sentido re-pingear /api/health cada 30s contra un transporte que no
+    /// fluctúa. El negativo se mantiene corto (10s) para que la recuperación se
+    /// note rápido tras una caída del backend del operador (502/timeout de CF).
     func checkBackendAvailable() async -> Bool {
         let cacheKey = "backendAvailable"
         if let cached = cacheGet(cacheKey) as? Bool { return cached }
@@ -167,7 +174,7 @@ final class NavidromeService: ObservableObject {
         guard let base = backendURL() else { return false }
 
         let available = await verifyAudiorrBackend(base: base)
-        cacheSet(cacheKey, value: available, ttl: available ? 30 : 10)
+        cacheSet(cacheKey, value: available, ttl: available ? cacheTTL : 10)
         return available
     }
 
