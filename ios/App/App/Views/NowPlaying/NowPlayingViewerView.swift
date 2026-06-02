@@ -46,12 +46,6 @@ struct NowPlayingViewerView: View {
     /// layout bottom-grouped (sin cover estático) y el scrim extra de lyrics.
     private var hasBackdropVideo: Bool { canvasUrl != nil || animatedArtworkUrl != nil }
 
-    /// Modo "hero animado": hay artwork animado de álbum pero NO canvas de
-    /// canción. En vez de vídeo full-bleed (estilo Spotify, reservado al
-    /// canvas), se integra como el hero de AlbumDetail — vídeo arriba fundido
-    /// al color de paleta, con los controles sobre ese color (no translúcidos).
-    private var animatedHeroMode: Bool { canvasUrl == nil && animatedArtworkUrl != nil }
-
     /// Firma que cambia cuando aparece/desaparece un backdrop de vídeo o
     /// cuando se sustituye por otro. Permite que la animación del body
     /// dispare crossfade en cualquiera de esas transiciones.
@@ -80,7 +74,11 @@ struct NowPlayingViewerView: View {
                 if let canvasUrl {
                     videoBackdrop(url: canvasUrl)
                 } else if let animatedArtworkUrl {
-                    animatedHeroBackdrop(url: animatedArtworkUrl, geo: geo)
+                    // Mismo tratamiento que el canvas: vídeo a pantalla completa
+                    // + degradado oscuro abajo para legibilidad (texto/controles
+                    // blancos). Antes se fundía al color de paleta y, con covers
+                    // claras, el fondo salía casi blanco y rompía el texto.
+                    videoBackdrop(url: animatedArtworkUrl)
                 } else {
                     // Sin vídeo: mismo lenguaje que el hero de AlbumDetail —
                     // cover difuminada tintada con la paleta del artwork y
@@ -139,7 +137,7 @@ struct NowPlayingViewerView: View {
                         Spacer()
                             .frame(height: 16)
 
-                        PlaybackControlsView(glassStyle: !animatedHeroMode)
+                        PlaybackControlsView(glassStyle: true)
 
                         Spacer()
                             .frame(height: 16)
@@ -426,63 +424,6 @@ struct NowPlayingViewerView: View {
 
         canvasGradient
             .ignoresSafeArea()
-
-        if showLyrics && hasLyrics {
-            Color.black.opacity(0.45)
-                .ignoresSafeArea()
-                .transition(.opacity)
-        }
-    }
-
-    // MARK: - Animated Hero Backdrop (estilo AlbumDetail)
-
-    /// Backdrop para artwork animado sin canvas: el vídeo ocupa la pantalla
-    /// completa (como el canvas) pero, en vez del scrim oscuro de Spotify, se
-    /// funde al color de paleta a la altura del título — ahí "acaba" el vídeo y
-    /// debajo queda el color liso con los controles. El título va en la misma
-    /// posición que con canvas (agrupado abajo), justo donde arranca el fundido.
-    @ViewBuilder
-    private func animatedHeroBackdrop(url: URL, geo: GeometryProxy) -> some View {
-        let pageBg = Color(palette.pageBackgroundColor)
-
-        // Base: color de paleta (se ve a través del fundido inferior).
-        paletteBackground
-            .ignoresSafeArea()
-
-        // Vídeo a pantalla completa.
-        CanvasView(url: url)
-            .ignoresSafeArea()
-            .transition(.opacity)
-
-        // Fundido al color de paleta: vídeo nítido arriba; a la altura del
-        // título (~62%) empieza a fundirse hasta quedar en color liso bajo los
-        // controles.
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0.0),
-                .init(color: .clear, location: 0.52),
-                .init(color: pageBg.opacity(0.55), location: 0.64),
-                .init(color: pageBg, location: 0.76),
-                .init(color: pageBg, location: 1.0),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-
-        // Scrim oscuro sutil en la franja del título para legibilidad del texto.
-        LinearGradient(
-            stops: [
-                .init(color: .clear, location: 0.46),
-                .init(color: .black.opacity(0.35), location: 0.62),
-                .init(color: .clear, location: 0.80),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
 
         if showLyrics && hasLyrics {
             Color.black.opacity(0.45)
@@ -799,14 +740,18 @@ struct NowPlayingViewerView: View {
         guard !songId.isEmpty, songId != lastCanvasSongId else { return }
         lastCanvasSongId = songId
 
+        // Limpiar el canvas anterior YA: nunca mostrar el vídeo de la canción
+        // previa con los datos de la nueva durante la ventana de resolución.
+        withAnimation { canvasUrl = nil }
+
         Task {
             let result = await CanvasService.shared.resolve(songId: songId)
+            // Descartar si la canción cambió mientras resolvíamos (carrera).
+            guard songId == lastCanvasSongId else { return }
             switch result {
             case .video(let url):
                 withAnimation { canvasUrl = url }
-            case .image:
-                withAnimation { canvasUrl = nil }
-            case .none:
+            case .image, .none:
                 withAnimation { canvasUrl = nil }
             }
         }
@@ -818,15 +763,17 @@ struct NowPlayingViewerView: View {
         guard albumId != lastArtworkAlbumId else { return }
         lastArtworkAlbumId = albumId
 
-        // Sin albumId: limpiar el vídeo si lo había, para no arrastrar el motion
-        // del álbum anterior cuando el siguiente track no expone albumId.
-        guard !albumId.isEmpty else {
-            withAnimation { animatedArtworkUrl = nil }
-            return
-        }
+        // Limpiar el vídeo del álbum anterior YA: nunca arrastrar el motion de
+        // un álbum con el título de otro (se veía el animated de Wu-Tang con un
+        // tema de Drake en remoto). Vuelve al fondo de paleta hasta resolver.
+        withAnimation { animatedArtworkUrl = nil }
+
+        guard !albumId.isEmpty else { return }
 
         Task {
             let result = await AlbumArtworkService.shared.resolve(albumId: albumId)
+            // Descartar si el álbum cambió mientras resolvíamos (carrera).
+            guard albumId == lastArtworkAlbumId else { return }
             switch result {
             case .video(let url):
                 withAnimation { animatedArtworkUrl = url }

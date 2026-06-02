@@ -245,6 +245,8 @@ final class ConnectService {
             "title": state.title,
             "artist": state.artist,
             "album": "",
+            "albumId": state.albumId,
+            "artistId": state.artistId,
             "coverArt": state.coverArt,
             "duration": state.duration,
         ]
@@ -606,9 +608,21 @@ final class ConnectService {
         let coverArt = metadata?["coverArt"] as? String ?? ""
         let duration = metadata?["duration"] as? Double ?? 0
 
+        // albumId/artistId del track remoto. El emisor los manda en la
+        // metadata; si no (versión antigua), se buscan en el item de la cola
+        // que coincide con el trackId. SIN esto, state.albumId se quedaba
+        // pegado al álbum anterior y el artwork animado del viewer no cambiaba
+        // (se veía el motion de un álbum con el título de otro).
+        let metaAlbumId = (metadata?["albumId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let queueAlbumId = (dict["queue"] as? [[String: Any]])?
+            .first { (($0["id"] as? String) ?? ($0["trackId"] as? String)) == trackId }?["albumId"] as? String
+        let resolvedAlbumId = metaAlbumId ?? queueAlbumId ?? ""
+
         state.songId = trackId ?? ""
         state.title = title
         state.artist = artist
+        state.albumId = resolvedAlbumId
+        state.artistId = metadata?["artistId"] as? String ?? ""
         state.coverArt = coverArt
         state.duration = duration
         state.progress = position
