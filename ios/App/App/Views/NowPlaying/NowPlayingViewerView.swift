@@ -372,12 +372,20 @@ struct NowPlayingViewerView: View {
         let pageBg = Color(palette.pageBackgroundColor)
         return ZStack {
             // Backdrop difuminado de la cover (color primario mientras carga).
+            // `Color.clear` da el tamaño (el propuesto por el ZStack); la imagen
+            // se superpone y se recorta. Sin esto, `scaledToFill` sin frame
+            // infla el contenedor a su tamaño aspect-fill y desborda el ancho
+            // del player (`.clipped()` recorta el render, NO el layout).
             if let img = fullArtworkImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 60)
-                    .scaleEffect(1.3)
+                Color.clear
+                    .overlay {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                            .blur(radius: 60)
+                            .scaleEffect(1.3)
+                    }
+                    .clipped()
             } else {
                 Color(palette.primary)
             }
