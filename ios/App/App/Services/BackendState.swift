@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// Centralized, reactive backend-availability state.
 /// All views observe `BackendState.shared.isAvailable` instead of
@@ -15,7 +16,6 @@ final class BackendState {
     private(set) var isChecking: Bool = false
 
     private var checkTask: Task<Void, Never>?
-    private var networkDebounceTask: Task<Void, Never>?
 
     /// v12 (audit 2026-05-05) — punto unico de mutacion de `isAvailable`.
     /// Mantiene en sync el espejo `TransitionDiagnostics.backendAvailable`
@@ -35,29 +35,8 @@ final class BackendState {
     }
 
     private init() {
-        // Re-check whenever the network comes back online
-        withObservationTracking {
-            _ = NetworkMonitor.shared.isConnected
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if NetworkMonitor.shared.isConnected {
-                    self.debouncedCheck()
-                } else {
-                    self.setAvailable(false)
-                }
-            }
-        }
-    }
-
-    /// Debounce network-triggered checks to avoid hammering on flaky connections
-    private func debouncedCheck() {
-        networkDebounceTask?.cancel()
-        networkDebounceTask = Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled else { return }
-            self.check()
-        }
+        observeNetwork()
+        observeForeground()
     }
 
     /// Trigger a fresh availability check. Safe to call from anywhere; coalesces concurrent calls.
@@ -124,8 +103,6 @@ final class BackendState {
             }
             self.isChecking = false
             self.checkTask = nil
-            // Re-observe network changes (withObservationTracking is one-shot)
-            self.observeNetwork()
         }
     }
 
@@ -147,23 +124,40 @@ final class BackendState {
 
     // MARK: - Private
 
+    /// Observa la conectividad de red. Solo reacciona a la **caída total** de
+    /// red marcando no-disponible de inmediato (UX offline correcta). La
+    /// recuperación ya NO dispara un re-check por cada flap: ese comportamiento
+    /// nervioso existía para detectar la VPN cayéndose/volviendo, y con acceso
+    /// por Cloudflare (transporte estable) sobra. La disponibilidad se
+    /// reevalúa al volver a foreground (`observeForeground`) y cuando el propio
+    /// tráfico REST vuelve a funcionar (inferencia in-band en BackendService).
+    /// Se re-arma a sí misma porque `withObservationTracking` es one-shot.
     private func observeNetwork() {
         withObservationTracking {
             _ = NetworkMonitor.shared.isConnected
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if NetworkMonitor.shared.isConnected {
-                    self.networkDebounceTask?.cancel()
-                    self.networkDebounceTask = Task {
-                        try? await Task.sleep(nanoseconds: 2_000_000_000)
-                        guard !Task.isCancelled else { return }
-                        self.invalidateAndRecheck()
-                    }
-                } else {
+                if !NetworkMonitor.shared.isConnected {
                     self.setAvailable(false)
-                    self.observeNetwork()
                 }
+                self.observeNetwork()
+            }
+        }
+    }
+
+    /// Re-evalúa la disponibilidad al volver a primer plano. Sustituye al
+    /// re-check por cada cambio de red: con un transporte estable basta con
+    /// comprobar una vez por foreground, y cubre el caso "el backend del
+    /// operador se cayó mientras la app estaba en background".
+    private func observeForeground() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.invalidateAndRecheck()
             }
         }
     }
