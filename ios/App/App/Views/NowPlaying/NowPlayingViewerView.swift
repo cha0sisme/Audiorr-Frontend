@@ -121,10 +121,12 @@ struct NowPlayingViewerView: View {
                         Spacer()
 
                     } else if hasBackdropVideo {
-                        // Con vídeo: controles agrupados abajo. Sobre canvas
-                        // full-bleed van translúcidos (glass); en el hero
-                        // animado van sobre el color de paleta, así que estilo
-                        // sólido como en el modo normal.
+                        // Con vídeo (canvas o artwork animado): título + controles
+                        // agrupados abajo, en la MISMA posición. Sobre canvas
+                        // full-bleed los controles van translúcidos (glass); en
+                        // el artwork animado el vídeo se funde al color de paleta
+                        // a la altura del título, así que los controles van
+                        // sólidos sobre el color.
                         Spacer()
 
                         songInfoView
@@ -434,38 +436,53 @@ struct NowPlayingViewerView: View {
 
     // MARK: - Animated Hero Backdrop (estilo AlbumDetail)
 
-    /// Backdrop para artwork animado sin canvas: el color de paleta llena la
-    /// pantalla y el vídeo motion ocupa la parte superior, fundido al color de
-    /// página por abajo — el mismo hero de AlbumDetail, integrado en el
-    /// reproductor. Los controles quedan sobre el color de paleta, no sobre el
-    /// vídeo. (Si hay lyrics activas, se cede al modo lyrics como hasta ahora.)
+    /// Backdrop para artwork animado sin canvas: el vídeo ocupa la pantalla
+    /// completa (como el canvas) pero, en vez del scrim oscuro de Spotify, se
+    /// funde al color de paleta a la altura del título — ahí "acaba" el vídeo y
+    /// debajo queda el color liso con los controles. El título va en la misma
+    /// posición que con canvas (agrupado abajo), justo donde arranca el fundido.
     @ViewBuilder
     private func animatedHeroBackdrop(url: URL, geo: GeometryProxy) -> some View {
         let pageBg = Color(palette.pageBackgroundColor)
 
-        // Base: color de paleta a pantalla completa.
+        // Base: color de paleta (se ve a través del fundido inferior).
         paletteBackground
             .ignoresSafeArea()
 
-        // Vídeo motion arriba, edge-to-edge, fundido a la paleta por abajo.
-        VStack(spacing: 0) {
-            CanvasView(url: url, videoOffsetY: 40)
-                .frame(height: geo.size.height * 0.56)
-                .overlay(alignment: .bottom) {
-                    LinearGradient(
-                        colors: [pageBg.opacity(0), pageBg],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 170)
-                    .allowsHitTesting(false)
-                }
-                .clipped()
-                .ignoresSafeArea(edges: .top)
+        // Vídeo a pantalla completa.
+        CanvasView(url: url)
+            .ignoresSafeArea()
+            .transition(.opacity)
 
-            Spacer(minLength: 0)
-        }
-        .transition(.opacity)
+        // Fundido al color de paleta: vídeo nítido arriba; a la altura del
+        // título (~62%) empieza a fundirse hasta quedar en color liso bajo los
+        // controles.
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: .clear, location: 0.52),
+                .init(color: pageBg.opacity(0.55), location: 0.64),
+                .init(color: pageBg, location: 0.76),
+                .init(color: pageBg, location: 1.0),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+
+        // Scrim oscuro sutil en la franja del título para legibilidad del texto.
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0.46),
+                .init(color: .black.opacity(0.35), location: 0.62),
+                .init(color: .clear, location: 0.80),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
 
         if showLyrics && hasLyrics {
             Color.black.opacity(0.45)
