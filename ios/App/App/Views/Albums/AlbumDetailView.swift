@@ -114,11 +114,11 @@ struct AlbumDetailView: View {
     @State private var isViewVisible = false
     var onDismiss: (() -> Void)?
 
-    /// Altura del hero constante. Valor intermedio entre 440 (cover estática)
-    /// y 520 (motion artwork) — generoso para ambos casos sin cambiar
-    /// dinámicamente, lo que rompía la geometría inicial del ScrollView y
-    /// hacía que el background no se extendiera al notch al cargar motion.
-    private let heroHeight: CGFloat = 500
+    /// Altura del hero constante. Holgada para la cover estática grande
+    /// (subida hacia la barra) y para el motion artwork, sin cambiar
+    /// dinámicamente — hacerlo rompía la geometría inicial del ScrollView y
+    /// que el background se extendiera al notch al cargar motion.
+    private let heroHeight: CGFloat = 524
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -147,14 +147,16 @@ struct AlbumDetailView: View {
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
 
     /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
-    /// estilo Apple Music: ~55% del width con cap a 260pt para no inflar
-    /// en iPad. En iPhone 15/16 ≈ 216pt, en Pro Max ≈ 236pt, en SE ≈ 206pt.
+    /// estilo Apple Music: ~68% del width con cap a 300pt para no inflar
+    /// en iPad. En iPhone 15/16 ≈ 267pt, en Pro Max ≈ 292pt, en SE ≈ 255pt.
+    /// Más grande que antes (55%/260) para aprovechar los bordes y que la
+    /// cover suba hacia la barra de navegación, como hace Apple Music.
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
     private var coverSize: CGFloat {
         let width: CGFloat = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
-        return min(width * 0.55, 260)
+        return min(width * 0.68, 300)
     }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -353,8 +355,12 @@ struct AlbumDetailView: View {
     private var heroContent: some View {
         VStack(spacing: 0) {
             if vm.animatedArtworkUrl == nil {
-                // Sin motion: cover estática centrada en su posición de siempre.
-                Spacer(minLength: 100)
+                // Sin motion: cover estática grande, subida hacia la barra de
+                // navegación. El bloque está anclado abajo (los botones quedan
+                // sobre la lista), así que la posición vertical de la cover la
+                // fija `heroHeight − cover − gap − (título+botones)`. El spacer
+                // superior solo marca un mínimo holgado.
+                Spacer(minLength: 40)
 
                 // When the cover is solid + light (white, cream, warm pastels), drop the
                 // shadow so the artwork blends seamlessly into the background.
@@ -370,7 +376,7 @@ struct AlbumDetailView: View {
                         y: vm.palette.isSolid ? 2 : 8
                     )
 
-                Spacer(minLength: 20)
+                Spacer(minLength: 10)
             } else {
                 // Con motion: el vídeo es la identidad visual del header.
                 // Empujamos título/botones al fondo del hero, sobre el scrim.
