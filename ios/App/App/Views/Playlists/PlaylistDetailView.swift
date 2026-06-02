@@ -469,7 +469,12 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private var metadataLine: some View {
         let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
-        let pl = vm.displayPlaylist
+        // Usamos `initialPlaylist` (de la lista) y NO `displayPlaylist`: el
+        // detalle de Subsonic (`getPlaylistSongs`) llega con `comment` y `owner`
+        // a nil, así que `displayPlaylist.isSystemPlaylist` solo detectaría las
+        // Mix Diario (por nombre). `initialPlaylist` conserva el comment, de
+        // modo que "Incluye X, Y y Z" sale también en editorial, smart y spotify.
+        let pl = vm.initialPlaylist
         let text: String? = {
             if pl.isSystemPlaylist {
                 let included = firstUniqueArtists(in: vm.songs, max: 3)
