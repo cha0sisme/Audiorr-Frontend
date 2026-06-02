@@ -143,10 +143,13 @@ struct AlbumDetailView: View {
     /// botones y la lista sea constante sea cual sea el nº de líneas del título,
     /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra. El 196
     /// = inset extra (88) + 3 huecos de 20 + alto del bloque de botones (~48).
-    /// Modo isSolid: cover cuadrada completa bajo la barra + fondo del color del
-    /// borde (sin costura), título debajo. El resto (normales y animated) usan el
-    /// layout estándar (cover-tarjeta + título dentro del hero).
-    private var isSolidMode: Bool { vm.palette.isSolid }
+    /// Prioridad de efectos (sin mezclar), como pidió el diseño:
+    ///   1. animated artwork → layout estándar con vídeo de fondo.
+    ///   2. isSolid (y SIN animated) → cover cuadrada full-screen + fondo del
+    ///      color del borde (sin costura), título debajo.
+    ///   3. normal → layout estándar (cover-tarjeta).
+    /// `isSolidMode` solo es true en el caso 2; el animated SIEMPRE gana.
+    private var isSolidMode: Bool { vm.animatedArtworkUrl == nil && vm.palette.isSolid }
 
     private var heroHeight: CGFloat {
         isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 164)
