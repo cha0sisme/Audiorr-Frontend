@@ -30,8 +30,8 @@ struct NowPlayingViewerView: View {
     // Accent color extracted from artwork
     @State private var accentColor: Color = .white
     @State private var lastExtractedUrl: String?
-    /// Paleta completa de la cover — alimenta el MeshGradient de fondo
-    /// (estilo Apple Music iOS 26.4, sin blur).
+    /// Paleta completa de la cover — alimenta el fondo de paleta (gradiente +
+    /// cover difuminada + fundido, estilo AlbumDetail).
     @State private var palette: AlbumPalette = .default
 
     // Canvas video (Fase 4)
@@ -76,17 +76,14 @@ struct NowPlayingViewerView: View {
                 } else if let animatedArtworkUrl {
                     videoBackdrop(url: animatedArtworkUrl)
                 } else {
-                    // MeshGradient con los colores extraídos de la cover.
-                    // Apple Music iOS 26 no usa blur del cover: construye un
-                    // gradient cromático con los tonos dominantes. La grid
-                    // 3×3 entrelaza primary/secondary/accent para evitar
-                    // bandas planas y dar la sensación "flowing" de Apple.
-                    meshBackground
+                    // Sin vídeo: mismo lenguaje que el hero de AlbumDetail —
+                    // cover difuminada tintada con la paleta del artwork y
+                    // fundido al color de página hacia abajo. Apple Music iOS 26
+                    // tiñe el fondo con el color del artwork (no usa un mosaico
+                    // de colores), así que esto se acerca más que el mesh previo.
+                    paletteBackground
                         .ignoresSafeArea()
                         .animation(.easeInOut(duration: 0.6), value: palette.primary)
-
-                    Color.black.opacity(0.30)
-                        .ignoresSafeArea()
                 }
 
                 // Contenido principal
@@ -355,31 +352,45 @@ struct NowPlayingViewerView: View {
         }
     }
 
-    // MARK: - Mesh Gradient Backdrop (Apple Music style, sin blur)
+    // MARK: - Palette Backdrop (estilo AlbumDetail)
 
-    /// `MeshGradient` 3×3 con los colores de la cover. Apple Music iOS 26
-    /// construye un gradient fluido a partir de los tonos dominantes en
-    /// lugar de difuminar la imagen. La grid entrelaza `primary`,
-    /// `secondary` y `accent` para dar profundidad sin bandas planas.
-    private var meshBackground: some View {
-        let primary = Color(palette.primary)
-        let secondary = Color(palette.secondary)
-        let accent = Color(palette.accent)
+    /// Fondo cuando no hay vídeo. Reusa el lenguaje del hero de AlbumDetail:
+    /// cover difuminada de fondo, tinte diagonal de la paleta encima y fundido
+    /// al color de página hacia abajo (`heroFade`) para dejar limpia la zona de
+    /// controles. Más fiel a Apple Music iOS 26 (que tiñe el fondo con el color
+    /// del artwork) que el MeshGradient anterior.
+    private var paletteBackground: some View {
+        let pageBg = Color(palette.pageBackgroundColor)
+        return ZStack {
+            // Backdrop difuminado de la cover (color primario mientras carga).
+            if let img = fullArtworkImage {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 60)
+                    .scaleEffect(1.3)
+            } else {
+                Color(palette.primary)
+            }
 
-        return MeshGradient(
-            width: 3,
-            height: 3,
-            points: [
-                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-            ],
-            colors: [
-                primary, accent,    secondary,
-                accent,  primary,   accent,
-                secondary, accent,  primary
-            ]
-        )
+            // Tinte de paleta en diagonal, como el hero de AlbumDetail.
+            LinearGradient(
+                colors: [
+                    Color(palette.primary).opacity(0.55),
+                    Color(palette.secondary).opacity(0.45)
+                ],
+                startPoint: .topTrailing,
+                endPoint: .bottomLeading
+            )
+
+            // Fundido al color de página hacia el bottom: artwork tintado
+            // arriba, fondo limpio bajo los controles.
+            LinearGradient.heroFade(to: pageBg)
+
+            // Scrim suave global para legibilidad sobre la cover difuminada.
+            Color.black.opacity(0.15)
+        }
+        .clipped()
     }
 
     // MARK: - Video Backdrop (Canvas / Animated Artwork)
