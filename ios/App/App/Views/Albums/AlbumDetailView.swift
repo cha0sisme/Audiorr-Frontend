@@ -10,6 +10,9 @@ final class AlbumDetailViewModel: ObservableObject {
     @Published var isLoadingNotes = true
     @Published var palette: AlbumPalette = .default
     @Published var coverImage: UIImage?
+    /// Color del borde de la cover — fondo del header SIN costura para covers
+    /// isSolid (Apple Music). Solo se usa en el modo isSolid.
+    @Published var headerBgColor: UIColor?
     @Published var recordLabels: [RecordLabel] = []
     @Published var albumNotes: String?
     /// Motion artwork (Apple Music) si el álbum lo tiene. Apple lo usa de
@@ -27,6 +30,7 @@ final class AlbumDetailViewModel: ObservableObject {
         // Pre-load cached cover immediately so the hero transition doesn't flash a placeholder
         if let cached = AlbumCoverCache.shared.image(for: album.coverArt) {
             self.coverImage = cached
+            self.headerBgColor = ColorExtractor.edgeColor(from: cached)
             // Palette from cache → colors appear WITH the zoom transition, zero delay
             if let id = album.coverArt, let p = PaletteCache.shared.palette(for: id) {
                 self.palette = p
@@ -77,6 +81,10 @@ final class AlbumDetailViewModel: ObservableObject {
     private func loadCoverAndPalette() async {
         guard let image = await fetchCover() else { return }
         self.coverImage = image
+        let edge = await Task.detached(priority: .userInitiated) {
+            ColorExtractor.edgeColor(from: image)
+        }.value
+        self.headerBgColor = edge
         // Skip extraction if palette was already loaded from cache in init
         if !paletteReady {
             let extracted = await Task.detached(priority: .userInitiated) {
@@ -135,7 +143,14 @@ struct AlbumDetailView: View {
     /// botones y la lista sea constante sea cual sea el nº de líneas del título,
     /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra. El 196
     /// = inset extra (88) + 3 huecos de 20 + alto del bloque de botones (~48).
-    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
+    /// Modo isSolid: cover cuadrada completa bajo la barra + fondo del color del
+    /// borde (sin costura), título debajo. El resto (normales y animated) usan el
+    /// layout estándar (cover-tarjeta + título dentro del hero).
+    private var isSolidMode: Bool { vm.palette.isSolid }
+
+    private var heroHeight: CGFloat {
+        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 164)
+    }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -160,19 +175,39 @@ struct AlbumDetailView: View {
         return (heroHeight + pullDown) / heroHeight
     }
 
-    private var isLight: Bool { vm.palette.isPrimaryLight }
-    private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
+    /// En modo isSolid el fondo es el color del borde de la cover (sin costura);
+    /// el resto usa el pageBackgroundColor procesado de la paleta.
+    private var headerBgUIColor: UIColor { vm.headerBgColor ?? vm.palette.pageBackgroundColor }
+    private var isLight: Bool {
+        if isSolidMode {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+            headerBgUIColor.getRed(&r, green: &g, blue: &b, alpha: nil)
+            return (r * 0.299 + g * 0.587 + b * 0.114) > 0.5
+        }
+        return vm.palette.isPrimaryLight
+    }
+    private var pageBg: Color {
+        isSolidMode ? Color(headerBgUIColor) : Color(vm.palette.pageBackgroundColor)
+    }
 
     /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
     /// estilo Apple Music: ~72% del width con cap a 320pt para no inflar
     /// en iPad. En iPhone 15/16 ≈ 283pt, en Pro Max ≈ 310pt, en SE ≈ 270pt.
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
     private var coverSize: CGFloat {
-        let width: CGFloat = UIApplication.shared.connectedScenes
+        return min(screenWidth * 0.72, 320)
+    }
+
+    /// Ancho de pantalla — usado por el cover cuadrado full-width del modo isSolid.
+    private var screenWidth: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
-        return min(width * 0.72, 320)
     }
+
+    /// Inset superior del cover en modo isSolid: arranca bajo la barra de
+    /// navegación, con pageBg (color del borde) en la franja de arriba.
+    private var coverTopInset: CGFloat { safeAreaTop + 48 }
 
     /// Safe area top de la ventana actual. Necesario para extender el
     /// heroBackground HASTA el notch — el ScrollView con `.ignoresSafeArea`
@@ -197,6 +232,7 @@ struct AlbumDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
+                    if isSolidMode { titleButtonsSection }
                     albumNotesSection
                     songListSection
                     Spacer(minLength: 120) // mini-player clearance
@@ -252,7 +288,59 @@ struct AlbumDetailView: View {
 
     // MARK: - Hero
 
+    @ViewBuilder
     private var heroSection: some View {
+        if isSolidMode {
+            solidHeroSection
+        } else {
+            standardHeroSection
+        }
+    }
+
+    /// isSolid: cover CUADRADA y completa, full-width, bajo la barra de
+    /// navegación, sobre el fondo del color del borde (sin costura). El
+    /// título/botones van DEBAJO (titleButtonsSection).
+    private var solidHeroSection: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: coverTopInset)
+
+            coverArtImage
+                .frame(width: screenWidth, height: heroHeight)
+                .clipped()
+                .scaleEffect(stretchScale, anchor: .bottom)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Título + metadata + botones DEBAJO del cover (solo modo isSolid), sobre
+    /// el color del borde. Texto negro/blanco según la luminancia del fondo.
+    private var titleButtonsSection: some View {
+        VStack(alignment: .center, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(vm.displayAlbum.name)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+
+                if vm.displayAlbum.isExplicit {
+                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75), size: 18)
+                }
+            }
+
+            metadataLine
+
+            playButtons
+                .padding(.top, 16)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+
+    private var standardHeroSection: some View {
         ZStack(alignment: .bottom) {
             // Stretchy header + extensión al notch + heroFade hacia pageBg.
             //
