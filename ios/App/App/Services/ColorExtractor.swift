@@ -15,7 +15,9 @@ final class PaletteCache: @unchecked Sendable {
     private init() {
         memory.countLimit = 500
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        diskDir = caches.appendingPathComponent("palette_cache", isDirectory: true)
+        // v2: cambio de detección isSolid (anillo 6% + umbral 0.75). Nombre
+        // nuevo de carpeta para invalidar el caché viejo y reevaluar todo.
+        diskDir = caches.appendingPathComponent("palette_cache_v2", isDirectory: true)
         try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
     }
 
@@ -316,12 +318,15 @@ enum ColorExtractor {
 
     // MARK: Solid detection
 
-    /// Mirrors JS detectSolidColor: samples border ring (12% of shorter side),
-    /// quantises into 64-step buckets, declares solid when ≥55% agree.
-    /// Returns the **true average** colour of the winning bucket's pixels
-    /// (not the quantised centroid) so whites stay white, creams stay cream, etc.
+    /// Muestrea un anillo de borde FINO (6% del lado corto), cuantiza en buckets
+    /// de 64 pasos y declara solid cuando el bucket dominante cubre ≥75% del
+    /// anillo. Calibrado midiendo covers reales: bordes 100% planos (Yeezus,
+    /// TLOP ≈ 0.96) quedan dentro; bordes solo "parecidos" (Bully ≈ 0.58) fuera
+    /// — antes con anillo 12%/umbral 0.55 entraban falsos positivos como Bully.
+    /// Devuelve la media real del bucket ganador (no el centroide cuantizado)
+    /// para que blancos sigan blancos, cremas crema, etc.
     private static func detectSolid(px: [UInt8], w: Int, h: Int) -> (UIColor, UIColor)? {
-        let depth = max(3, Int(CGFloat(min(w, h)) * 0.12))
+        let depth = max(3, Int(CGFloat(min(w, h)) * 0.06))
 
         struct Bucket: Hashable { let r, g, b: UInt8 }
         var counts: [Bucket: Int] = [:]
@@ -352,7 +357,7 @@ enum ColorExtractor {
 
         guard total > 0,
               let dominant = counts.max(by: { $0.value < $1.value }),
-              CGFloat(dominant.value) / CGFloat(total) >= 0.55
+              CGFloat(dominant.value) / CGFloat(total) >= 0.75
         else { return nil }
 
         // Use the real average of pixels that fell into the dominant bucket.
