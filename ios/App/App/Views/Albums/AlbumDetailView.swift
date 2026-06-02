@@ -129,7 +129,7 @@ struct AlbumDetailView: View {
     /// barra de navegación —botón atrás y menú— en cualquier dispositivo y
     /// largo de título. El espacio sobrante queda como aire sobre la cover
     /// (estilo Apple Music), no como hueco antes de la lista.
-    private var heroHeight: CGFloat { safeAreaTop + coverSize + 285 }
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + 270 }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
@@ -366,11 +366,12 @@ struct AlbumDetailView: View {
     private var heroContent: some View {
         VStack(spacing: 0) {
             if vm.animatedArtworkUrl == nil {
-                // Sin motion: cover estática grande, subida hacia la barra de
-                // navegación. El bloque está anclado abajo (los botones quedan
-                // sobre la lista), así que la posición vertical de la cover la
-                // fija `heroHeight − cover − gap − (título+botones)`. El spacer
-                // superior solo marca un mínimo holgado.
+                // Sin motion: cover estática grande, anclada abajo (los botones
+                // quedan sobre la lista). SOLO este spacer superior es flexible;
+                // absorbe todo el sobrante, de modo que la cover queda por debajo
+                // de la barra. El hueco cover↔título es FIJO: si fuera flexible,
+                // SwiftUI repartiría el sobrante entre ambos spacers y la cover
+                // subiría a media altura, solapando el botón atrás y el menú.
                 Spacer(minLength: 40)
 
                 // When the cover is solid + light (white, cream, warm pastels), drop the
@@ -387,7 +388,7 @@ struct AlbumDetailView: View {
                         y: vm.palette.isSolid ? 2 : 8
                     )
 
-                Spacer(minLength: 10)
+                Spacer().frame(height: 14)   // hueco FIJO cover↔título
             } else {
                 // Con motion: el vídeo es la identidad visual del header.
                 // Empujamos título/botones al fondo del hero, sobre el scrim.
