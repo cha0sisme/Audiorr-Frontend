@@ -195,6 +195,12 @@ final class PlaylistDetailViewModel: ObservableObject {
 
 // MARK: - Main View
 
+/// Propaga la altura medida del bloque de título del hero hacia PlaylistDetailView.
+private struct PlaylistTitleBlockHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 52
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
@@ -202,10 +208,18 @@ struct PlaylistDetailView: View {
     // See AlbumDetailView for rationale: defends against ghost taps after
     // .navigationTransition(.zoom) pop firing the play action of a no-longer-visible view.
     @State private var isViewVisible = false
+    /// Altura medida del bloque de título+metadata (para que heroHeight la
+    /// incluya y los huecos del hero no dependan del nº de líneas). Igual que
+    /// AlbumDetailView.
+    @State private var titleBlockHeight: CGFloat = 52
     var onDismiss: (() -> Void)?
     var onDeleted: (() -> Void)?
 
-    private let heroHeight: CGFloat = 440
+    /// Altura del hero = inset + cover + título (medido) + huecos fijos. Misma
+    /// mecánica que AlbumDetailView: la cover queda anclada bajo la barra y el
+    /// hueco hacia la lista es constante. 164 = inset extra (88) + 3 huecos de
+    /// 20 + bloque de botones (~48), menos el hueco final reducido.
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
 
     init(playlist: NavidromePlaylist, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
@@ -229,14 +243,14 @@ struct PlaylistDetailView: View {
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
 
     /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
-    /// estilo Apple Music: ~55% del width con cap a 260pt para no inflar
-    /// en iPad. En iPhone 15/16 ≈ 216pt, en Pro Max ≈ 236pt, en SE ≈ 206pt.
+    /// estilo Apple Music: ~72% del width con cap a 320pt. En iPhone 15/16
+    /// ≈ 283pt, en Pro Max ≈ 310pt, en SE ≈ 270pt. (Igual que AlbumDetail.)
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
     private var coverSize: CGFloat {
         let width: CGFloat = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
-        return min(width * 0.55, 260)
+        return min(width * 0.72, 320)
     }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -400,7 +414,11 @@ struct PlaylistDetailView: View {
 
     private var heroContent: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 100)
+            // Cover anclada ARRIBA, por debajo de la barra de navegación. Misma
+            // mecánica que AlbumDetailView: safeAreaTop no incluye la barra
+            // (~44pt) y la ScrollView con ignoresSafeArea sube el contenido
+            // ~32pt, por eso el inset es safeAreaTop+88 (cover en ~y118).
+            Spacer().frame(height: safeAreaTop + 88)
 
             // Cover art — centered
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
@@ -408,7 +426,7 @@ struct PlaylistDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
 
-            Spacer(minLength: 20)
+            Spacer().frame(height: 20)   // hueco FIJO cover↔título
 
             // Title + metadata — centered
             VStack(alignment: .center, spacing: 5) {
@@ -423,14 +441,21 @@ struct PlaylistDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: PlaylistTitleBlockHeightKey.self, value: g.size.height)
+                }
+            )
 
-            // Action buttons — centered. Más aire respecto al songlist
-            // de debajo (estilo Apple Music iOS 26.4).
+            // Action buttons. Hueco superior fijo (20pt); el inferior, hacia la
+            // lista, lo da el spacer final (pequeño y constante).
             actionButtons
-                .padding(.top, 18)
-                .padding(.bottom, 44)
+                .padding(.top, 20)
+
+            Spacer(minLength: 8)   // hueco FIJO botones↔lista (≈18pt con heroHeight)
         }
         .frame(maxWidth: .infinity)
+        .onPreferenceChange(PlaylistTitleBlockHeightKey.self) { titleBlockHeight = $0 }
     }
 
     /// Subtítulo del hero, dependiente del tipo de playlist:
