@@ -195,6 +195,12 @@ final class PlaylistDetailViewModel: ObservableObject {
 
 // MARK: - Main View
 
+/// Propaga la altura medida del bloque de título del hero hacia PlaylistDetailView.
+private struct PlaylistTitleBlockHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 52
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var scrollY: CGFloat = 0
@@ -202,13 +208,18 @@ struct PlaylistDetailView: View {
     // See AlbumDetailView for rationale: defends against ghost taps after
     // .navigationTransition(.zoom) pop firing the play action of a no-longer-visible view.
     @State private var isViewVisible = false
+    /// Altura medida del bloque de título+metadata (para que heroHeight la
+    /// incluya y los huecos del hero no dependan del nº de líneas). Igual que
+    /// AlbumDetailView.
+    @State private var titleBlockHeight: CGFloat = 52
     var onDismiss: (() -> Void)?
     var onDeleted: (() -> Void)?
 
-    /// Altura del hero = ancho de pantalla. El cover se muestra a pantalla
-    /// completa (edge-to-edge) como un cuadrado, estilo Apple Music iOS 26.4.
-    /// Igual que AlbumDetailView.
-    private var heroHeight: CGFloat { screenWidth }
+    /// Altura del hero = inset + cover + título (medido) + huecos fijos. Misma
+    /// mecánica que AlbumDetailView: la cover queda anclada bajo la barra y el
+    /// hueco hacia la lista es constante. 164 = inset extra (88) + 3 huecos de
+    /// 20 + bloque de botones (~48), menos el hueco final reducido.
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
 
     init(playlist: NavidromePlaylist, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
@@ -219,6 +230,7 @@ struct PlaylistDetailView: View {
     // MARK: Scroll-derived values
 
     private var scrollProgress: CGFloat { min(max(scrollY / heroHeight, 0), 1) }
+    private var heroOpacity: CGFloat    { 1 - min(scrollProgress * 1.2, 0.92) }
     private var stickyOpacity: CGFloat  { min(max((scrollProgress - 0.55) / 0.25, 0), 1) }
     /// Stretchy header scale: proporcional al pull-down. Anchor `.bottom`
     /// para que el header gane altura hacia arriba en el rebound.
@@ -230,12 +242,15 @@ struct PlaylistDetailView: View {
     private var isLight: Bool { vm.palette.isPrimaryLight }
     private var pageBg: Color { Color(vm.palette.pageBackgroundColor) }
 
-    /// Ancho de pantalla — usado para el cover a pantalla completa (edge-to-edge).
+    /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
+    /// estilo Apple Music: ~72% del width con cap a 320pt. En iPhone 15/16
+    /// ≈ 283pt, en Pro Max ≈ 310pt, en SE ≈ 270pt. (Igual que AlbumDetail.)
     /// Usa `connectedScenes` porque `UIScreen.main` está deprecado en iOS 26.
-    private var screenWidth: CGFloat {
-        UIApplication.shared.connectedScenes
+    private var coverSize: CGFloat {
+        let width: CGFloat = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.width ?? 393
+        return min(width * 0.72, 320)
     }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -259,7 +274,6 @@ struct PlaylistDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
-                    titleButtonsSection
                     songListSection
                     statsFooter
                     Spacer(minLength: 120)
@@ -333,56 +347,116 @@ struct PlaylistDetailView: View {
     // MARK: - Hero
 
     private var heroSection: some View {
-        // Cover a pantalla completa (edge-to-edge) que llena el header y se
-        // funde al color de página (heroFade). El título/botones van DEBAJO
-        // (titleButtonsSection). Mismo patrón que AlbumDetailView.
-        heroBackground
-            .overlay(alignment: .bottom) {
-                // Fundido SUTIL al color de página solo en el borde inferior.
-                LinearGradient.heroFade(to: pageBg)
-                    .frame(height: heroHeight * 0.2)
-                    .allowsHitTesting(false)
-            }
-            .offset(y: -safeAreaTop)
-            .scaleEffect(stretchScale, anchor: .bottom)
-            .frame(maxWidth: .infinity)
-            .frame(height: heroHeight)
+        ZStack(alignment: .bottom) {
+            // Stretchy header + extensión al notch + heroFade hacia pageBg.
+            // Mismo patrón que AlbumDetailView: frame extendido + overlay del
+            // fade ANTES del offset (viaja con el backdrop) + offset compensatorio.
+            // El ZStack mantiene `frame(height: heroHeight)` para no romper el
+            // flow del scroll content; el offset es puramente visual.
+            heroBackground
+                .frame(height: heroHeight + safeAreaTop)
+                .overlay(alignment: .bottom) {
+                    LinearGradient.heroFade(to: pageBg)
+                        .frame(height: heroHeight * 0.55)
+                        .allowsHitTesting(false)
+                }
+                .offset(y: -safeAreaTop)
+                .scaleEffect(stretchScale, anchor: .bottom)
+
+            // Content sits above the masked background — no fade applied to it
+            heroContent
+                .opacity(heroOpacity)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: heroHeight)
     }
 
     @ViewBuilder
     private var heroBackground: some View {
-        // Cover a pantalla completa (edge-to-edge), estilo Apple Music iOS 26.4.
-        // `Color.clear.overlay` contiene PlaylistCoverImage (scaledToFill) para
-        // que NO infle el ancho del layout (desbordaba bio/lista por los lados).
-        Color.clear
-            .overlay {
-                PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
+        if vm.palette.isSolid {
+            Color(vm.palette.primary).ignoresSafeArea(edges: .top)
+        } else {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color(vm.palette.primary).opacity(0.82),
+                        Color(vm.palette.secondary).opacity(0.76)
+                    ],
+                    startPoint: .topTrailing,
+                    endPoint: .bottomLeading
+                )
+
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.38),
+                        Color.black.opacity(0.22),
+                        Color.black.opacity(0.06)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
             }
-            .frame(width: screenWidth, height: heroHeight + safeAreaTop)
+            .background {
+                if let img = vm.coverImage {
+                    Image(uiImage: img)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: 55)
+                        .scaleEffect(1.25)
+                } else {
+                    Color(vm.palette.primary)
+                }
+            }
             .clipped()
             .ignoresSafeArea(edges: .top)
+        }
     }
 
-    /// Título + metadata + botones, DEBAJO del cover, sobre el color de página.
-    /// Colores según la luminancia del fondo, estilo Apple Music iOS 26.4.
-    private var titleButtonsSection: some View {
-        VStack(alignment: .center, spacing: 5) {
-            Text(vm.displayPlaylist.name)
-                .font(.system(size: 26, weight: .bold))
-                .foregroundStyle(isLight ? Color.black : .white)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.75)
+    private var heroContent: some View {
+        VStack(spacing: 0) {
+            // Cover anclada ARRIBA, por debajo de la barra de navegación. Misma
+            // mecánica que AlbumDetailView: safeAreaTop no incluye la barra
+            // (~44pt) y la ScrollView con ignoresSafeArea sube el contenido
+            // ~32pt, por eso el inset es safeAreaTop+88 (cover en ~y118).
+            Spacer().frame(height: safeAreaTop + 88)
 
-            metadataLine
+            // Cover art — centered
+            PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
+                .frame(width: coverSize, height: coverSize)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
+                .coverParallax()   // animated artwork sintético (giroscopio)
 
+            Spacer().frame(height: 20)   // hueco FIJO cover↔título
+
+            // Title + metadata — centered
+            VStack(alignment: .center, spacing: 5) {
+                Text(vm.displayPlaylist.name)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+
+                metadataLine
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 20)
+            .background(
+                GeometryReader { g in
+                    Color.clear.preference(key: PlaylistTitleBlockHeightKey.self, value: g.size.height)
+                }
+            )
+
+            // Action buttons. Hueco superior fijo (20pt); el inferior, hacia la
+            // lista, lo da el spacer final (pequeño y constante).
             actionButtons
-                .padding(.top, 16)
+                .padding(.top, 20)
+
+            Spacer(minLength: 8)   // hueco FIJO botones↔lista (≈18pt con heroHeight)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
+        .onPreferenceChange(PlaylistTitleBlockHeightKey.self) { titleBlockHeight = $0 }
     }
 
     /// Subtítulo del hero, dependiente del tipo de playlist:

@@ -209,6 +209,61 @@ enum ColorExtractor {
 
     // MARK: Public
 
+    /// Color DOMINANTE del borde (anillo exterior) de la cover. Se usa como
+    /// fondo del header para que el borde de la cover se funda con el fondo sin
+    /// costura visible, como Apple Music: Yeezus → blanco real, TLOP → naranja,
+    /// Donda → negro. Usa la MODA (bucket dominante), no la media, para que un
+    /// elemento minoritario en el borde (la pegatina roja de Yeezus, reflejos
+    /// del CD…) no tiña el fondo. Devuelve la media real de ese bucket.
+    static func edgeColor(from image: UIImage) -> UIColor? {
+        guard let cgImage = image.cgImage else { return nil }
+
+        let maxDim = 120
+        let scale  = min(CGFloat(maxDim) / CGFloat(max(cgImage.width, cgImage.height)), 1.0)
+        let w = max(1, Int(CGFloat(cgImage.width)  * scale))
+        let h = max(1, Int(CGFloat(cgImage.height) * scale))
+
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(
+            data: &px, width: w, height: h,
+            bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        // Anillo exterior ~6% del lado más corto (mín. 2px).
+        let depth = max(2, Int(CGFloat(min(w, h)) * 0.06))
+
+        struct Bucket: Hashable { let r, g, b: UInt8 }
+        var counts: [Bucket: Int] = [:]
+        var sums: [Bucket: (r: UInt64, g: UInt64, b: UInt64)] = [:]
+
+        func add(_ x: Int, _ y: Int) {
+            let o = (y * w + x) * 4
+            let pr = px[o], pg = px[o+1], pb = px[o+2]
+            let bk = Bucket(r: UInt8(UInt16(pr) / 64 * 64),
+                            g: UInt8(UInt16(pg) / 64 * 64),
+                            b: UInt8(UInt16(pb) / 64 * 64))
+            counts[bk, default: 0] += 1
+            let prev = sums[bk, default: (0, 0, 0)]
+            sums[bk] = (prev.r + UInt64(pr), prev.g + UInt64(pg), prev.b + UInt64(pb))
+        }
+        for x in 0..<w {
+            for d in 0..<depth { add(x, d); add(x, h-1-d) }
+        }
+        for y in depth..<max(depth, h-depth) {
+            for d in 0..<depth { add(d, y); add(w-1-d, y) }
+        }
+
+        guard let dominant = counts.max(by: { $0.value < $1.value }) else { return nil }
+        let n = UInt64(dominant.value)
+        let s = sums[dominant.key]!
+        return UIColor(red: CGFloat(s.r / n) / 255,
+                       green: CGFloat(s.g / n) / 255,
+                       blue: CGFloat(s.b / n) / 255, alpha: 1)
+    }
+
     static func extract(from image: UIImage) -> AlbumPalette {
         guard let cgImage = image.cgImage else { return .default }
 
