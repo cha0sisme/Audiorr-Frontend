@@ -114,11 +114,15 @@ struct AlbumDetailView: View {
     @State private var isViewVisible = false
     var onDismiss: (() -> Void)?
 
-    /// Altura del hero constante. Holgada para la cover estática grande
-    /// (subida hacia la barra) y para el motion artwork, sin cambiar
-    /// dinámicamente — hacerlo rompía la geometría inicial del ScrollView y
-    /// que el background se extendiera al notch al cargar motion.
-    private let heroHeight: CGFloat = 524
+    /// Altura del hero. Se ata a `safeAreaTop + coverSize` (ambos estables
+    /// desde el arranque, NO dependen de datos async como el motion artwork,
+    /// así que la geometría inicial del ScrollView no se rompe). Como el
+    /// contenido del hero está anclado abajo, fijar la altura en función de
+    /// `safeAreaTop` garantiza que la cover quede SIEMPRE por debajo de la
+    /// barra de navegación —botón atrás y menú— en cualquier dispositivo y
+    /// largo de título. El espacio sobrante queda como aire sobre la cover
+    /// (estilo Apple Music), no como hueco antes de la lista.
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + 285 }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: AlbumDetailViewModel(album: album))
