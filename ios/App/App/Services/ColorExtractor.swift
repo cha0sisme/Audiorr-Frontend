@@ -109,12 +109,24 @@ struct AlbumPalette {
         return (r * 0.299 + g * 0.587 + b * 0.114) > 0.5
     }
 
-    /// Page background — blends 30% primary + 70% near-black (dark covers)
-    /// or 65% primary + 35% white (light covers). Same formula as the JS frontend.
+    /// Page background, estilo Apple Music iOS 26.4 (el color del artwork tiñe
+    /// la página):
+    ///  - Cover oscura → mezcla 30% primary + 70% casi-negro.
+    ///  - Cover clara y SATURADA (naranja tipo TLOP, amarillo, cian) → se
+    ///    mantiene el color RICO (mismo hue/saturación, brillo controlado para
+    ///    que el texto siga legible). NO se lava a blanco.
+    ///  - Cover clara y NEUTRA (blanco/gris tipo Yeezus) → casi blanco.
     var pageBackgroundColor: UIColor {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
         primary.getRed(&r, green: &g, blue: &b, alpha: nil)
         if isPrimaryLight {
+            var h: CGFloat = 0, s: CGFloat = 0, br: CGFloat = 0, a: CGFloat = 0
+            primary.getHue(&h, saturation: &s, brightness: &br, alpha: &a)
+            if s >= 0.30 {
+                // Clara + colorida: conservar el color saturado (como Apple).
+                return UIColor(hue: h, saturation: min(s, 0.92), brightness: min(br, 0.86), alpha: 1)
+            }
+            // Clara + neutra: casi blanco.
             return UIColor(red: r * 0.65 + 0.35,
                            green: g * 0.65 + 0.35,
                            blue:  b * 0.65 + 0.35, alpha: 1)
