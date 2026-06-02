@@ -46,6 +46,12 @@ struct NowPlayingViewerView: View {
     /// layout bottom-grouped (sin cover estático) y el scrim extra de lyrics.
     private var hasBackdropVideo: Bool { canvasUrl != nil || animatedArtworkUrl != nil }
 
+    /// Modo "hero animado": hay artwork animado de álbum pero NO canvas de
+    /// canción. En vez de vídeo full-bleed (estilo Spotify, reservado al
+    /// canvas), se integra como el hero de AlbumDetail — vídeo arriba fundido
+    /// al color de paleta, con los controles sobre ese color (no translúcidos).
+    private var animatedHeroMode: Bool { canvasUrl == nil && animatedArtworkUrl != nil }
+
     /// Firma que cambia cuando aparece/desaparece un backdrop de vídeo o
     /// cuando se sustituye por otro. Permite que la animación del body
     /// dispare crossfade en cualquiera de esas transiciones.
@@ -74,7 +80,7 @@ struct NowPlayingViewerView: View {
                 if let canvasUrl {
                     videoBackdrop(url: canvasUrl)
                 } else if let animatedArtworkUrl {
-                    videoBackdrop(url: animatedArtworkUrl)
+                    animatedHeroBackdrop(url: animatedArtworkUrl, geo: geo)
                 } else {
                     // Sin vídeo: mismo lenguaje que el hero de AlbumDetail —
                     // cover difuminada tintada con la paleta del artwork y
@@ -115,7 +121,10 @@ struct NowPlayingViewerView: View {
                         Spacer()
 
                     } else if hasBackdropVideo {
-                        // Canvas mode: all controls grouped at bottom (Spotify-style)
+                        // Con vídeo: controles agrupados abajo. Sobre canvas
+                        // full-bleed van translúcidos (glass); en el hero
+                        // animado van sobre el color de paleta, así que estilo
+                        // sólido como en el modo normal.
                         Spacer()
 
                         songInfoView
@@ -128,7 +137,7 @@ struct NowPlayingViewerView: View {
                         Spacer()
                             .frame(height: 16)
 
-                        PlaybackControlsView(glassStyle: true)
+                        PlaybackControlsView(glassStyle: !animatedHeroMode)
 
                         Spacer()
                             .frame(height: 16)
@@ -407,6 +416,48 @@ struct NowPlayingViewerView: View {
 
         canvasGradient
             .ignoresSafeArea()
+
+        if showLyrics && hasLyrics {
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+                .transition(.opacity)
+        }
+    }
+
+    // MARK: - Animated Hero Backdrop (estilo AlbumDetail)
+
+    /// Backdrop para artwork animado sin canvas: el color de paleta llena la
+    /// pantalla y el vídeo motion ocupa la parte superior, fundido al color de
+    /// página por abajo — el mismo hero de AlbumDetail, integrado en el
+    /// reproductor. Los controles quedan sobre el color de paleta, no sobre el
+    /// vídeo. (Si hay lyrics activas, se cede al modo lyrics como hasta ahora.)
+    @ViewBuilder
+    private func animatedHeroBackdrop(url: URL, geo: GeometryProxy) -> some View {
+        let pageBg = Color(palette.pageBackgroundColor)
+
+        // Base: color de paleta a pantalla completa.
+        paletteBackground
+            .ignoresSafeArea()
+
+        // Vídeo motion arriba, edge-to-edge, fundido a la paleta por abajo.
+        VStack(spacing: 0) {
+            CanvasView(url: url, videoOffsetY: 40)
+                .frame(height: geo.size.height * 0.56)
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [pageBg.opacity(0), pageBg],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 170)
+                    .allowsHitTesting(false)
+                }
+                .clipped()
+                .ignoresSafeArea(edges: .top)
+
+            Spacer(minLength: 0)
+        }
+        .transition(.opacity)
 
         if showLyrics && hasLyrics {
             Color.black.opacity(0.45)
