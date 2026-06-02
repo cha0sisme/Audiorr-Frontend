@@ -310,6 +310,15 @@ struct AlbumDetailView: View {
             coverArtImage
                 .frame(width: screenWidth, height: heroHeight)
                 .clipped()
+                .overlay(alignment: .bottom) {
+                    // Fade MUY sutil del borde inferior del cover hacia el fondo
+                    // (color del borde), al estilo del artwork animado. Solo
+                    // difumina los últimos píxeles para que la cover no corte
+                    // en seco contra el fondo.
+                    LinearGradient.heroFade(to: pageBg)
+                        .frame(height: heroHeight * 0.14)
+                        .allowsHitTesting(false)
+                }
                 .scaleEffect(stretchScale, anchor: .bottom)
         }
         .frame(maxWidth: .infinity)
