@@ -537,6 +537,7 @@ struct NowPlayingViewerView: View {
         .shadow(color: .black.opacity(0.5), radius: 28, y: 10)
         .scaleEffect(artworkScale)
         .animation(.spring(response: 0.55, dampingFraction: 0.72), value: state.isPlaying)
+        .coverParallax()   // animated artwork sintético (giroscopio)
     }
 
     private var artworkPlaceholder: some View {
