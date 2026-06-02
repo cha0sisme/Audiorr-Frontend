@@ -497,6 +497,12 @@ final class BackendService {
         if injectBearer, let token = try? await AuthTokenStore.shared.ensureSession() {
             finalRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        // Identifica la plataforma del cliente al backend (sesiones activas,
+        // métricas). El backend normaliza "iOS" → "ios" contra la whitelist
+        // web|ios|android. Se inyecta aquí —el cuello común de todo el REST,
+        // incluidos login/refresh (injectBearer:false) y los paths que usan
+        // makeRequest— para que viaje en TODAS las requests del cliente.
+        finalRequest.setValue("iOS", forHTTPHeaderField: "X-Client-Platform")
 
         let (data, response) = try await session.data(for: finalRequest)
 
