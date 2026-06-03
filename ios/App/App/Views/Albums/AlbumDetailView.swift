@@ -145,7 +145,15 @@ struct AlbumDetailView: View {
     @State private var isViewVisible = false
     /// Altura medida del bloque de título+metadata (para que heroHeight la
     /// incluya y los huecos del hero no dependan del nº de líneas del título).
-    @State private var titleBlockHeight: CGFloat = 52
+    /// Con la reserva fija de 2 líneas (titleTextReservedHeight) este valor es
+    /// estable (~87), así que el default coincide con la medición real y no hay
+    /// salto de layout en el primer frame.
+    @State private var titleBlockHeight: CGFloat = 87
+
+    /// Reserva fija para el texto del título: 2 líneas a 26pt bold (~64pt). Hace
+    /// que el bloque título ocupe siempre el mismo alto sea cual sea la longitud
+    /// del título → el botón de play no se mueve y el hero no rebosa sobre la bio.
+    private let titleTextReservedHeight: CGFloat = 64
     var onDismiss: (() -> Void)?
 
     /// Altura del hero = inset + cover + título (medido) + huecos fijos. Incluir
@@ -162,7 +170,12 @@ struct AlbumDetailView: View {
     private var isSolidMode: Bool { vm.animatedArtworkUrl == nil && vm.palette.isSolid }
 
     private var heroHeight: CGFloat {
-        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 164)
+        // 184 = inset extra (88) + hueco cover↔título (20) + hueco título↔botones
+        // (20) + alto del bloque de botones (~48) + hueco botones↔lista (8). Antes
+        // era 164 y el contenido rebosaba ~20pt el frame del hero, solapándose con
+        // la bio. Con titleBlockHeight ya estable (reserva de 2 líneas) el frame
+        // contiene exactamente el contenido.
+        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 184)
     }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
@@ -321,12 +334,14 @@ struct AlbumDetailView: View {
                 .frame(width: screenWidth, height: heroHeight)
                 .clipped()
                 .overlay(alignment: .bottom) {
-                    // Fade MUY sutil del borde inferior del cover hacia el fondo
-                    // (color del borde), al estilo del artwork animado. Solo
-                    // difumina los últimos píxeles para que la cover no corte
-                    // en seco contra el fondo.
+                    // Fundido del borde inferior del cover hacia el fondo (color
+                    // del borde). Curva heroFade (S suave) a ~22% del alto: lo
+                    // bastante corto para no comerse la portada, pero con altura
+                    // suficiente para que la curva NO se comprima y el resultado
+                    // sea un fundido real, sin costura. A 14% la curva se
+                    // aplastaba y dejaba un borde duro.
                     LinearGradient.heroFade(to: pageBg)
-                        .frame(height: heroHeight * 0.14)
+                        .frame(height: heroHeight * 0.22)
                         .allowsHitTesting(false)
                 }
                 .scaleEffect(stretchScale, anchor: .bottom)
@@ -358,7 +373,9 @@ struct AlbumDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
-        .padding(.top, 14)
+        // Título más pegado al cover en modo isSolid (antes 14pt). El fundido del
+        // borde inferior del cover ya aporta una transición suave hacia esta zona.
+        .padding(.top, 4)
         .padding(.bottom, 12)
     }
 
@@ -417,11 +434,16 @@ struct AlbumDetailView: View {
                 // extiende hacia abajo, recortado por `masksToBounds`.
                 CanvasView(url: motionUrl, autoplay: true, videoOffsetY: 80)
 
+                // Scrim inferior para legibilidad del título. Se adapta a la
+                // luminancia del artwork: wash oscuro bajo título blanco (covers
+                // oscuras), wash claro bajo título negro (covers blancas/crema).
+                // Sin esto, un artwork animado claro dejaba el título ilegible.
+                let scrimBase: Color = isLight ? .white : .black
                 LinearGradient(
                     colors: [
-                        Color.black.opacity(0),
-                        Color.black.opacity(0.18),
-                        Color.black.opacity(0.45)
+                        scrimBase.opacity(0),
+                        scrimBase.opacity(isLight ? 0.30 : 0.18),
+                        scrimBase.opacity(isLight ? 0.70 : 0.45)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -512,15 +534,16 @@ struct AlbumDetailView: View {
             }
 
             // Title + metadata — centered.
-            // Con motion, forzamos blanco siempre: el vídeo de fondo puede
-            // tener cualquier dominante de color y `isLight` (calculado desde
-            // la cover estática) no es fiable sobre el clip.
-            let titleColor: Color = vm.animatedArtworkUrl != nil
-                ? .white
-                : (isLight ? Color.black : .white)
-            let badgeColor: Color = vm.animatedArtworkUrl != nil
-                ? Color.white.opacity(0.75)
-                : (isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75))
+            // El título respeta SIEMPRE la luminancia (isLight), también con
+            // motion: el artwork animado es la misma portada del álbum, así que
+            // la paleta extraída de la cover estática es representativa de su
+            // dominante. Forzar blanco hacía invisible el título sobre artworks
+            // animados blancos/crema. El scrim del header (heroBackground) se
+            // adapta a isLight para garantizar contraste en ambos casos.
+            let titleColor: Color = isLight ? Color.black : .white
+            let badgeColor: Color = isLight
+                ? Color.black.opacity(0.45)
+                : Color.white.opacity(0.75)
 
             VStack(alignment: .center, spacing: 5) {
                 HStack(spacing: 8) {
@@ -535,6 +558,12 @@ struct AlbumDetailView: View {
                         ExplicitBadge(color: badgeColor, size: 18)
                     }
                 }
+                // Reserva fija de 2 líneas: el bloque título mide siempre lo
+                // mismo independientemente de la longitud del título, así el
+                // botón de play queda anclado y NUNCA invade la bio (antes la
+                // altura del hero dependía de una medición async vía
+                // PreferenceKey que no se propagaba fiablemente con 2 líneas).
+                .frame(height: titleTextReservedHeight)
 
                 metadataLine
             }
