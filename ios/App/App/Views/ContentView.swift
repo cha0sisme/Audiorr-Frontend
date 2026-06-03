@@ -13,6 +13,10 @@ struct ContentView: View {
     // Navigation from viewer context menu
     @State private var navigationAlbum: NavidromeAlbum?
     @State private var navigationArtist: NavidromeArtist?
+    // Paths de los stacks overlay — permiten navegación profunda (canción →
+    // artista → álbum → …) por los destinos declarados en la raíz del overlay.
+    @State private var albumOverlayPath = NavigationPath()
+    @State private var artistOverlayPath = NavigationPath()
     @Namespace private var overlayHeroNS
 
     var body: some View {
@@ -74,19 +78,31 @@ struct ContentView: View {
 
             // Navigation from viewer context menu — full-screen overlay (not sheet)
             if let album = navigationAlbum {
-                NavigationStack {
+                NavigationStack(path: $albumOverlayPath) {
                     AlbumDetailView(album: album, onDismiss: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                             navigationAlbum = nil
                         }
                     })
+                    .navigationDestination(for: NavidromeAlbum.self) {
+                        AlbumDetailView(album: $0)
+                    }
+                    .navigationDestination(for: NavidromeArtist.self) {
+                        ArtistDetailView(artist: $0, heroNamespace: overlayHeroNS)
+                    }
+                    .navigationDestination(for: NavidromePlaylist.self) {
+                        PlaylistDetailView(playlist: $0)
+                    }
+                    .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
                 }
+                // En el NavigationStack: el path llega a los destinos empujados.
+                .navPath($albumOverlayPath)
                 .transition(.move(edge: .trailing))
                 .zIndex(5)
             }
 
             if let artist = navigationArtist {
-                NavigationStack {
+                NavigationStack(path: $artistOverlayPath) {
                     ArtistDetailView(artist: artist, heroNamespace: overlayHeroNS, onDismiss: {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.88)) {
                             navigationArtist = nil
@@ -106,6 +122,8 @@ struct ContentView: View {
                     }
                     .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
                 }
+                // En el NavigationStack: el path llega a los destinos empujados.
+                .navPath($artistOverlayPath)
                 .transition(.move(edge: .trailing))
                 .zIndex(5)
             }
@@ -130,6 +148,14 @@ struct ContentView: View {
                 nowPlaying.pendingNavigation = nil
                 handleNavigation(nav)
             }
+        }
+        // Al cerrar un overlay, vaciar su path para que la próxima apertura
+        // arranque limpia (el @State persiste mientras ContentView vive).
+        .onChange(of: navigationAlbum == nil) { _, isNil in
+            if isNil { albumOverlayPath = NavigationPath() }
+        }
+        .onChange(of: navigationArtist == nil) { _, isNil in
+            if isNil { artistOverlayPath = NavigationPath() }
         }
     }
 

@@ -1,6 +1,37 @@
 import SwiftUI
 import UIKit
 
+// MARK: - NavigationPath environment
+
+/// Binding al `NavigationPath` del NavigationStack contenedor, expuesto vía
+/// Environment.
+///
+/// Permite que vistas reutilizables y profundas (p.ej. `SongListView`) hagan
+/// push a través del ÚNICO conjunto de `navigationDestination(for:)` declarado
+/// en la RAÍZ del stack, en vez de declarar sus propios destinos. Declarar
+/// destinos dentro de vistas reutilizables que se apilan varias veces en el
+/// mismo stack provoca destinos duplicados ("solo se usa el más cercano a la
+/// raíz") y rompe la navegación al encadenar pantallas (Album → Artista →
+/// Album → …). Si la vista se usa fuera de un stack que inyecte el path, el
+/// valor es `nil` y el push se ignora (no crashea).
+private struct NavPathKey: EnvironmentKey {
+    static let defaultValue: Binding<NavigationPath>? = nil
+}
+
+extension EnvironmentValues {
+    var navPath: Binding<NavigationPath>? {
+        get { self[NavPathKey.self] }
+        set { self[NavPathKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Inyecta el path del stack para que las vistas hijas hagan push por él.
+    func navPath(_ path: Binding<NavigationPath>) -> some View {
+        environment(\.navPath, path)
+    }
+}
+
 // MARK: - Shared song list (Apple Music style)
 
 /// Reusable song table used by AlbumDetailView, PlaylistDetailView, etc.
@@ -25,8 +56,11 @@ struct SongListView: View {
     /// "Drake feat. Snoop Dogg". Sobrescribe a `showArtist`.
     var albumArtist: String? = nil
 
-    @State private var navAlbum:  NavidromeAlbum?  = nil
-    @State private var navArtist: NavidromeArtist? = nil
+    /// Path del NavigationStack contenedor (inyectado por la raíz del stack).
+    /// Los pushes (ir al álbum / al artista) se hacen por aquí, usando los
+    /// `navigationDestination(for:)` declarados UNA sola vez en la raíz. Así no
+    /// se acumulan destinos duplicados al encadenar Album → Artista → Album → …
+    @Environment(\.navPath) private var navPath
     @State private var addToPlaylistSong: NavidromeSong? = nil
     /// Song cuyo menú "Ver artistas" (plural) está abierto. Vehiculiza la
     /// `ViewArtistsSheet` — cuando es nil, la sheet está cerrada. Identifiable
@@ -52,20 +86,17 @@ struct SongListView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        // Navigation driven by Button state — avoids NavigationLink-inside-Menu bug
-        .navigationDestination(item: $navAlbum)  { album  in AlbumDetailView(album: album) }
-        .navigationDestination(item: $navArtist) { artist in ArtistDetailView(artist: artist) }
         .sheet(item: $addToPlaylistSong) { song in
             AddToPlaylistView(songId: song.id, songTitle: song.title)
         }
         // Sheet "Ver artistas": modal nativo iOS, lista los artistas de la
-        // song y al elegir uno hace push hacia ArtistDetailView reusando el
-        // mismo `navArtist` state que el caso singular.
+        // song y al elegir uno hace push hacia ArtistDetailView por el path del
+        // stack (mismo mecanismo que el caso singular).
         .sheet(item: $viewArtistsSong) { song in
             ViewArtistsSheet(
                 artists: song.artists ?? [],
                 songTitle: song.title,
-                onSelect: { artist in navArtist = artist }
+                onSelect: { artist in navPath?.wrappedValue.append(artist) }
             )
         }
     }
@@ -95,6 +126,10 @@ struct SongListView: View {
             ? UIColor.black.withAlphaComponent(0.30)
             : UIColor.white.withAlphaComponent(0.45)
 
+        // Capturar el binding del path AHORA (durante el body) para que las
+        // UIActions diferidas del menú no lean @Environment fuera de tiempo.
+        let path = navPath
+
         return InstantMenuButton(tint: tint) {
             // — Playback section
             let playNext = UIAction(
@@ -117,11 +152,11 @@ struct SongListView: View {
                     title: L.goToAlbum,
                     image: UIImage(systemName: "music.note")
                 ) { _ in
-                    navAlbum = NavidromeAlbum(
+                    path?.wrappedValue.append(NavidromeAlbum(
                         id: albumId, name: song.album, artist: song.artist,
                         coverArt: song.coverArt, songCount: nil, duration: nil,
                         year: song.year, genre: song.genre, explicitStatus: nil
-                    )
+                    ))
                 }
                 sections.append(UIMenu(title: "", options: .displayInline, children: [goAlbum]))
             }
@@ -149,7 +184,7 @@ struct SongListView: View {
                         title: L.goToArtist,
                         image: UIImage(systemName: "person.crop.circle")
                     ) { _ in
-                        navArtist = NavidromeArtist(id: artistId, name: song.artist, albumCount: nil)
+                        path?.wrappedValue.append(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
                     }
                     sections.append(UIMenu(title: "", options: .displayInline, children: [goArtist]))
                 }

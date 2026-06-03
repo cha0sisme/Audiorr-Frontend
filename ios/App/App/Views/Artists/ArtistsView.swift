@@ -232,10 +232,11 @@ final class ArtistsViewModel: ObservableObject {
 struct ArtistsView: View {
     @ObservedObject private var vm = ArtistsViewModel.shared
     @State private var showSettings = false
+    @State private var navigationPath = NavigationPath()
     @Namespace private var heroNS
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ScrollView {
                 content
             }
@@ -261,6 +262,8 @@ struct ArtistsView: View {
                 SettingsView()
             }
         }
+        // En el NavigationStack: el path llega a los destinos empujados.
+        .navPath($navigationPath)
     }
 
     // MARK: - Content

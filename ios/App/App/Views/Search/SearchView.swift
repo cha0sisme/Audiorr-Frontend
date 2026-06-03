@@ -383,6 +383,7 @@ struct SearchView: View {
     @ObservedObject private var vm = SearchViewModel.shared
     @State private var searchText = ""
     @State private var currentTab: SearchTab = .all
+    @State private var navigationPath = NavigationPath()
     @FocusState private var searchFocused: Bool
     @Namespace private var heroNS
 
@@ -397,7 +398,7 @@ struct SearchView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
                 if vm.isSearching && !hasAnyResult {
                     ProgressView()
@@ -445,6 +446,8 @@ struct SearchView: View {
             }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
         }
+        // En el NavigationStack: el path llega a los destinos empujados.
+        .navPath($navigationPath)
         .searchable(text: $searchText, prompt: Text(L.searchPlaceholder))
         .searchFocused($searchFocused)
         .onAppear { searchFocused = true }

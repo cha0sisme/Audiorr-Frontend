@@ -161,18 +161,12 @@ struct SeeAllGridView: View {
         }
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
-        .navigationDestination(for: NavidromeAlbum.self) {
-            AlbumDetailView(album: $0)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
-        }
-        .navigationDestination(for: NavidromePlaylist.self) {
-            PlaylistDetailView(playlist: $0)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
-        }
-        .navigationDestination(for: NavidromeArtist.self) {
-            ArtistDetailView(artist: $0, heroNamespace: heroNS)
-                .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
-        }
+        // SeeAllGridView SIEMPRE se presenta dentro de un stack (Home, Artists,
+        // Search, overlays) que ya declara los destinos para Album/Artist/
+        // Playlist en su raíz. Declararlos aquí también creaba destinos
+        // DUPLICADOS en el mismo stack ("solo se usa el más cercano a la raíz")
+        // y rompía la navegación al encadenar. Los NavigationLink(value:) de
+        // arriba se resuelven con los destinos de la raíz.
     }
 }
 

@@ -168,6 +168,18 @@ struct PlaylistsView: View {
                 })
                 .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
             }
+            // Destinos para navegación profunda desde PlaylistDetail / SongList
+            // (p.ej. ir al artista o al álbum de una canción). Declarados en la
+            // raíz una sola vez; los pushes llegan por el path inyectado.
+            .navigationDestination(for: NavidromeAlbum.self) {
+                AlbumDetailView(album: $0)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
+            .navigationDestination(for: NavidromeArtist.self) {
+                ArtistDetailView(artist: $0, heroNamespace: heroNS)
+                    .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
+            }
+            .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
             .navigationDestination(isPresented: $showSettings) {
                 SettingsView()
             }
@@ -199,6 +211,8 @@ struct PlaylistsView: View {
                 Text(L.newPlaylistPrompt)
             }
         }
+        // En el NavigationStack: el path llega a los destinos empujados.
+        .navPath($navigationPath)
     }
 
     @ViewBuilder
