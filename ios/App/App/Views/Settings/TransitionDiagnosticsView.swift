@@ -1561,6 +1561,8 @@ struct TransitionDetailSheet: View {
         if let bk = record.bassKillGainA_atRampStart { rows.append(("bassKillA @rampStart", String(format: "%.2f dB", bk))) }
         if let ext = record.bassKillRampExtendedA { rows.append(("bassKill ramp extended", ext ? "Yes" : "No")) }
         if let m = record.midScoopGainAtSwap { rows.append(("midScoop @swap", String(format: "%.2f dB", m))) }
+        if let f = record.band0FreqA_atAntStart { rows.append(("band0A @antStart", String(format: "%.0f Hz", f))) }
+        if let f = record.band0FreqA_atPreRollStart { rows.append(("band0A @preRoll", String(format: "%.0f Hz", f))) }
         return rows
     }
 

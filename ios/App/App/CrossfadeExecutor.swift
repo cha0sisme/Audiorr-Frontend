@@ -940,6 +940,16 @@ class CrossfadeExecutor {
                                         rampStart: timings.filterStartTime, rampEnd: msEnd))
         }()
 
+        // Telemetría band 0 A bajo bassKill: freq del highpass en los extremos
+        // de la rampa anticipatoria [anticipationStart, preRollStart]. atAntStart
+        // debe leer band0AntAnchorFreq (ancla baja) y atPreRollStart startFreq,
+        // si la rampa aplicó. nil cuando no aplica (sin bassKill-extend o
+        // startFreq≤60). Audita que el ancla de setupInitialEQ disparó y band 0
+        // dejó de entrar como escalón mientras band 1 ya rampeaba.
+        let band0AntRampBassKill = bassKillExtendToAnticipation && preset.highpassA.startFreq > 60
+        let band0FreqAtAntStart: Double? = band0AntRampBassKill ? Double(Self.band0AntAnchorFreq) : nil
+        let band0FreqAtPreRollStart: Double? = band0AntRampBassKill ? Double(preset.highpassA.startFreq) : nil
+
         Task { @MainActor in
             TransitionDiagnostics.shared.filterPreRollAppliedA = preRollWillApply
             TransitionDiagnostics.shared.highShelfGainA_atEnd = highShelfEndA
@@ -983,6 +993,8 @@ class CrossfadeExecutor {
             TransitionDiagnostics.shared.midScoopPreRollApplied = preRollWillApply && useMidScoop
             TransitionDiagnostics.shared.highShelfPreRollApplied = preRollWillApply && useHighShelfCut
             TransitionDiagnostics.shared.midScoopGainAtSwap = midScoopGainSwap
+            TransitionDiagnostics.shared.band0FreqA_atAntStart = band0FreqAtAntStart
+            TransitionDiagnostics.shared.band0FreqA_atPreRollStart = band0FreqAtPreRollStart
             // aNaturalDecay: rama "A decae natural, B sin fade-in" en
             // gainForPlayerB. Deterministic con config — duplicar la fórmula
             // aquí es más simple que routear desde el path de cálculo runtime.
@@ -1607,8 +1619,15 @@ class CrossfadeExecutor {
         // v14.04 (R-C): band 0 highpass/lowpass A inicial delegado al manager.
         // v15.n — cuando el vector aplica, A arranca en el ancla baja (casi plena)
         // en vez de startFreq; la rampa de applyFiltersA hace el adelgazamiento.
+        // bassKillExtendAnt: extiende la misma ancla baja al caso con bassKill
+        // (band0AntExtendActive lo excluye por construcción). Sin el ancla a
+        // t=0, la rampa anticipatoria de band 0 del branch bassKill arrancaría
+        // en startFreq y produciría un escalón; con ella empalma en band0Ant-
+        // AnchorFreq. Solo presets audibles (startFreq>60).
+        let band0AntAnchored = band0AntExtendActive
+            || (bassKillExtendAnt && preset.highpassA.startFreq > 60)
         let band0A: BiquadCoefficients
-        if band0AntExtendActive {
+        if band0AntAnchored {
             band0A = BiquadCoefficientCalculator.highpass(
                 frequency: Self.band0AntAnchorFreq,
                 sampleRate: sampleRate,
@@ -2676,13 +2695,29 @@ class CrossfadeExecutor {
                 sampleRate: sampleRate,
                 easeOut: true
             )
-            let band0AltInitial = DSPFilterManager.band0CoefficientA_initial(
-                isCutTransition: isCutTransition,
-                useLowpassA: useLowpassA,
-                highpassPreset: preset.highpassA,
-                lowpassPreset: preset.lowpassA,
-                sampleRate: sampleRate
-            )
+            // band 0 highpass A: rampa anticipatoria expInterp(ancla→startFreq)
+            // en [anticipationStart, preRollStart], como en la rama band0Ant-
+            // Extend del caso sin bassKill. Sin esto band 0 quedaba congelado
+            // en startFreq mientras band 1 (bassKill) ya rampeaba → asimetría
+            // audible como escalón seco al entrar el preRoll. En preRollStart
+            // entrega startFreq → empalme C0 con el plateau band 0. Solo presets
+            // audibles (startFreq>60); el resto mantiene el initial congelado.
+            let band0AltCoef: BiquadCoefficients
+            if preset.highpassA.startFreq > 60 {
+                let antDur = preRollStart - timings.anticipationStartTime
+                let pAnt = antDur > 0 ? Float((t - timings.anticipationStartTime) / antDur) : 1.0
+                let freqA = expInterp(Self.band0AntAnchorFreq, preset.highpassA.startFreq, min(1, max(0, pAnt)))
+                band0AltCoef = BiquadCoefficientCalculator.highpass(
+                    frequency: freqA, sampleRate: sampleRate, Q: preset.highpassA.q)
+            } else {
+                band0AltCoef = DSPFilterManager.band0CoefficientA_initial(
+                    isCutTransition: isCutTransition,
+                    useLowpassA: useLowpassA,
+                    highpassPreset: preset.highpassA,
+                    lowpassPreset: preset.lowpassA,
+                    sampleRate: sampleRate
+                ).coefficient
+            }
             let band2AltInitial: BiquadCoefficients
             if !isCutTransition, useMidScoop, let ms = preset.midScoopA {
                 band2AltInitial = BiquadCoefficientCalculator.parametric(
@@ -2696,7 +2731,7 @@ class CrossfadeExecutor {
                 preset: preset.highShelfA,
                 sampleRate: sampleRate
             )
-            dspA.setCoefficients(band0: band0AltInitial.coefficient,
+            dspA.setCoefficients(band0: band0AltCoef,
                                  band1: band1Run.coefficient,
                                  band2: band2AltInitial,
                                  band3: band3AltInitial)

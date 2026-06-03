@@ -410,6 +410,12 @@ final class TransitionDiagnostics {
     /// Sin tail-easing ≈ endGain del preset; con tail-easing debe relajarse
     /// hacia holdTarget (≈ endGain·0.35). Auditá si el tail del scoop dispara.
     var midScoopGainAtSwap: Double? = nil
+    /// Freq (Hz) del highpass band 0 A en anticipationStart y preRollStart bajo
+    /// bassKill extendido. atAntStart debe leer ≈ band0AntAnchorFreq (ancla) y
+    /// atPreRollStart ≈ startFreq si la rampa anticipatoria de band 0 aplicó.
+    /// nil cuando no aplica. Audita el empalme C0 y que band 0 no entre seco.
+    var band0FreqA_atAntStart: Double? = nil
+    var band0FreqA_atPreRollStart: Double? = nil
     /// Valor de filterLead ANTES del cap (fadeDuration*0.32). Permite saber
     /// cuánto se recortó por el cap 3.5s. nil cuando filterLead=0.
     var filterLeadPreCap: Double? = nil
@@ -611,6 +617,8 @@ final class TransitionDiagnostics {
         var midScoopPreRollApplied: Bool? = nil
         var highShelfPreRollApplied: Bool? = nil
         var midScoopGainAtSwap: Double? = nil
+        var band0FreqA_atAntStart: Double? = nil
+        var band0FreqA_atPreRollStart: Double? = nil
         var filterLeadPreCap: Double? = nil
         var filterLeadCapApplied: Bool? = nil
         var sequentialOverrideByVectorD: Bool? = nil
@@ -1096,6 +1104,8 @@ final class TransitionDiagnostics {
                 midScoopPreRollApplied: self.midScoopPreRollApplied,
                 highShelfPreRollApplied: self.highShelfPreRollApplied,
                 midScoopGainAtSwap: self.midScoopGainAtSwap,
+                band0FreqA_atAntStart: self.band0FreqA_atAntStart,
+                band0FreqA_atPreRollStart: self.band0FreqA_atPreRollStart,
                 filterLeadPreCap: self.filterLeadPreCap,
                 filterLeadCapApplied: self.filterLeadCapApplied,
                 sequentialOverrideByVectorD: self.sequentialOverrideByVectorD,
