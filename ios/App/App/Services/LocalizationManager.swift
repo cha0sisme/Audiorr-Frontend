@@ -131,6 +131,7 @@ enum L {
     static var listenAgain: String { isEn ? "Listen again" : "Volver a escuchar" }
     static var recentReleases: String { isEn ? "Recent releases" : "Lanzamientos recientes" }
     static var latestAlbums: String { isEn ? "Latest albums" : "Últimos álbumes añadidos" }
+    static var genres: String { isEn ? "Genres" : "Géneros" }
     static var songs: String { isEn ? "songs" : "canciones" }
     static var hours: String { isEn ? "hours" : "horas" }
 

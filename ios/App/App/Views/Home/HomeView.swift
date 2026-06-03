@@ -14,6 +14,7 @@ final class HomeViewModel: ObservableObject {
     @Published var dailyMixPlaylists: [NavidromePlaylist] = []
     @Published var latestAlbums: [NavidromeAlbum] = []
     @Published var randomAlbums: [NavidromeAlbum] = []
+    @Published var genres: [NavidromeGenre] = []
     @Published var recentlyPlayedAlbums: [NavidromeAlbum] = []
     @Published var pinnedPlaylists: [NavidromePlaylist] = []
     @Published var weeklyStats: WeeklyStats?
@@ -68,7 +69,8 @@ final class HomeViewModel: ObservableObject {
         async let latestTask: Void = loadLatestAlbums()
         async let randomTask: Void = loadRandomAlbums()
         async let recentPlayedTask: Void = loadRecentlyPlayed()
-        _ = await (releasesTask, latestTask, randomTask, recentPlayedTask)
+        async let genresTask: Void = loadGenres()
+        _ = await (releasesTask, latestTask, randomTask, recentPlayedTask, genresTask)
 
         // Navidrome content is ready — show it immediately
         isLoading = false
@@ -241,6 +243,19 @@ final class HomeViewModel: ObservableObject {
         recentlyPlayedAlbums = await api.getAlbumList(type: "recent", size: 6)
     }
 
+    /// Géneros para la sección de descubrimiento (Navidrome — sin backend).
+    /// Selección "pro": prioriza los más populares (por nº de álbumes) pero
+    /// rota un subconjunto para dar variedad/descubrimiento en cada recarga,
+    /// en vez de mostrar siempre los mismos o todos los de la biblioteca.
+    private func loadGenres() async {
+        let all = await api.getGenres()
+            .filter { ($0.albumCount ?? 0) > 0 && !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }
+        let popular = all.sorted { ($0.albumCount ?? 0) > ($1.albumCount ?? 0) }
+        // Ventana de los ~20 más populares → barajada → 12. Popular + rotación.
+        let pool = Array(popular.prefix(20))
+        genres = Array(pool.shuffled().prefix(12))
+    }
+
     private func loadPinnedPlaylists() async {
         guard BackendState.shared.isAvailable,
               let creds = CredentialsStore.shared.load() else { return }
@@ -301,6 +316,7 @@ struct HomeView: View {
 
                         // Discovery
                         recentReleasesSection
+                        genresSection
                         dailyMixSection
                         randomDiscoverySection
 
@@ -350,6 +366,10 @@ struct HomeView: View {
             }
             .preferredColorScheme(theme.colorScheme)
         }
+        // En el NavigationStack (no en el contenido): así el path llega también a
+        // las vistas EMPUJADAS (AlbumDetail, ArtistDetail…) y su SongListView
+        // puede hacer push. Puesto en el contenido NO se propagaba a los destinos.
+        .navPath($navigationPath)
     }
 
     // MARK: - Quick Play Grid (2-column compact tiles)
@@ -681,6 +701,39 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                 }
             }
+        }
+    }
+
+    // MARK: - Géneros (Navidrome — funciona sin backend)
+
+    @ViewBuilder
+    private var genresSection: some View {
+        if !vm.genres.isEmpty {
+            HorizontalScrollSection(title: L.genres) {
+                ForEach(vm.genres) { genre in
+                    Button {
+                        openGenre(genre)
+                    } label: {
+                        GenreCardView(genre: genre)
+                            // Aire vertical para que la sombra de la card NO la
+                            // recorte el ScrollView (que recorta a su alto).
+                            .padding(.vertical, 12)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// Carga los álbumes del género y navega a la rejilla "Ver todo". Usa el
+    /// path del stack (los destinos están declarados en la raíz del Home).
+    private func openGenre(_ genre: NavidromeGenre) {
+        Task {
+            let albums = await NavidromeService.shared.getAlbumList(
+                type: "byGenre", size: 100, genre: genre.value
+            )
+            guard !albums.isEmpty else { return }
+            navigationPath.append(SeeAllDestination.albums(title: genre.name, items: albums))
         }
     }
 
@@ -1104,4 +1157,104 @@ private struct CachedCoverView: View {
 
 /// Alias for offline album list (same component, different default icon).
 private typealias AlbumCoverThumbnail = CachedCoverView
+
+// MARK: - Genre Card (gradiente estilo Apple, diseño 2026)
+
+/// Tarjeta de género con degradado vibrante derivado de forma determinista del
+/// nombre (mismo género → mismo color siempre). Toques 2026: degradado diagonal
+/// + "bokeh" translúcido difuminado + sutil brillo superior, esquinas muy
+/// redondeadas y borde de luz fino.
+struct GenreCardView: View {
+    let genre: NavidromeGenre
+    var size: CGSize = CGSize(width: 168, height: 100)
+
+    /// Hue estable 0..1 a partir del nombre (hash FNV-1a).
+    private var hue: Double {
+        var h: UInt64 = 1469598103934665603
+        for b in genre.value.lowercased().utf8 {
+            h = (h ^ UInt64(b)) &* 1099511628211
+        }
+        return Double(h % 360) / 360.0
+    }
+    private var c1: Color { Color(hue: hue, saturation: 0.70, brightness: 0.92) }
+    private var c2: Color {
+        Color(hue: (hue + 0.09).truncatingRemainder(dividingBy: 1.0),
+              saturation: 0.88, brightness: 0.60)
+    }
+
+    /// SF Symbol representativo según el nombre del género (guitarra para rock,
+    /// radio para hip hop, micro para pop/soul, etc.). Orden de chequeo: de lo
+    /// más específico a lo más general (k-pop antes que pop).
+    private var iconName: String {
+        let n = genre.value.lowercased()
+        func has(_ keys: String...) -> Bool { keys.contains { n.contains($0) } }
+        if has("hip hop", "hip-hop", "hiphop", "rap", "trap", "drill")      { return "radio.fill" }
+        if has("rock", "metal", "punk", "grunge", "hardcore")               { return "guitars.fill" }
+        if has("electro", "edm", "techno", "house", "trance", "dubstep",
+               "dance", "drum and bass", "dnb")                             { return "waveform" }
+        if has("jazz")                                                       { return "music.quarternote.3" }
+        if has("classic", "clásic", "orchestr", "orquest", "opera", "symphon") { return "pianokeys" }
+        if has("soul", "r&b", "rnb", "funk", "motown")                      { return "music.mic" }
+        if has("country", "folk", "blues", "acoustic", "acústic", "americana") { return "guitars.fill" }
+        if has("reggae", "reggaeton", "latin", "latino", "salsa", "cumbia",
+               "bachata", "merengue")                                       { return "music.note.house.fill" }
+        if has("ambient", "chill", "lo-fi", "lofi", "instrumental", "study") { return "headphones" }
+        if has("soundtrack", "score", "film", "cine", "banda sonora")       { return "film.fill" }
+        if has("k-pop", "kpop", "j-pop", "jpop", "anime")                   { return "sparkles" }
+        if has("disco")                                                     { return "dial.medium" }
+        if has("pop")                                                       { return "music.mic" }
+        return "music.note"
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            // Base: degradado diagonal.
+            LinearGradient(colors: [c1, c2], startPoint: .topLeading, endPoint: .bottomTrailing)
+
+            // Bokeh translúcido (profundidad tipo "mesh" sin MeshGradient).
+            Circle()
+                .fill(.white.opacity(0.20))
+                .frame(width: size.width * 0.55)
+                .blur(radius: 20)
+                .offset(x: size.width * 0.32, y: -size.height * 0.42)
+            Circle()
+                .fill(c2.opacity(0.55))
+                .frame(width: size.width * 0.55)
+                .blur(radius: 24)
+                .offset(x: -size.width * 0.30, y: size.height * 0.45)
+
+            // Brillo superior sutil.
+            LinearGradient(
+                colors: [.white.opacity(0.22), .clear],
+                startPoint: .top, endPoint: .center
+            )
+
+            // Icono representativo del género (marca de agua, esquina superior).
+            Image(systemName: iconName)
+                .font(.system(size: 38, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.30))
+                .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(12)
+
+            Text(genre.name)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.leading)
+                .shadow(color: .black.opacity(0.28), radius: 4, y: 1)
+                .padding(14)
+        }
+        .frame(width: size.width, height: size.height)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+        )
+        // Sombra contenida (radius+offset ≤ el padding vertical de la sección,
+        // 12pt, para que el ScrollView no la corte).
+        .shadow(color: c2.opacity(0.38), radius: 7, y: 3)
+    }
+}
 

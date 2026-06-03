@@ -270,6 +270,14 @@ extension NavidromeSong {
     }
 }
 
+/// Fecha estructurada de OpenSubsonic (`originalReleaseDate` / `releaseDate`):
+/// objeto `{ year, month, day }`. Cualquiera puede faltar.
+struct ItemDate: Decodable, Hashable {
+    let year: Int?
+    let month: Int?
+    let day: Int?
+}
+
 struct NavidromeAlbum: Identifiable, Decodable, Hashable {
     let id: String
     let name: String
@@ -286,17 +294,33 @@ struct NavidromeAlbum: Identifiable, Decodable, Hashable {
     /// cuando todos son del año actual). Opcional para compatibilidad con
     /// construcciones manuales antiguas (HomeView, SongListView, contexts).
     let created: String?
+    /// Fecha de lanzamiento (OpenSubsonic). Da granularidad mes/día para ordenar
+    /// "Lanzamientos recientes" de verdad (no solo por año).
+    let releaseDate: ItemDate?
+    let originalReleaseDate: ItemDate?
 
     var isExplicit: Bool { explicitStatus == "explicit" }
 
+    /// Clave de orden por fecha de lanzamiento (desc = más reciente primero).
+    /// Prefiere `releaseDate`, luego `originalReleaseDate`, y cae a `year`.
+    /// year*10000 + month*100 + day → comparable como entero.
+    var releaseSortValue: Int {
+        func value(_ d: ItemDate?) -> Int? {
+            guard let d, let y = d.year else { return nil }
+            return y * 10000 + (d.month ?? 0) * 100 + (d.day ?? 0)
+        }
+        return value(releaseDate) ?? value(originalReleaseDate) ?? ((year ?? 0) * 10000)
+    }
+
     /// Init explícito que mantiene compatibilidad con los callsites que
     /// construyen `NavidromeAlbum` sin `created` (HomeView contexts, SongListView,
-    /// NavidromeService.getAlbumDetail). El campo se decodifica automáticamente
-    /// desde Subsonic cuando viene en el JSON.
+    /// NavidromeService.getAlbumDetail). Los campos se decodifican automáticamente
+    /// desde Subsonic cuando vienen en el JSON.
     init(
         id: String, name: String, artist: String, coverArt: String?,
         songCount: Int?, duration: Int?, year: Int?, genre: String?,
-        explicitStatus: String?, created: String? = nil
+        explicitStatus: String?, created: String? = nil,
+        releaseDate: ItemDate? = nil, originalReleaseDate: ItemDate? = nil
     ) {
         self.id = id
         self.name = name
@@ -308,6 +332,8 @@ struct NavidromeAlbum: Identifiable, Decodable, Hashable {
         self.genre = genre
         self.explicitStatus = explicitStatus
         self.created = created
+        self.releaseDate = releaseDate
+        self.originalReleaseDate = originalReleaseDate
     }
 }
 
@@ -450,6 +476,24 @@ private struct SubsonicWrapper<T: Decodable>: Decodable {
 
 struct SubsonicBaseResponse: Decodable {
     let status: String
+}
+
+/// Género de la biblioteca (Subsonic `getGenres`). `value` es el nombre.
+struct NavidromeGenre: Identifiable, Decodable, Hashable {
+    let value: String
+    let songCount: Int?
+    let albumCount: Int?
+
+    var id: String { value }
+    var name: String { value }
+}
+
+struct GenresResponse: Decodable {
+    let status: String
+    let genres: GenresContainer?
+    struct GenresContainer: Decodable {
+        let genre: [NavidromeGenre]?
+    }
 }
 
 struct PlaylistsResponse: Decodable {

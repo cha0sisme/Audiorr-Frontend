@@ -844,30 +844,51 @@ final class NavidromeService: ObservableObject {
         let fromYear = calendar.component(.year, from: cutoff)
         let toYear = calendar.component(.year, from: now)
 
-        let desiredSize = max(size * 2, 100)
+        // Pool generoso: `byYear` puede devolver los años en orden ascendente
+        // (los antiguos primero); con un pool pequeño los lanzamientos del año en
+        // curso quedaban FUERA del corte y no aparecían. Pedimos bastantes y
+        // ordenamos en cliente por fecha de lanzamiento real.
+        let desiredSize = max(size * 8, 300)
         var pool = await getAlbumsByYearRange(fromYear: fromYear, toYear: toYear, size: desiredSize)
         if pool.isEmpty {
             pool = await getAlbumList(type: "newest", size: desiredSize)
         }
 
-        // Filter by year and sort newest first. Tiebreaker por `created`
-        // (timestamp ISO 8601 de cuándo se añadió a la biblioteca) cuando
-        // `year` es igual entre álbumes — sin esto, varios álbumes del año
-        // en curso quedaban en orden arbitrario del server. Replica el sort
-        // de Audiorr-web getAlbumsByYear: (year desc, created desc).
+        // Orden newest-first por FECHA DE LANZAMIENTO real (año/mes/día vía
+        // OpenSubsonic `releaseDate`/`originalReleaseDate`), no solo por año —
+        // antes, dentro del mismo año el orden lo decidía `created` (fecha de
+        // alta en la biblioteca), que no refleja la recencia del lanzamiento.
+        // Tiebreaker final por `created` (ISO 8601 lexicográfico == cronológico).
         let filtered = pool
             .filter { ($0.year ?? 0) >= fromYear }
             .sorted { a, b in
-                let yearA = a.year ?? 0
-                let yearB = b.year ?? 0
-                if yearA != yearB { return yearA > yearB }
-                // ISO 8601 lexicográfico == cronológico, así que `>` ordena
-                // del más reciente al más antiguo.
+                let ka = a.releaseSortValue
+                let kb = b.releaseSortValue
+                if ka != kb { return ka > kb }
                 return (a.created ?? "") > (b.created ?? "")
             }
         let result = Array(filtered.prefix(size))
         cacheSet(cacheKey, value: result)
         return result
+    }
+
+    // MARK: - Genres (Navidrome — funciona sin backend Audiorr)
+
+    /// Géneros de la biblioteca con su nº de álbumes/canciones (Subsonic
+    /// `getGenres`). No depende del backend Audiorr.
+    func getGenres() async -> [NavidromeGenre] {
+        let cacheKey = "genres_all"
+        if let cached = cacheGet(cacheKey) as? [NavidromeGenre] { return cached }
+        guard let base = baseURL() else { return [] }
+        let urlStr = "\(base)/rest/getGenres.view?\(authQuery())"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(GenresResponse.self, from: data),
+              response.status == "ok"
+        else { return [] }
+        let genres = response.genres?.genre ?? []
+        cacheSet(cacheKey, value: genres)
+        return genres
     }
 
     // MARK: - Home page: backend API endpoints
