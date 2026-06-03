@@ -406,6 +406,10 @@ final class TransitionDiagnostics {
     /// true cuando el rampStart de highShelf se adelantó a preRollStart +
     /// cascadeOffsetHighShelf. false cuando no recibió pre-roll.
     var highShelfPreRollApplied: Bool? = nil
+    /// Gain (dB) del mid-scoop A evaluado en t=transitionEndTime−0.05 (al swap).
+    /// Sin tail-easing ≈ endGain del preset; con tail-easing debe relajarse
+    /// hacia holdTarget (≈ endGain·0.35). Auditá si el tail del scoop dispara.
+    var midScoopGainAtSwap: Double? = nil
     /// Valor de filterLead ANTES del cap (fadeDuration*0.32). Permite saber
     /// cuánto se recortó por el cap 3.5s. nil cuando filterLead=0.
     var filterLeadPreCap: Double? = nil
@@ -606,6 +610,7 @@ final class TransitionDiagnostics {
         var lastVocalTimeA: Double? = nil
         var midScoopPreRollApplied: Bool? = nil
         var highShelfPreRollApplied: Bool? = nil
+        var midScoopGainAtSwap: Double? = nil
         var filterLeadPreCap: Double? = nil
         var filterLeadCapApplied: Bool? = nil
         var sequentialOverrideByVectorD: Bool? = nil
@@ -1090,6 +1095,7 @@ final class TransitionDiagnostics {
                 lastVocalTimeA: self.lastVocalTimeA,
                 midScoopPreRollApplied: self.midScoopPreRollApplied,
                 highShelfPreRollApplied: self.highShelfPreRollApplied,
+                midScoopGainAtSwap: self.midScoopGainAtSwap,
                 filterLeadPreCap: self.filterLeadPreCap,
                 filterLeadCapApplied: self.filterLeadCapApplied,
                 sequentialOverrideByVectorD: self.sequentialOverrideByVectorD,

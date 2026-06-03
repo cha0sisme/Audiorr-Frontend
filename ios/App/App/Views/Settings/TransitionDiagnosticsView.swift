@@ -1560,6 +1560,7 @@ struct TransitionDetailSheet: View {
         if let bk = record.bassKillGainA_atVolumeFadeStart { rows.append(("bassKillA @volFade", String(format: "%.2f dB", bk))) }
         if let bk = record.bassKillGainA_atRampStart { rows.append(("bassKillA @rampStart", String(format: "%.2f dB", bk))) }
         if let ext = record.bassKillRampExtendedA { rows.append(("bassKill ramp extended", ext ? "Yes" : "No")) }
+        if let m = record.midScoopGainAtSwap { rows.append(("midScoop @swap", String(format: "%.2f dB", m))) }
         return rows
     }
 

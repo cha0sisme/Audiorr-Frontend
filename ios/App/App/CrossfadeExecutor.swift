@@ -925,6 +925,21 @@ class CrossfadeExecutor {
             return (Double(g0), Double(g1), Double(g2))
         }()
 
+        // Telemetría midScoop A @swap: gain (dB) con el que el scoop llega al
+        // swap (rampEnd − 0.05). Sin tail-easing ≈ endGain (p.ej. −15 dB en
+        // anticipation); con tail-easing debe relajarse hacia holdTarget. Mide
+        // la curva REAL evaluando el mismo helper que el tick — evita ceguera
+        // tipo v14.g. rampStart de referencia = filterStartTime (el valor en
+        // rampEnd es independiente del rampStart por estar pasado el pivot).
+        let midScoopGainSwap: Double? = {
+            guard useMidScoop, let ms = preset.midScoopA else { return nil }
+            let msEnd = timings.transitionEndTime
+            guard msEnd > timings.filterStartTime else { return nil }
+            return Double(midScoopGainA(at: msEnd - 0.05, startGain: ms.startGain,
+                                        endGain: ms.endGain,
+                                        rampStart: timings.filterStartTime, rampEnd: msEnd))
+        }()
+
         Task { @MainActor in
             TransitionDiagnostics.shared.filterPreRollAppliedA = preRollWillApply
             TransitionDiagnostics.shared.highShelfGainA_atEnd = highShelfEndA
@@ -967,6 +982,7 @@ class CrossfadeExecutor {
             // false: no hubo pre-roll porque no había filtro que adelantar.
             TransitionDiagnostics.shared.midScoopPreRollApplied = preRollWillApply && useMidScoop
             TransitionDiagnostics.shared.highShelfPreRollApplied = preRollWillApply && useHighShelfCut
+            TransitionDiagnostics.shared.midScoopGainAtSwap = midScoopGainSwap
             // aNaturalDecay: rama "A decae natural, B sin fade-in" en
             // gainForPlayerB. Deterministic con config — duplicar la fórmula
             // aquí es más simple que routear desde el path de cálculo runtime.
@@ -2798,14 +2814,8 @@ class CrossfadeExecutor {
                 // parcial hacia holdTarget. Si !useMidScoop, queda passthrough.
                 let band2A: BiquadCoefficients
                 if useMidScoop, let ms = preset.midScoopA, let msStart = midScoopRampStartOverride {
-                    let msTotalDur = timings.transitionEndTime - msStart
-                    let msPivot = msStart + msTotalDur * 0.40
-                    let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
-                    var msGain: Float = ms.startGain
-                    if t < msPivot, msPivot > msStart {
-                        let p = Float((t - msStart) / (msPivot - msStart))
-                        msGain = linInterp(ms.startGain, holdTarget, min(1, max(0, p)))
-                    }
+                    let msGain = midScoopGainA(at: t, startGain: ms.startGain, endGain: ms.endGain,
+                                               rampStart: msStart, rampEnd: timings.transitionEndTime)
                     band2A = BiquadCoefficientCalculator.parametric(
                         frequency: ms.frequency, sampleRate: sampleRate,
                         gainDB: msGain, bandwidth: ms.bandwidth)
@@ -2990,19 +3000,8 @@ class CrossfadeExecutor {
         var band2A: BiquadCoefficients = .passthrough
         if useMidScoop, let ms = preset.midScoopA {
             let msRampStart = midScoopRampStartOverride ?? rampStart
-            let msTotalDur = rampEnd - msRampStart
-            let msPivot = msRampStart + msTotalDur * 0.40
-            var msGain: Float
-            let holdTarget = ms.startGain + (ms.endGain - ms.startGain) * 0.35
-            if t < msPivot {
-                let denom = msPivot - msRampStart
-                let p = Float(denom > 0 ? (t - msRampStart) / denom : 1.0)
-                msGain = linInterp(ms.startGain, holdTarget, min(1, p))
-            } else {
-                let denom = rampEnd - msPivot
-                let p = Float(denom > 0 ? (t - msPivot) / denom : 1.0)
-                msGain = linInterp(holdTarget, ms.endGain, min(1, p))
-            }
+            let msGain = midScoopGainA(at: t, startGain: ms.startGain, endGain: ms.endGain,
+                                       rampStart: msRampStart, rampEnd: rampEnd)
             band2A = BiquadCoefficientCalculator.parametric(frequency: ms.frequency, sampleRate: sampleRate, gainDB: msGain, bandwidth: ms.bandwidth)
         }
 
@@ -3369,6 +3368,32 @@ class CrossfadeExecutor {
         let safeB = max(b, 0.001)
         let clampedT = min(1, max(0, t))
         return safeA * powf(safeB / safeA, clampedT)
+    }
+
+    /// Gain (dB) del mid-scoop A en tiempo `t`. Curva de dos tramos: rampa
+    /// startGain→holdTarget hasta el pivot (40% de la ventana) y holdTarget→
+    /// endGain después. Único punto de cálculo del scoop de banda 2 A — lo
+    /// comparten el branch pre-roll y el main fade (antes duplicado en dos
+    /// sitios). La telemetría `midScoopGainAtSwap` lo evalúa en rampEnd para
+    /// auditar el gain real con el que A llega al swap.
+    private func midScoopGainA(at t: Double, startGain: Float, endGain: Float,
+                               rampStart: Double, rampEnd: Double) -> Float {
+        let totalDur = rampEnd - rampStart
+        let holdTarget = startGain + (endGain - startGain) * 0.35
+        // Ventana degenerada (rampEnd ≤ rampStart, inalcanzable con preRoll
+        // siempre antes del swap): devolvemos startGain (scoop neutro, sin
+        // efecto) en vez de endGain, el fallback conservador.
+        guard totalDur > 0 else { return startGain }
+        let pivot = rampStart + totalDur * 0.40
+        if t < pivot {
+            let denom = pivot - rampStart
+            let p = Float(denom > 0 ? (t - rampStart) / denom : 1.0)
+            return linInterp(startGain, holdTarget, min(1, max(0, p)))
+        } else {
+            let denom = rampEnd - pivot
+            let p = Float(denom > 0 ? (t - pivot) / denom : 1.0)
+            return linInterp(holdTarget, endGain, min(1, max(0, p)))
+        }
     }
 
     /// Convierte Q factor a bandwidth en octavas (aproximación).
