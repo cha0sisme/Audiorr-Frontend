@@ -548,6 +548,22 @@ class AudioEngineManager {
 
         playerA.pause()
         if isCrossfading { playerB.pause() }
+
+        // Pausar también el AVAudioEngine, no solo el player node.
+        //
+        // Con solo `playerA.pause()`, el engine sigue corriendo y renderizando
+        // silencio indefinidamente. Para iOS eso es una sesión de audio con I/O
+        // activo → infiere estado .playing y, al bloquear pantalla / pasar a
+        // background, pinta el botón de pausa en el lock screen aunque hayamos
+        // publicado playbackState = .paused (el tiempo sí queda congelado porque
+        // el playbackRate del dict está en 0 → botón mal, tiempo bien).
+        //
+        // `engine.pause()` detiene el hardware de audio conservando el grafo y los
+        // buffers intactos (a diferencia de `stop()`), de modo que el estado real
+        // del engine coincide con el estado publicado. resume() lo reactiva al
+        // instante vía ensureEngineRunning() → engine.start(). Es la forma nativa:
+        // los reproductores de Apple paran el I/O al pausar, nunca lo dejan vivo.
+        if engine.isRunning { engine.pause() }
         isPlaying = false
 
         // Suspend automix timer during pause to prevent the trigger from firing

@@ -187,6 +187,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             } catch {
                 print("[Audiorr] Failed to deactivate AVAudioSession on background: \(error)")
             }
+        } else if let engine = AudioEngineManager.shared, !engine.isPlaying, engine.hasLoadedAudio {
+            // Paused with a song loaded → entering the lock screen. Re-assert our
+            // authoritative paused state right at the background transition so the
+            // Now Playing widget binds to .paused instead of an inferred/stale icon.
+            engine.updateNowPlayingPlaybackState()
         }
     }
 
