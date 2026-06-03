@@ -3385,14 +3385,26 @@ class CrossfadeExecutor {
         // efecto) en vez de endGain, el fallback conservador.
         guard totalDur > 0 else { return startGain }
         let pivot = rampStart + totalDur * 0.40
+        // Tail-easing: en el último 18% de la ventana el scoop deja de
+        // profundizar y se relaja desde su pico (endGain) de vuelta hacia
+        // holdTarget, para que A no llegue al swap con el mid-scoop clavado en
+        // su punto más profundo todo el rato. holdTarget (no 0): el hueco para
+        // la voz de B se mantiene, pero deja de crecer. Paridad con el
+        // tail-easing del high-shelf A. El scoop alcanza su pico en tailStart
+        // (82% de la ventana) en vez de en el swap.
+        let tailStart = rampEnd - totalDur * 0.18
         if t < pivot {
             let denom = pivot - rampStart
             let p = Float(denom > 0 ? (t - rampStart) / denom : 1.0)
             return linInterp(startGain, holdTarget, min(1, max(0, p)))
-        } else {
-            let denom = rampEnd - pivot
+        } else if t < tailStart {
+            let denom = tailStart - pivot
             let p = Float(denom > 0 ? (t - pivot) / denom : 1.0)
             return linInterp(holdTarget, endGain, min(1, max(0, p)))
+        } else {
+            let denom = rampEnd - tailStart
+            let p = Float(denom > 0 ? (t - tailStart) / denom : 1.0)
+            return linInterp(endGain, holdTarget, min(1, max(0, p)))
         }
     }
 
