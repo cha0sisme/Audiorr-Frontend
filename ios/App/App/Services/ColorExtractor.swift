@@ -164,16 +164,23 @@ struct AlbumPalette {
     // MARK: Apple Music-style buttons (iOS 26.4)
     //
     // Play = botón primario: pill con relleno sólido que contrasta con el hero
-    //        (negro sobre claro, blanco sobre oscuro/motion) y texto NEUTRO.
+    //        (negro sobre claro, blanco sobre oscuro) y texto NEUTRO.
     // Shuffle = botón secundario: relleno sutil translúcido (gris discreto),
     //           sin color de acento. El protagonismo es solo del Play, igual
     //           que en Apple Music.
+    //
+    // El tratamiento claro/oscuro sigue a `isPrimaryLight` (luminancia de la
+    // portada) también con artwork animado: el clip comparte la paleta de la
+    // cover, así que es representativo. Antes se forzaba oscuro con motion, lo
+    // que pintaba botones blancos sobre artworks claros/crema. `motionPresent`
+    // se mantiene en las firmas por compatibilidad con las llamadas.
 
     /// Background del botón Play. Contrasta con el fondo del hero. Con motion
     /// el hero se trata como oscuro (scrim oscuro debajo del vídeo destaca
     /// siempre el blanco).
     func playButtonBackground(motionPresent: Bool) -> UIColor {
-        let heroIsLight = !motionPresent && isPrimaryLight
+        _ = motionPresent   // ver nota de sección: el tratamiento sigue a isPrimaryLight
+        let heroIsLight = isPrimaryLight
         return heroIsLight ? .black : .white
     }
 
@@ -181,7 +188,8 @@ struct AlbumPalette {
     /// sobre pill negra, negro sobre pill blanca), como el "Reproducir" de
     /// Apple Music — sin teñir con el color del álbum.
     func playButtonForeground(motionPresent: Bool) -> UIColor {
-        let heroIsLight = !motionPresent && isPrimaryLight
+        _ = motionPresent   // ver nota de sección: el tratamiento sigue a isPrimaryLight
+        let heroIsLight = isPrimaryLight
         return heroIsLight ? .white : .black
     }
 
@@ -189,7 +197,8 @@ struct AlbumPalette {
     /// sobre el hero —gris discreto— como el shuffle/+ de Apple Music. Sin
     /// color de acento: el protagonismo es solo del Play.
     func shuffleButtonBackground(motionPresent: Bool) -> UIColor {
-        let heroIsLight = !motionPresent && isPrimaryLight
+        _ = motionPresent   // ver nota de sección: el tratamiento sigue a isPrimaryLight
+        let heroIsLight = isPrimaryLight
         return heroIsLight ? UIColor.black.withAlphaComponent(0.07)
                            : UIColor.white.withAlphaComponent(0.18)
     }
@@ -198,7 +207,8 @@ struct AlbumPalette {
     /// sobre claro, blanco sobre oscuro/motion); el relleno es translúcido,
     /// así que el icono se lee contra el fondo.
     func shuffleButtonForeground(motionPresent: Bool) -> UIColor {
-        let heroIsLight = !motionPresent && isPrimaryLight
+        _ = motionPresent   // ver nota de sección: el tratamiento sigue a isPrimaryLight
+        let heroIsLight = isPrimaryLight
         return heroIsLight ? .black : .white
     }
 }

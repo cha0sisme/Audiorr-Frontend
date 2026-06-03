@@ -145,22 +145,15 @@ struct AlbumDetailView: View {
     @State private var isViewVisible = false
     /// Altura medida del bloque de título+metadata (para que heroHeight la
     /// incluya y los huecos del hero no dependan del nº de líneas del título).
-    /// Con la reserva fija de 2 líneas (titleTextReservedHeight) este valor es
-    /// estable (~87), así que el default coincide con la medición real y no hay
-    /// salto de layout en el primer frame.
+    /// El default (~87) cubre el caso de 2 líneas, así que el primer frame nunca
+    /// infraestima (sobra y se ajusta hacia abajo, nunca colisiona).
     @State private var titleBlockHeight: CGFloat = 87
-
-    /// Reserva fija para el texto del título: 2 líneas a 26pt bold (~64pt). Hace
-    /// que el bloque título ocupe siempre el mismo alto sea cual sea la longitud
-    /// del título → el botón de play no se mueve y el hero no rebosa sobre la bio.
-    private let titleTextReservedHeight: CGFloat = 64
     var onDismiss: (() -> Void)?
 
     /// Altura del hero = inset + cover + título (medido) + huecos fijos. Incluir
     /// la altura REAL del título (`titleBlockHeight`) hace que el hueco entre los
     /// botones y la lista sea constante sea cual sea el nº de líneas del título,
-    /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra. El 196
-    /// = inset extra (88) + 3 huecos de 20 + alto del bloque de botones (~48).
+    /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra.
     /// Prioridad de efectos (sin mezclar), como pidió el diseño:
     ///   1. animated artwork → layout estándar con vídeo de fondo.
     ///   2. isSolid (y SIN animated) → cover cuadrada full-screen + fondo del
@@ -170,12 +163,12 @@ struct AlbumDetailView: View {
     private var isSolidMode: Bool { vm.animatedArtworkUrl == nil && vm.palette.isSolid }
 
     private var heroHeight: CGFloat {
-        // 184 = inset extra (88) + hueco cover↔título (20) + hueco título↔botones
-        // (20) + alto del bloque de botones (~48) + hueco botones↔lista (8). Antes
-        // era 164 y el contenido rebosaba ~20pt el frame del hero, solapándose con
-        // la bio. Con titleBlockHeight ya estable (reserva de 2 líneas) el frame
-        // contiene exactamente el contenido.
-        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 184)
+        // 189 = inset extra (88) + hueco cover↔título (20) + hueco info↔botones
+        // (21) + alto del bloque de botones (~48) + hueco botones↔bio (12). El
+        // frame contiene EXACTAMENTE el contenido, así que el Spacer final
+        // descansa en sus 12pt y el botón de play nunca invade la bio. Los huecos
+        // (21 y 12) igualan a los de isSolid (titleButtonsSection).
+        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 189)
     }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
@@ -212,8 +205,30 @@ struct AlbumDetailView: View {
         }
         return vm.palette.isPrimaryLight
     }
-    private var pageBg: Color {
+    /// Fondo del HERO/header — en isSolid es el color del borde de la cover (sin
+    /// costura con la franja superior y el propio cover); en el resto, el
+    /// pageBackgroundColor de la paleta.
+    private var heroBgColor: Color {
         isSolidMode ? Color(headerBgUIColor) : Color(vm.palette.pageBackgroundColor)
+    }
+
+    /// Fondo del CUERPO (de la sección de título hacia abajo: título, bio,
+    /// songlist). En isSolid se oscurece ~18% respecto al header para separar el
+    /// cuerpo del hero —como el modo animado / Apple Music— SIN tocar el header.
+    /// El oscurecido es moderado a propósito: `isLight` se calcula sobre el
+    /// header y debe seguir siendo válido en el cuerpo (no cruzar el umbral de
+    /// luminancia). En el resto coincide con el pageBackgroundColor.
+    private var pageBg: Color {
+        guard isSolidMode else { return Color(vm.palette.pageBackgroundColor) }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        headerBgUIColor.getRed(&r, green: &g, blue: &b, alpha: nil)
+        // Un color (casi) blanco NO se oscurece: quedaría un gris sucio. Se deja
+        // el cuerpo igual que el header. El oscurecido solo aporta separación en
+        // covers oscuras/coloreadas/crema.
+        let luminance = r * 0.299 + g * 0.587 + b * 0.114
+        guard luminance < 0.86 else { return Color(headerBgUIColor) }
+        let f: CGFloat = 0.82   // ~18% más oscuro que el header
+        return Color(UIColor(red: r * f, green: g * f, blue: b * f, alpha: 1))
     }
 
     /// Tamaño del cover en el hero — escalado con el ancho de pantalla al
@@ -232,7 +247,7 @@ struct AlbumDetailView: View {
     }
 
     /// Inset superior del cover en modo isSolid: arranca bajo la barra de
-    /// navegación, con pageBg (color del borde) en la franja de arriba.
+    /// navegación, con heroBgColor (color del borde) en la franja de arriba.
     private var coverTopInset: CGFloat { safeAreaTop + 48 }
 
     /// Safe area top de la ventana actual. Necesario para extender el
@@ -347,10 +362,15 @@ struct AlbumDetailView: View {
                 .scaleEffect(stretchScale, anchor: .bottom)
         }
         .frame(maxWidth: .infinity)
+        // El header conserva el color del borde (franja superior + detrás del
+        // cover). La base de pantalla (pageBg) es el cuerpo más oscuro, así que
+        // sin esto la franja superior se oscurecería y rompería la costura.
+        .background(heroBgColor)
     }
 
     /// Título + metadata + botones DEBAJO del cover (solo modo isSolid), sobre
-    /// el color del borde. Texto negro/blanco según la luminancia del fondo.
+    /// el fondo del cuerpo (algo más oscuro que el header). Texto negro/blanco
+    /// según la luminancia del header.
     private var titleButtonsSection: some View {
         VStack(alignment: .center, spacing: 5) {
             HStack(spacing: 8) {
@@ -373,9 +393,11 @@ struct AlbumDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
-        // Título más pegado al cover en modo isSolid (antes 14pt). El fundido del
-        // borde inferior del cover ya aporta una transición suave hacia esta zona.
-        .padding(.top, 4)
+        // Todo el conjunto (título+info+botones) pegado al cover en isSolid. El
+        // top negativo lo sube hacia la zona del fundido inferior del cover (que
+        // ya está difuminada), sin costura. Mueve el bloque completo, no solo el
+        // título.
+        .padding(.top, -8)
         .padding(.bottom, 12)
     }
 
@@ -558,17 +580,14 @@ struct AlbumDetailView: View {
                         ExplicitBadge(color: badgeColor, size: 18)
                     }
                 }
-                // Reserva fija de 2 líneas: el bloque título mide siempre lo
-                // mismo independientemente de la longitud del título, así el
-                // botón de play queda anclado y NUNCA invade la bio (antes la
-                // altura del hero dependía de una medición async vía
-                // PreferenceKey que no se propagaba fiablemente con 2 líneas).
-                .frame(height: titleTextReservedHeight)
 
                 metadataLine
             }
-            // Altura natural del título; la medimos (abajo) para que heroHeight
-            // la incluya y el hueco hacia la lista no dependa del nº de líneas.
+            // Altura natural del título (mismo bloque que isSolid: título a
+            // altura natural + metadata, spacing 5). La medimos para que
+            // heroHeight la incluya; el hueco inferior es fijo (Spacer minLength
+            // 12) y la constante de heroHeight ya contiene exactamente el
+            // contenido, así que el botón de play no invade la bio.
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 20)
             .background(
@@ -577,17 +596,17 @@ struct AlbumDetailView: View {
                 }
             )
 
-            // Play + shuffle buttons. Huecos iguales (20pt) a ambos lados: el de
-            // arriba es este padding; el de abajo lo da el spacer final (con
-            // motion mantenemos el padding inferior sobre el scrim).
+            // Play + shuffle buttons. Hueco info↔botones = 21pt para igualar
+            // isSolid (allí: spacing 5 del VStack + padding.top 16 = 21).
             playButtons
-                .padding(.top, 20)
+                .padding(.top, 21)
                 .padding(.bottom, vm.animatedArtworkUrl != nil ? 44 : 0)
 
             if vm.animatedArtworkUrl == nil {
-                // Hueco FIJO botones↔lista (= resto). Con heroHeight calculado a
-                // partir del título medido, este spacer queda en ~20pt constante.
-                Spacer(minLength: 8)
+                // Hueco FIJO botones↔bio = 12pt para igualar isSolid (allí es el
+                // padding.bottom 12 de titleButtonsSection). heroHeight está
+                // calculado para que este spacer descanse exactamente en 12.
+                Spacer(minLength: 12)
             }
         }
         .frame(maxWidth: .infinity)
