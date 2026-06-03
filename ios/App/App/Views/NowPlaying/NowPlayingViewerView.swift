@@ -16,6 +16,10 @@ struct NowPlayingViewerView: View {
     // View artists (multi-artist sheet — OpenSubsonic `song.artists[]`)
     @State private var showViewArtists = false
 
+    // Entrada animada de la cover (modo normal): false al abrir → anima a true,
+    // así la portada "acompaña" al resto en la animación de apertura del viewer.
+    @State private var coverEntered = false
+
     // Queue panel
     @State private var showQueue = false
 
@@ -41,10 +45,17 @@ struct NowPlayingViewerView: View {
     // Animated artwork (motion artwork por álbum, estilo Apple Music iOS 26)
     @State private var animatedArtworkUrl: URL?
     @State private var lastArtworkAlbumId: String?
+    /// Último songId para el que derivamos el albumId (caso remoto sin albumId).
+    @State private var lastDerivedArtworkSongId: String?
 
     /// Hay vídeo de fondo si existe canvas o animated artwork. Controla el
-    /// layout bottom-grouped (sin cover estático) y el scrim extra de lyrics.
+    /// scrim extra de lyrics y la animación de transición de backdrop.
     private var hasBackdropVideo: Bool { canvasUrl != nil || animatedArtworkUrl != nil }
+
+    /// Canvas a pantalla completa (immersive, layout bottom-grouped). SOLO
+    /// cuando hay canvas y NO animated artwork: el animated tiene prioridad y se
+    /// presenta como cover CONTENIDO (estilo AlbumDetail), no a pantalla completa.
+    private var hasFullscreenCanvas: Bool { canvasUrl != nil && animatedArtworkUrl == nil }
 
     /// Firma que cambia cuando aparece/desaparece un backdrop de vídeo o
     /// cuando se sustituye por otro. Permite que la animación del body
@@ -67,27 +78,31 @@ struct NowPlayingViewerView: View {
                 Color.black
                     .ignoresSafeArea()
 
-                // Backdrop tiers: Canvas (canción) > Animated Artwork (álbum) > cover difuminado.
-                // El Canvas de Spotify es por canción y más específico, así que
-                // manda cuando exista. El animated artwork (motion artwork de
-                // Apple Music, ratio 3:4) es la segunda fuente, por álbum.
-                if let canvasUrl {
+                // Backdrop (orden de prioridad): Animated Artwork (álbum) >
+                // Canvas (canción) > cover difuminado.
+                //  - Animated artwork → cabecera de vídeo full-width ARRIBA que se
+                //    funde al color de paleta (heroFade), IGUAL que el hero de
+                //    AlbumDetail. Título y controles van debajo, sobre el color.
+                //  - Canvas (y sin animated) → vídeo a pantalla completa immersive.
+                //  - Sin vídeo → cover difuminada tintada con la paleta.
+                if hasFullscreenCanvas, let canvasUrl {
                     videoBackdrop(url: canvasUrl)
                 } else if let animatedArtworkUrl {
-                    // Mismo tratamiento que el canvas: vídeo a pantalla completa
-                    // + degradado oscuro abajo para legibilidad (texto/controles
-                    // blancos). Antes se fundía al color de paleta y, con covers
-                    // claras, el fondo salía casi blanco y rompía el texto.
-                    videoBackdrop(url: animatedArtworkUrl)
+                    animatedArtworkBackdrop(url: animatedArtworkUrl)
                 } else {
-                    // Sin vídeo: mismo lenguaje que el hero de AlbumDetail —
-                    // cover difuminada tintada con la paleta del artwork y
-                    // fundido al color de página hacia abajo. Apple Music iOS 26
-                    // tiñe el fondo con el color del artwork (no usa un mosaico
-                    // de colores), así que esto se acerca más que el mesh previo.
                     paletteBackground
                         .ignoresSafeArea()
                         .animation(.easeInOut(duration: 0.6), value: palette.primary)
+                }
+
+                // Scrim ÚNICO de legibilidad para el panel de lyrics, sobre
+                // cualquier backdrop (canvas, animated artwork o cover). Sustituye
+                // al scrim que antes vivía dentro de videoBackdrop, unificando los
+                // tres casos. Solo activo en modo lyrics.
+                if showLyrics && hasLyrics {
+                    Color.black.opacity(0.45)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
                 }
 
                 // Contenido principal
@@ -113,18 +128,18 @@ struct NowPlayingViewerView: View {
                             .frame(height: 12)
 
                         // Playback controls
-                        PlaybackControlsView(glassStyle: hasBackdropVideo)
+                        PlaybackControlsView(glassStyle: hasFullscreenCanvas)
 
                         // Push bottom actions down
                         Spacer()
 
-                    } else if hasBackdropVideo {
-                        // Con vídeo (canvas o artwork animado): título + controles
-                        // agrupados abajo, en la MISMA posición. Sobre canvas
-                        // full-bleed los controles van translúcidos (glass); en
-                        // el artwork animado el vídeo se funde al color de paleta
-                        // a la altura del título, así que los controles van
-                        // sólidos sobre el color.
+                    } else if hasFullscreenCanvas || animatedArtworkUrl != nil {
+                        // Con vídeo de fondo (canvas fullscreen o cabecera de
+                        // animated artwork): título + controles agrupados abajo, en
+                        // la MISMA posición. Sobre canvas full-bleed los controles
+                        // van translúcidos (glass); con animated artwork el vídeo se
+                        // funde al color de paleta a la altura del título, así que
+                        // los controles van SÓLIDOS sobre el color (como AlbumDetail).
                         Spacer()
 
                         songInfoView
@@ -137,10 +152,14 @@ struct NowPlayingViewerView: View {
                         Spacer()
                             .frame(height: 16)
 
-                        PlaybackControlsView(glassStyle: true)
+                        PlaybackControlsView(glassStyle: hasFullscreenCanvas)
 
+                        // Con animated artwork subimos el grupo (título/progreso/
+                        // controles) para que quede más sobre el fade de paleta —el
+                        // vídeo ocupa el 62% superior—. Con canvas fullscreen los
+                        // controles se mantienen abajo (16pt).
                         Spacer()
-                            .frame(height: 16)
+                            .frame(height: animatedArtworkUrl != nil ? 80 : 16)
 
                     } else {
                         // Normal mode: artwork centered, controls below
@@ -200,6 +219,10 @@ struct NowPlayingViewerView: View {
         .onChange(of: state.songId) { _, songId in
             resolveCanvas(songId: songId)
             resolveLyrics(songId: songId)
+            // También aquí: en remoto el albumId llega vacío y su onChange nunca
+            // dispara, así que la resolución del motion debe colgar del songId
+            // (que sí cambia por pista). resolveAnimatedArtwork deriva el albumId.
+            resolveAnimatedArtwork(albumId: state.albumId)
         }
         .onChange(of: state.albumId) { _, albumId in
             resolveAnimatedArtwork(albumId: albumId)
@@ -219,6 +242,7 @@ struct NowPlayingViewerView: View {
             lastLyricsSongId = nil
             lastCanvasSongId = nil
             lastArtworkAlbumId = nil
+            lastDerivedArtworkSongId = nil
             lastLoadedCoverArt = nil
             lastExtractedUrl = nil
             loadArtwork()
@@ -226,6 +250,14 @@ struct NowPlayingViewerView: View {
             resolveLyrics(songId: state.songId)
             resolveAnimatedArtwork(albumId: state.albumId)
             // Queue is already synced natively by QueueManager
+
+            // Entrada de la cover: SIN withAnimation (una transacción global aquí
+            // interfiere con la transición de apertura del contenedor y deja el
+            // viewer "a medias" al abrir/cerrar rápido). Se dispara en el
+            // siguiente tick y la anima el modifier LOCAL `.animation(value:)`
+            // del artwork, sin tocar la transición del contenedor.
+            coverEntered = false
+            DispatchQueue.main.async { coverEntered = true }
         }
         // Animaciones para los cambios de layout/modo del viewer.
         // Una `value:` cada cambio importante — SwiftUI las apila y aplica
@@ -370,6 +402,13 @@ struct NowPlayingViewerView: View {
     /// del artwork) que el MeshGradient anterior.
     private var paletteBackground: some View {
         let pageBg = Color(palette.pageBackgroundColor)
+        // El player usa iconos/controles BLANCOS siempre, así que sobre covers
+        // claras (pageBackgroundColor casi blanco) el fondo debe oscurecerse para
+        // que se lean. Scrim adaptativo: cuanto más clara la cover, más oscuro.
+        var pr: CGFloat = 0, pg: CGFloat = 0, pb: CGFloat = 0
+        palette.primary.getRed(&pr, green: &pg, blue: &pb, alpha: nil)
+        let lum = pr * 0.299 + pg * 0.587 + pb * 0.114
+        let scrim = 0.18 + max(0, lum - 0.35) * 0.6   // 0.18 (oscuras) … ~0.54 (blancas)
         return ZStack {
             // Backdrop difuminado de la cover (color primario mientras carga).
             // `Color.clear` da el tamaño (el propuesto por el ZStack); la imagen
@@ -404,8 +443,9 @@ struct NowPlayingViewerView: View {
             // arriba, fondo limpio bajo los controles.
             LinearGradient.heroFade(to: pageBg)
 
-            // Scrim suave global para legibilidad sobre la cover difuminada.
-            Color.black.opacity(0.15)
+            // Scrim global ADAPTATIVO para legibilidad de los controles blancos:
+            // más fuerte cuanto más clara sea la cover (ver cálculo arriba).
+            Color.black.opacity(scrim)
         }
         .clipped()
     }
@@ -424,12 +464,39 @@ struct NowPlayingViewerView: View {
 
         canvasGradient
             .ignoresSafeArea()
+        // El scrim de legibilidad de lyrics es ahora global (en el body), común
+        // a canvas / animated / cover.
+    }
 
-        if showLyrics && hasLyrics {
-            Color.black.opacity(0.45)
-                .ignoresSafeArea()
-                .transition(.opacity)
+    // MARK: - Animated Artwork Backdrop (estilo hero AlbumDetail)
+
+    /// Cabecera de motion full-width ARRIBA (de borde a borde, bajo el notch)
+    /// que se funde al color de paleta hacia abajo con `heroFade` —el MISMO
+    /// lenguaje del hero de AlbumDetail—. El resto de la pantalla es el color de
+    /// paleta, donde se apoyan título y controles. Sin overlay oscuro de canvas.
+    @ViewBuilder
+    private func animatedArtworkBackdrop(url: URL) -> some View {
+        let pageBg = Color(palette.pageBackgroundColor)
+
+        GeometryReader { g in
+            let videoHeight = g.size.height * 0.62
+
+            ZStack(alignment: .top) {
+                pageBg
+
+                CanvasView(url: url, autoplay: true)
+                    .frame(width: g.size.width, height: videoHeight)
+                    .clipped()
+                    .overlay(alignment: .bottom) {
+                        // Fundido del motion al color de paleta (como AlbumDetail).
+                        LinearGradient.heroFade(to: pageBg)
+                            .frame(height: videoHeight * 0.5)
+                            .allowsHitTesting(false)
+                    }
+            }
         }
+        .ignoresSafeArea()
+        .transition(.opacity)
     }
 
     // MARK: - Canvas Gradient
@@ -478,7 +545,12 @@ struct NowPlayingViewerView: View {
         .shadow(color: .black.opacity(0.5), radius: 28, y: 10)
         .scaleEffect(artworkScale)
         .animation(.spring(response: 0.55, dampingFraction: 0.72), value: state.isPlaying)
-        .coverParallax()   // animated artwork sintético (giroscopio)
+        // Entrada: la cover escala al abrir el viewer, acompañando la animación
+        // del resto en vez de aparecer estática. Animación LOCAL (no global) para
+        // no interferir con la transición de apertura/cierre del contenedor.
+        .scaleEffect(coverEntered ? 1.0 : 0.86)
+        .animation(.spring(response: 0.5, dampingFraction: 0.78), value: coverEntered)
+        .coverParallax()   // parallax sintético (giroscopio)
     }
 
     private var artworkPlaceholder: some View {
@@ -760,15 +832,42 @@ struct NowPlayingViewerView: View {
     // MARK: - Animated Artwork Resolution
 
     private func resolveAnimatedArtwork(albumId: String) {
+        // Caso normal (local): tenemos albumId → resolver directo.
+        if !albumId.isEmpty {
+            performAnimatedArtworkLookup(albumId: albumId)
+            return
+        }
+
+        // Caso remoto: el emisor (p.ej. la web del PC) NO manda albumId. Lo
+        // derivamos del songId consultando el backend, y entonces resolvemos el
+        // motion. Dedup por songId para no repetir el lookup en cada tick.
+        let songId = state.songId
+        guard !songId.isEmpty else {
+            lastArtworkAlbumId = ""
+            withAnimation { animatedArtworkUrl = nil }
+            return
+        }
+        guard songId != lastDerivedArtworkSongId else { return }
+        lastDerivedArtworkSongId = songId
+        withAnimation { animatedArtworkUrl = nil }
+
+        Task {
+            guard let derived = await NavidromeService.shared.getSong(id: songId)?.albumId,
+                  !derived.isEmpty,
+                  songId == state.songId else { return }  // la canción no cambió mientras resolvíamos
+            performAnimatedArtworkLookup(albumId: derived)
+        }
+    }
+
+    /// Resuelve y aplica el animated artwork para un albumId ya conocido.
+    private func performAnimatedArtworkLookup(albumId: String) {
         guard albumId != lastArtworkAlbumId else { return }
         lastArtworkAlbumId = albumId
 
         // Limpiar el vídeo del álbum anterior YA: nunca arrastrar el motion de
-        // un álbum con el título de otro (se veía el animated de Wu-Tang con un
-        // tema de Drake en remoto). Vuelve al fondo de paleta hasta resolver.
+        // un álbum con el título de otro. Vuelve al fondo de paleta hasta
+        // resolver.
         withAnimation { animatedArtworkUrl = nil }
-
-        guard !albumId.isEmpty else { return }
 
         Task {
             let result = await AlbumArtworkService.shared.resolve(albumId: albumId)

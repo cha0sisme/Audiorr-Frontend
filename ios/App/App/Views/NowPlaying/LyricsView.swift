@@ -32,6 +32,10 @@ struct LyricsView: View {
                             }
                     }
 
+                    // Atribución de fuente, al final del todo.
+                    attributionFooter
+                        .padding(.top, 28)
+
                     Spacer()
                         .frame(height: 200)
                 }
@@ -139,16 +143,43 @@ struct LyricsView: View {
 
     private func lyricLineView(_ line: LyricsService.LyricLine) -> some View {
         let isActive = (line.id == activeLineId)
-        let distance = distanceFromActive(line)
-        let opacity = opacityForDistance(distance)
+        let opacity: Double
+        if lyrics.isSynced && activeLineId == nil {
+            // Letra sincronizada pero la sincronización aún no ha empezado
+            // (progreso anterior a la primera línea): TODAS deben verse como NO
+            // highlighted (atenuadas), no en blanco pleno.
+            opacity = 0.45
+        } else if isActive {
+            opacity = 1.0
+        } else {
+            opacity = opacityForDistance(distanceFromActive(line))
+        }
 
         return Text(line.text)
             .font(isActive ? .title2.weight(.bold) : .title3.weight(.semibold))
-            .foregroundStyle(.white.opacity(isActive ? 1.0 : opacity))
+            .foregroundStyle(.white.opacity(opacity))
             .scaleEffect(isActive ? 1.0 : 0.95, anchor: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .animation(Anim.content, value: isActive)
             .contentShape(Rectangle())
+    }
+
+    // MARK: - Atribución de fuente
+
+    /// Texto de atribución: LRCLIB (en inglés) o homelab (letras locales/embebidas).
+    private var attributionText: String {
+        switch lyrics.source {
+        case .lrclib:   return "Lyrics provided by LRCLIB"
+        case .embedded: return "Letras proporcionadas por homelab"
+        }
+    }
+
+    /// Nota de atribución al final de la letra. Sin highlight, atenuada, sin bold.
+    private var attributionFooter: some View {
+        Text(attributionText)
+            .font(.footnote)
+            .foregroundStyle(.white.opacity(0.35))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func distanceFromActive(_ line: LyricsService.LyricLine) -> Int {
