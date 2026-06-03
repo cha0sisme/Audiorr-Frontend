@@ -165,10 +165,10 @@ struct ArtistDetailView: View {
     /// Use parent namespace when available, local fallback otherwise.
     private var heroNS: Namespace.ID { heroNamespace ?? localHeroNS }
 
-    /// Espacio bajo la foto para los botones de Play/Shuffle: alto del
-    /// botón (48) + padding bottom (20) + margen sobre el bottom de la
-    /// foto (22) = 90pt.
-    private let bottomArea: CGFloat = 90
+    /// Pequeño margen bajo la foto antes del contenido (la bio). El botón de
+    /// Play ahora va en la MISMA línea que el nombre (sobre la foto), así que ya
+    /// no se reserva la franja grande de antes — la bio sube a esa posición.
+    private let bottomArea: CGFloat = 14
 
     /// Ancho visual de la pantalla.
     private var screenWidth: CGFloat {
@@ -350,82 +350,50 @@ struct ArtistDetailView: View {
     }
 
     private var heroContent: some View {
-        // Dos capas superpuestas:
-        //  1. Nombre del artista anclado al BOTTOM-IZQUIERDA del cuadrado
-        //     de la foto, en blanco sobre el scrim oscuro (Apple Music style).
-        //  2. Botones de Play/Shuffle al BOTTOM del hero entero.
-        ZStack {
-            VStack(spacing: 0) {
-                Spacer()
-                HStack(spacing: 0) {
-                    Text(vm.artist.name)
-                        .font(.system(size: 32, weight: .heavy))
-                        .foregroundStyle(isLight ? Color.black : .white)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.70)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 22)
-                // Reserva el espacio del bottomArea para que el nombre
-                // quede anclado justo encima del bottom de la foto.
-                Color.clear.frame(height: bottomArea)
-            }
-
-            VStack(spacing: 0) {
-                Spacer()
-                playButtons
-                    .padding(.bottom, 20)
-            }
-        }
-        .frame(height: heroHeight)
-    }
-
-    /// Reproducir (cápsula principal) + Shuffle (círculo) en HStack. Mismo
-    /// patrón que AlbumDetailView.playButtons. Shuffle dispara `loadAndShuffle`
-    /// que reusa la carga del primer álbum pero envía la tracklist barajada.
-    private var playButtons: some View {
-        // Mismo estilo Apple Music iOS 26.4 que AlbumDetailView (centralizado
-        // en `AlbumPalette`). El artist page no tiene motion artwork hoy
-        // (no hay endpoint backend), así que motionPresent es siempre false.
+        // Nombre del artista anclado al BOTTOM de la foto, con el botón de Play
+        // (circular) en la MISMA línea, a la derecha. Sin shuffle. El nombre se
+        // acorta (lineLimit + minimumScaleFactor) y el botón tiene tamaño fijo
+        // con prioridad de layout para que nunca lo desplace un nombre largo.
         let playBg = Color(vm.palette.playButtonBackground(motionPresent: false))
         let playFg = Color(vm.palette.playButtonForeground(motionPresent: false))
-        let shuffleBg = Color(vm.palette.shuffleButtonBackground(motionPresent: false))
-        let shuffleFg = Color(vm.palette.shuffleButtonForeground(motionPresent: false))
 
-        return HStack(spacing: 10) {
-            Button {
-                Task { await vm.loadAndPlay() }
-            } label: {
-                Group {
-                    if vm.isLoadingPlayback {
-                        ProgressView().tint(playFg)
-                    } else {
-                        HStack(spacing: 8) {
+        return VStack(spacing: 0) {
+            Spacer()
+            HStack(alignment: .center, spacing: 12) {
+                Text(vm.artist.name)
+                    .font(.system(size: 30, weight: .heavy))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.55)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    Task { await vm.loadAndPlay() }
+                } label: {
+                    Group {
+                        if vm.isLoadingPlayback {
+                            ProgressView().tint(playFg)
+                        } else {
                             Image(systemName: "play.fill")
-                            Text(L.play).fontWeight(.semibold)
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(playFg)
                         }
-                        .font(.system(size: 17))
                     }
+                    .frame(width: 54, height: 54)
+                    .background(playBg, in: Circle())
                 }
-                .foregroundStyle(playFg)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 13)
-                .background(playBg, in: Capsule())
+                .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
+                .layoutPriority(1)   // el botón nunca se comprime
             }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 18)
 
-            Button {
-                Task { await vm.loadAndShuffle() }
-            } label: {
-                Image(systemName: "shuffle")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(shuffleFg)
-                    .frame(width: 48, height: 48)
-                    .background(shuffleBg, in: Circle())
-            }
+            // Pequeño margen antes del contenido (la bio sube hasta aquí).
+            Color.clear.frame(height: bottomArea)
         }
-        .disabled(vm.isLoadingAlbums || vm.isLoadingPlayback || vm.albums.isEmpty)
+        .frame(height: heroHeight)
     }
 
     /// Foto del artista en formato cuadrado 1:1, edge-to-edge horizontal,
@@ -527,18 +495,14 @@ struct ArtistDetailView: View {
             let visible = Array(vm.albums.prefix(albumsVisibleLimit))
             let overflow = vm.albums.count - albumsVisibleLimit
 
-            HorizontalScrollSection(title: L.albums, isLight: isLight) {
+            HorizontalScrollSection(
+                title: L.albums,
+                isLight: isLight,
+                seeAll: overflow > 0 ? .albums(title: L.albums, items: vm.albums) : nil
+            ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .year, isLight: isLight, heroNamespace: heroNS)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.albums(
-                        title: L.albums, items: vm.albums
-                    )) {
-                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -556,18 +520,14 @@ struct ArtistDetailView: View {
             let visible = Array(vm.collaborations.prefix(collabsVisibleLimit))
             let overflow = vm.collaborations.count - collabsVisibleLimit
 
-            HorizontalScrollSection(title: L.appearsIn, isLight: isLight) {
+            HorizontalScrollSection(
+                title: L.appearsIn,
+                isLight: isLight,
+                seeAll: overflow > 0 ? .albums(title: L.appearsIn, items: vm.collaborations) : nil
+            ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: heroNS)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.albums(
-                        title: L.appearsIn, items: vm.collaborations
-                    )) {
-                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -587,19 +547,14 @@ struct ArtistDetailView: View {
 
             HorizontalScrollSection(
                 title: L.playlistsWith(vm.artist.name),
-                isLight: isLight
+                isLight: isLight,
+                seeAll: overflow > 0
+                    ? .playlists(title: L.playlistsWith(vm.artist.name), items: vm.playlists)
+                    : nil
             ) {
                 ForEach(visible) { playlist in
                     NavigationLink(value: playlist) {
                         PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: heroNS)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.playlists(
-                        title: L.playlistsWith(vm.artist.name), items: vm.playlists
-                    )) {
-                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -626,18 +581,14 @@ struct ArtistDetailView: View {
             let visible = Array(artists.prefix(similarVisibleLimit))
             let overflow = artists.count - similarVisibleLimit
 
-            HorizontalScrollSection(title: L.fansAlsoListen, isLight: isLight) {
+            HorizontalScrollSection(
+                title: L.fansAlsoListen,
+                isLight: isLight,
+                seeAll: overflow > 0 ? .artists(title: L.fansAlsoListen, items: artists) : nil
+            ) {
                 ForEach(visible) { artist in
                     NavigationLink(value: artist) {
                         ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
-                    }
-                    .buttonStyle(.plain)
-                }
-                if overflow > 0 {
-                    NavigationLink(value: SeeAllDestination.artists(
-                        title: L.fansAlsoListen, items: artists
-                    )) {
-                        SeeAllArtistCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }

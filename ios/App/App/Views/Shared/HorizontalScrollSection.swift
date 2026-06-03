@@ -24,6 +24,9 @@ struct HorizontalScrollSection<Content: View, Action: View>: View {
     /// Pass `true`/`false` for palette-driven pages. `nil` uses system colors.
     let isLight: Bool?
     let spacing: CGFloat
+    /// Si se pasa, el encabezado se vuelve un `NavigationLink` con un chevron `>`
+    /// (estilo Apple Music) que abre la sección completa en `SeeAllGridView`.
+    let seeAll: SeeAllDestination?
     @ViewBuilder let content: () -> Content
     @ViewBuilder let action: () -> Action
 
@@ -31,12 +34,14 @@ struct HorizontalScrollSection<Content: View, Action: View>: View {
         title: String? = nil,
         isLight: Bool? = nil,
         spacing: CGFloat = 14,
+        seeAll: SeeAllDestination? = nil,
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder action: @escaping () -> Action = { EmptyView() }
     ) {
         self.title = title
         self.isLight = isLight
         self.spacing = spacing
+        self.seeAll = seeAll
         self.content = content
         self.action = action
     }
@@ -48,12 +53,27 @@ struct HorizontalScrollSection<Content: View, Action: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if title != nil || Action.self != EmptyView.self {
+            if title != nil || seeAll != nil || Action.self != EmptyView.self {
                 HStack(alignment: .firstTextBaseline) {
                     if let title {
-                        Text(title)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(titleColor)
+                        if let seeAll {
+                            // Encabezado tappable con chevron (Apple Music).
+                            NavigationLink(value: seeAll) {
+                                HStack(spacing: 5) {
+                                    Text(title)
+                                        .font(.system(size: 22, weight: .bold))
+                                        .foregroundStyle(titleColor)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 14, weight: .bold))
+                                        .foregroundStyle(titleColor.opacity(0.35))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Text(title)
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(titleColor)
+                        }
                     }
                     Spacer(minLength: 8)
                     action()
