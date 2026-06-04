@@ -175,26 +175,38 @@ struct SongDownloadButton: View {
     let song: NavidromeSong
 
     @State private var isCached = false
-    @State private var isDownloading = false
 
     var body: some View {
+        // Leer `activeDownloads` suscribe la vista al DownloadManager (@Observable):
+        // el spinner aparece/desaparece según el estado REAL de la descarga, en vez
+        // de quedarse colgado para siempre (el bug anterior: `checkState` corría una
+        // sola vez al aparecer y nunca volvía a comprobar tras completar la descarga).
+        let downloading = DownloadManager.shared.activeDownloads.contains { $0.id == song.id }
         Group {
             if isCached {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(.green)
-            } else if isDownloading {
+            } else if downloading {
                 ProgressView()
                     .controlSize(.mini)
             }
         }
-        .task { await checkState() }
+        .task(id: song.id) { await refreshCached() }
+        .task(id: downloading) {
+            // Al SALIR de activeDownloads (descarga terminada), comprobar si quedó
+            // cacheada para pasar a la palomita. Reintento corto por si el fichero
+            // se escribe justo después de actualizarse el estado observable.
+            guard !downloading else { return }
+            await refreshCached()
+            if !isCached {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await refreshCached()
+            }
+        }
     }
 
-    private func checkState() async {
+    private func refreshCached() async {
         isCached = await OfflineStorageManager.shared.isCached(songId: song.id)
-        if !isCached {
-            isDownloading = DownloadManager.shared.isSongQueued(songId: song.id)
-        }
     }
 }
