@@ -434,8 +434,10 @@ struct PlaylistDetailView: View {
             PlaylistCoverImage(playlist: vm.displayPlaylist, image: vm.coverImage)
                 .frame(width: coverSize, height: coverSize)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.55), radius: 22, x: 0, y: 8)
-                .coverParallax()   // animated artwork sintético (giroscopio)
+                // Sombra estilo Apple Music (iOS 26.4): ambiental ancha y tenue +
+                // contacto sutil, en vez de una sombra única y oscura.
+                .shadow(color: .black.opacity(0.20), radius: 28, x: 0, y: 13)
+                .shadow(color: .black.opacity(0.10), radius: 7, x: 0, y: 4)
 
             Spacer().frame(height: 20)   // hueco FIJO cover↔título
 

@@ -557,13 +557,23 @@ struct AlbumDetailView: View {
             coverArtImage
                 .frame(width: coverSize, height: coverSize)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                // Sombra estilo Apple Music (iOS 26.4): dos capas — una ambiental
+                // ancha y muy tenue + una de contacto sutil — en lugar de una
+                // sombra única y oscura. En covers sólidas se reduce; en sólidas
+                // claras se elimina para que se funda con el fondo.
                 .shadow(
                     color: vm.palette.isSolid
-                        ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
-                        : .black.opacity(0.55),
-                    radius: vm.palette.isSolid ? 8 : 22,
+                        ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.10)
+                        : .black.opacity(0.20),
+                    radius: vm.palette.isSolid ? 6 : 28,
                     x: 0,
-                    y: vm.palette.isSolid ? 2 : 8
+                    y: vm.palette.isSolid ? 2 : 13
+                )
+                .shadow(
+                    color: vm.palette.isSolid ? .clear : .black.opacity(0.10),
+                    radius: vm.palette.isSolid ? 0 : 7,
+                    x: 0,
+                    y: vm.palette.isSolid ? 0 : 4
                 )
 
             Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
