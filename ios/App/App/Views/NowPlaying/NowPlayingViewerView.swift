@@ -470,13 +470,34 @@ struct NowPlayingViewerView: View {
 
     // MARK: - Animated Artwork Backdrop (estilo hero AlbumDetail)
 
+    /// Fondo de página del backdrop animado. El player usa controles/iconos
+    /// BLANCOS siempre (igual que `paletteBackground`, canvas fullscreen, etc.),
+    /// así que sobre covers CLARAS —el motion blanco/crema pintaba la mitad
+    /// inferior casi blanca y los controles blancos quedaban invisibles— el fondo
+    /// se oscurece SIEMPRE hacia casi-negro tintado con la portada. Reusa la misma
+    /// fórmula "30% primario + 70% #0e0e0e" que `pageBackgroundColor` aplica a las
+    /// covers oscuras: sobre covers oscuras el resultado coincide con el normal;
+    /// sobre claras garantiza el contraste de los controles blancos.
+    private var animatedPageColor: UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        palette.primary.getRed(&r, green: &g, blue: &b, alpha: nil)
+        let base: CGFloat = 14.0 / 255.0   // #0e0e0e
+        return UIColor(red:   r * 0.30 + base * 0.70,
+                       green: g * 0.30 + base * 0.70,
+                       blue:  b * 0.30 + base * 0.70, alpha: 1)
+    }
+
     /// Cabecera de motion full-width ARRIBA (de borde a borde, bajo el notch)
     /// que se funde al color de paleta hacia abajo con `heroFade` —el MISMO
     /// lenguaje del hero de AlbumDetail—. El resto de la pantalla es el color de
     /// paleta, donde se apoyan título y controles. Sin overlay oscuro de canvas.
     @ViewBuilder
     private func animatedArtworkBackdrop(url: URL) -> some View {
-        let pageBg = Color(palette.pageBackgroundColor)
+        // Fondo oscurecido (ver `animatedPageColor`): los controles del viewer son
+        // blancos fijos, así que el motion claro NO debe dejar la zona inferior en
+        // claro. El vídeo conserva sus colores reales arriba y se funde a este
+        // color oscuro hacia abajo, donde se apoyan título y controles.
+        let pageBg = Color(animatedPageColor)
 
         GeometryReader { g in
             let videoHeight = g.size.height * 0.62
