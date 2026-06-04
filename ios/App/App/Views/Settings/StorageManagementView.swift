@@ -132,7 +132,10 @@ struct StorageManagementView: View {
                 Text(L.autoCacheFooter)
             }
 
-            // Lock Screen animated artwork (motion)
+            // Lock Screen animated artwork (motion). Solo con backend Audiorr
+            // disponible: los clips de motion los sirve ese backend, así que sin
+            // conexión la opción no aplica y no debe mostrarse.
+            if BackendState.shared.isAvailable {
             Section {
                 Picker(selection: Binding(
                     get: { vm.lockScreenMotion },
@@ -148,6 +151,7 @@ struct StorageManagementView: View {
                 Text(L.animatedArtwork)
             } footer: {
                 Text(L.animatedArtworkFooter)
+            }
             }
 
             // Downloaded groups
