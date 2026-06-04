@@ -85,18 +85,20 @@ final class AlbumArtworkService {
     /// URL del clip de motion para el aspecto pedido (sin fallback cruzado:
     /// `tall` devuelve solo `fileUrlTall`, `square` solo `fileUrl`), para que el
     /// clip coincida con la clave del lock screen.
-    func motionURL(albumId: String, aspect: MotionAspect) async -> URL? {
+    func motionURL(albumId: String, aspect: MotionAspect,
+                   session: URLSession = AudiorrNetwork.background) async -> URL? {
         let key = "\(albumId)|\(aspect == .tall ? "t" : "s")"
         if let cached = aspectCache[key] { return cached }
         guard let backendBase = backendBaseURL() else { return nil }
 
         let json: [String: Any]?
         do {
-            // El lookup del motion para el LOCK SCREEN / descarga offline va por la
-            // sesión `background` (tier más bajo): bajo mala cobertura cede el paso
-            // al audio y a la cover, igual que el propio clip. El viewer a pantalla
-            // completa usa `resolve()` por `interactive` (UI visible enfocada).
-            json = try await fetchArtworkJSON(albumId: albumId, base: backendBase, session: AudiorrNetwork.background)
+            // El caller elige el tier: el LOCK SCREEN usa `interactive` (debe estar
+            // listo antes de que el usuario bloquee; `background` lo difería y la
+            // descarga no llegaba a tiempo), la descarga OFFLINE usa `background`
+            // (no corre prisa, cede el paso al audio/cover). El viewer a pantalla
+            // completa usa `resolve()` por `interactive`.
+            json = try await fetchArtworkJSON(albumId: albumId, base: backendBase, session: session)
         } catch {
             // Error TRANSITORIO (red lenta/caída, o el caller canceló al saltar de
             // tema con poca cobertura): NO cacheamos negativo, así el motion se

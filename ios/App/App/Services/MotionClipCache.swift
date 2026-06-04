@@ -35,7 +35,8 @@ actor MotionClipCache {
 
     /// URL local del clip, descargándolo si hace falta. `pin` lo marca como
     /// no-evictable (uso: descarga offline del álbum). Devuelve nil si falla.
-    func localURL(key: String, remoteURL: URL, pin: Bool = false) async -> URL? {
+    func localURL(key: String, remoteURL: URL, pin: Bool = false,
+                  session: URLSession = AudiorrNetwork.background) async -> URL? {
         loadIndexIfNeeded()
 
         if var entry = index[key], FileManager.default.fileExists(atPath: fileURL(entry.fileName).path) {
@@ -50,7 +51,7 @@ actor MotionClipCache {
         if let inflight = pending[key] {
             task = inflight
         } else {
-            task = Task<URL?, Never> { await download(key: key, remoteURL: remoteURL, pin: pin) }
+            task = Task<URL?, Never> { await download(key: key, remoteURL: remoteURL, pin: pin, session: session) }
             pending[key] = task
         }
         // Propaga la cancelación del caller (p.ej. un skip de canción) a la
@@ -83,11 +84,12 @@ actor MotionClipCache {
 
     // MARK: - Private
 
-    private func download(key: String, remoteURL: URL, pin: Bool) async -> URL? {
+    private func download(key: String, remoteURL: URL, pin: Bool,
+                          session: URLSession = AudiorrNetwork.background) async -> URL? {
         let ext = remoteURL.pathExtension.isEmpty ? "mp4" : remoteURL.pathExtension
         let name = "\(key).\(ext)"
         let dest = fileURL(name)
-        guard let (data, response) = try? await AudiorrNetwork.background.data(from: remoteURL),
+        guard let (data, response) = try? await session.data(from: remoteURL),
               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
               !data.isEmpty else {
             return nil

@@ -2215,12 +2215,15 @@ class AudioEngineManager {
                               : MPNowPlayingInfoProperty1x1AnimatedArtwork
 
             guard let remote = await AlbumArtworkService.shared.motionURL(
-                albumId: albumId, aspect: useTall ? .tall : .square
+                albumId: albumId, aspect: useTall ? .tall : .square,
+                session: AudiorrNetwork.interactive
             ) else { return }
             guard await self.isStillCurrent(songId) else { return }
 
             let cacheKey = "\(albumId)_\(useTall ? "t" : "s")"
-            guard let localURL = await MotionClipCache.shared.localURL(key: cacheKey, remoteURL: remote) else { return }
+            guard let localURL = await MotionClipCache.shared.localURL(
+                key: cacheKey, remoteURL: remote, session: AudiorrNetwork.interactive
+            ) else { return }
             guard await self.isStillCurrent(songId) else { return }
 
             await self.applyAnimatedArtwork(localURL: localURL, key: key, artworkID: cacheKey, songId: songId)
