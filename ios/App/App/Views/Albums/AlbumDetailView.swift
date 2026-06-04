@@ -155,20 +155,27 @@ struct AlbumDetailView: View {
     /// botones y la lista sea constante sea cual sea el nº de líneas del título,
     /// manteniendo a la vez la cover anclada (inset fijo) bajo la barra.
     /// Prioridad de efectos (sin mezclar), como pidió el diseño:
-    ///   1. animated artwork → layout estándar con vídeo de fondo.
+    ///   1. animated artwork → MISMO recorte/resolución que NowPlaying: vídeo
+    ///      full-width en el 62% superior de pantalla, centrado, fundido a fondo
+    ///      y título/botones DEBAJO (motionHeroSection + titleButtonsSection).
     ///   2. isSolid (y SIN animated) → cover cuadrada full-screen + fondo del
     ///      color del borde (sin costura), título debajo.
     ///   3. normal → layout estándar (cover-tarjeta).
     /// `isSolidMode` solo es true en el caso 2; el animated SIEMPRE gana.
+    private var isMotionMode: Bool { vm.animatedArtworkUrl != nil }
     private var isSolidMode: Bool { vm.animatedArtworkUrl == nil && vm.palette.isSolid }
 
     private var heroHeight: CGFloat {
+        // Motion: el hero es SOLO el vídeo (62% de pantalla, igual que el
+        // backdrop de NowPlaying); título/botones van debajo en su propia
+        // sección, como isSolid.
+        if isMotionMode { return motionVideoHeight }
         // 189 = inset extra (88) + hueco cover↔título (20) + hueco info↔botones
         // (21) + alto del bloque de botones (~48) + hueco botones↔bio (12). El
         // frame contiene EXACTAMENTE el contenido, así que el Spacer final
         // descansa en sus 12pt y el botón de play nunca invade la bio. Los huecos
         // (21 y 12) igualan a los de isSolid (titleButtonsSection).
-        isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 189)
+        return isSolidMode ? screenWidth : (safeAreaTop + coverSize + titleBlockHeight + 189)
     }
 
     init(album: NavidromeAlbum, onDismiss: (() -> Void)? = nil) {
@@ -246,6 +253,18 @@ struct AlbumDetailView: View {
             .first?.screen.bounds.width ?? 393
     }
 
+    /// Alto de pantalla — base para el alto del vídeo de motion.
+    private var screenHeight: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.bounds.height ?? 852
+    }
+
+    /// Alto del vídeo de motion: 62% de la pantalla, EXACTAMENTE el mismo frame
+    /// (ancho × 0.62·alto) que el backdrop animado de NowPlaying, para que el
+    /// recorte aspect-fill y el zoom coincidan pixel a pixel.
+    private var motionVideoHeight: CGFloat { screenHeight * 0.62 }
+
     /// Inset superior del cover en modo isSolid: arranca bajo la barra de
     /// navegación, con heroBgColor (color del borde) en la franja de arriba.
     private var coverTopInset: CGFloat { safeAreaTop + 48 }
@@ -273,7 +292,9 @@ struct AlbumDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
-                    if isSolidMode { titleButtonsSection }
+                    // isSolid y motion comparten el patrón "cover/vídeo arriba,
+                    // título+botones debajo".
+                    if isSolidMode || isMotionMode { titleButtonsSection }
                     albumNotesSection
                     songListSection
                     Spacer(minLength: 120) // mini-player clearance
@@ -331,11 +352,38 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var heroSection: some View {
-        if isSolidMode {
+        if let motionUrl = vm.animatedArtworkUrl {
+            motionHeroSection(url: motionUrl)
+        } else if isSolidMode {
             solidHeroSection
         } else {
             standardHeroSection
         }
+    }
+
+    /// Motion (animated artwork): réplica EXACTA del backdrop de NowPlaying.
+    /// Vídeo full-width en el 62% superior de la pantalla, centrado (offset 0 →
+    /// mismo recorte/zoom aspect-fill), fundido al fondo con `heroFade`. El
+    /// título/botones van DEBAJO (titleButtonsSection), sobre el fondo, igual que
+    /// el viewer. Sin scrim sobre el vídeo: el título ya no se compone encima.
+    private func motionHeroSection(url: URL) -> some View {
+        ZStack(alignment: .top) {
+            pageBg
+
+            CanvasView(url: url, autoplay: true)
+                .frame(width: screenWidth, height: heroHeight)
+                .clipped()
+                .overlay(alignment: .bottom) {
+                    // Fundido del motion al color de página (mismo lenguaje que
+                    // NowPlaying: heroFade a ~50% del alto del vídeo).
+                    LinearGradient.heroFade(to: pageBg)
+                        .frame(height: heroHeight * 0.5)
+                        .allowsHitTesting(false)
+                }
+                .scaleEffect(stretchScale, anchor: .bottom)
+        }
+        .frame(width: screenWidth, height: heroHeight)
+        .ignoresSafeArea(edges: .top)
     }
 
     /// isSolid: cover CUADRADA y completa, full-width, bajo la barra de
@@ -439,42 +487,13 @@ struct AlbumDetailView: View {
 
     @ViewBuilder
     private var heroBackground: some View {
-        // Prioridad de backdrop (Apple Music iOS 26):
-        //  1. Motion artwork — vídeo edge-to-edge. Sin gradientes de color
-        //     encima que lo tapen; el vídeo es la identidad visual del header.
-        //     Solo un scrim oscuro en el tercio inferior para legibilidad
-        //     del título/metadata sobre el clip.
-        //  2. Paleta solid (covers planos tipo cream/blanco) — flat color.
-        //  3. Resto — gradientes de paleta sobre blurred cover (comportamiento
+        // Prioridad de backdrop (Apple Music iOS 26). El motion ya NO pasa por
+        // aquí (lo maneja `motionHeroSection` con el recorte de NowPlaying); este
+        // backdrop solo cubre los casos sin vídeo:
+        //  1. Paleta solid (covers planos tipo cream/blanco) — flat color.
+        //  2. Resto — gradientes de paleta sobre blurred cover (comportamiento
         //     histórico cuando no hay motion).
-        if let motionUrl = vm.animatedArtworkUrl {
-            ZStack(alignment: .bottom) {
-                // `videoOffsetY: 80` baja el centro del clip 40pt — Apple
-                // Music compone la parte clave de la cover algo más abajo
-                // del centro geométrico del header para dar respiro al
-                // título y los botones. Sin gap visible: el layer se
-                // extiende hacia abajo, recortado por `masksToBounds`.
-                CanvasView(url: motionUrl, autoplay: true, videoOffsetY: 80)
-
-                // Scrim inferior para legibilidad del título. Se adapta a la
-                // luminancia del artwork: wash oscuro bajo título blanco (covers
-                // oscuras), wash claro bajo título negro (covers blancas/crema).
-                // Sin esto, un artwork animado claro dejaba el título ilegible.
-                let scrimBase: Color = isLight ? .white : .black
-                LinearGradient(
-                    colors: [
-                        scrimBase.opacity(0),
-                        scrimBase.opacity(isLight ? 0.30 : 0.18),
-                        scrimBase.opacity(isLight ? 0.70 : 0.45)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 220)
-                .allowsHitTesting(false)
-            }
-            .ignoresSafeArea(edges: .top)
-        } else if vm.palette.isSolid {
+        if vm.palette.isSolid {
             Color(vm.palette.primary)
                 .ignoresSafeArea(edges: .top)
         } else {
@@ -523,45 +542,34 @@ struct AlbumDetailView: View {
 
     private var heroContent: some View {
         VStack(spacing: 0) {
-            if vm.animatedArtworkUrl == nil {
-                // Sin motion: cover JUSTO por debajo de la barra de navegación.
-                // CLAVE (medido en simulador): la barra ocupa ~44pt por debajo
-                // del safe area (botones terminan en ~safeAreaTop+44 ≈ y106), y
-                // la ScrollView con `ignoresSafeArea(.top)` arranca su contenido
-                // con un origen global ~32pt POR ENCIMA del top de pantalla, así
-                // que la cover acaba en `inset − 32`. Con inset safeAreaTop+88 la
-                // cover queda en ~y118: justo debajo de los botones, sin solapar.
-                Spacer().frame(height: safeAreaTop + 88)
+            // standardHeroSection solo se usa sin motion ni isSolid: cover JUSTO
+            // por debajo de la barra de navegación.
+            // CLAVE (medido en simulador): la barra ocupa ~44pt por debajo
+            // del safe area (botones terminan en ~safeAreaTop+44 ≈ y106), y
+            // la ScrollView con `ignoresSafeArea(.top)` arranca su contenido
+            // con un origen global ~32pt POR ENCIMA del top de pantalla, así
+            // que la cover acaba en `inset − 32`. Con inset safeAreaTop+88 la
+            // cover queda en ~y118: justo debajo de los botones, sin solapar.
+            Spacer().frame(height: safeAreaTop + 88)
 
-                // When the cover is solid + light (white, cream, warm pastels), drop the
-                // shadow so the artwork blends seamlessly into the background.
-                coverArtImage
-                    .frame(width: coverSize, height: coverSize)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .shadow(
-                        color: vm.palette.isSolid
-                            ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
-                            : .black.opacity(0.55),
-                        radius: vm.palette.isSolid ? 8 : 22,
-                        x: 0,
-                        y: vm.palette.isSolid ? 2 : 8
-                    )
-                    .coverParallax()   // animated artwork sintético (giroscopio)
+            // When the cover is solid + light (white, cream, warm pastels), drop the
+            // shadow so the artwork blends seamlessly into the background.
+            coverArtImage
+                .frame(width: coverSize, height: coverSize)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(
+                    color: vm.palette.isSolid
+                        ? .black.opacity(vm.palette.isPrimaryLight ? 0 : 0.15)
+                        : .black.opacity(0.55),
+                    radius: vm.palette.isSolid ? 8 : 22,
+                    x: 0,
+                    y: vm.palette.isSolid ? 2 : 8
+                )
+                .coverParallax()   // animated artwork sintético (giroscopio)
 
-                Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
-            } else {
-                // Con motion: el vídeo es la identidad visual del header.
-                // Empujamos título/botones al fondo del hero, sobre el scrim.
-                Spacer(minLength: 0)
-            }
+            Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
 
-            // Title + metadata — centered.
-            // El título respeta SIEMPRE la luminancia (isLight), también con
-            // motion: el artwork animado es la misma portada del álbum, así que
-            // la paleta extraída de la cover estática es representativa de su
-            // dominante. Forzar blanco hacía invisible el título sobre artworks
-            // animados blancos/crema. El scrim del header (heroBackground) se
-            // adapta a isLight para garantizar contraste en ambos casos.
+            // Title + metadata — centered. Color según luminancia (isLight).
             let titleColor: Color = isLight ? Color.black : .white
             let badgeColor: Color = isLight
                 ? Color.black.opacity(0.45)
@@ -600,14 +608,11 @@ struct AlbumDetailView: View {
             // isSolid (allí: spacing 5 del VStack + padding.top 16 = 21).
             playButtons
                 .padding(.top, 21)
-                .padding(.bottom, vm.animatedArtworkUrl != nil ? 44 : 0)
 
-            if vm.animatedArtworkUrl == nil {
-                // Hueco FIJO botones↔bio = 12pt para igualar isSolid (allí es el
-                // padding.bottom 12 de titleButtonsSection). heroHeight está
-                // calculado para que este spacer descanse exactamente en 12.
-                Spacer(minLength: 12)
-            }
+            // Hueco FIJO botones↔bio = 12pt para igualar isSolid (allí es el
+            // padding.bottom 12 de titleButtonsSection). heroHeight está
+            // calculado para que este spacer descanse exactamente en 12.
+            Spacer(minLength: 12)
         }
         .frame(maxWidth: .infinity)
         .onPreferenceChange(TitleBlockHeightKey.self) { titleBlockHeight = $0 }
