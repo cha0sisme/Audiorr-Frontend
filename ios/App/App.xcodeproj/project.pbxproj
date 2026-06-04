@@ -72,7 +72,6 @@
 		3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA072FA3000000000001 /* ArtistCardView.swift */; };
 		3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA092FA5000000000001 /* AlbumCardView.swift */; };
 		3499AA0C2FA7000000000001 /* AnimationPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA0B2FA7000000000001 /* AnimationPresets.swift */; };
-		3499AA0E2FA7000000000011 /* CoverParallax.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3499AA0D2FA7000000000010 /* CoverParallax.swift */; };
 		4BF16E76F545454C83E7F8DB /* BiquadDSPKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 660E775D93EC476786BA5DB0 /* BiquadDSPKernel.swift */; };
 		504EC3081FED79650016851F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 504EC3071FED79650016851F /* AppDelegate.swift */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
@@ -152,7 +151,6 @@
 		3499AA072FA3000000000001 /* ArtistCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistCardView.swift; sourceTree = "<group>"; };
 		3499AA092FA5000000000001 /* AlbumCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumCardView.swift; sourceTree = "<group>"; };
 		3499AA0B2FA7000000000001 /* AnimationPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimationPresets.swift; sourceTree = "<group>"; };
-		3499AA0D2FA7000000000010 /* CoverParallax.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverParallax.swift; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		504EC3071FED79650016851F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -313,7 +311,6 @@
 				3499AA072FA3000000000001 /* ArtistCardView.swift */,
 				3499AA092FA5000000000001 /* AlbumCardView.swift */,
 				3499AA0B2FA7000000000001 /* AnimationPresets.swift */,
-				3499AA0D2FA7000000000010 /* CoverParallax.swift */,
 				3400DD042FA6000000000004 /* MiniPlayerView.swift */,
 				3400FF382FA8000000000038 /* DownloadButton.swift */,
 			);
@@ -486,7 +483,6 @@
 				3499AA082FA3000000000001 /* ArtistCardView.swift in Sources */,
 				3499AA0A2FA5000000000001 /* AlbumCardView.swift in Sources */,
 				3499AA0C2FA7000000000001 /* AnimationPresets.swift in Sources */,
-				3499AA0E2FA7000000000011 /* CoverParallax.swift in Sources */,
 				342286C32F90D45200785736 /* PlayerService.swift in Sources */,
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,
 				DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */,
