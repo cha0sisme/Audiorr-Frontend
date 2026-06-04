@@ -1554,7 +1554,8 @@ final class QueueManager: AudioEngineDelegate {
         let artworkUrl = NavidromeService.shared.coverURL(id: song.coverArt, size: 1024)?.absoluteString
         engine.updateNowPlayingMetadata(
             title: song.title, artist: song.artist, album: song.album,
-            duration: duration, artworkUrl: artworkUrl
+            duration: duration, artworkUrl: artworkUrl,
+            albumId: song.albumId, songId: song.id
         )
 
         // Broadcast to Audiorr Connect (song changed = significant)

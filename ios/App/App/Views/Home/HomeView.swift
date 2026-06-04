@@ -296,6 +296,7 @@ struct HomeView: View {
     @ObservedObject private var theme = AppTheme.shared
     private var network = NetworkMonitor.shared
     @State private var offlineAlbums: [(albumId: String, name: String, artist: String, coverArt: String, songCount: Int, year: Int?)] = []
+    @State private var offlinePlaylists: [(playlistId: String, name: String, coverArt: String, songCount: Int)] = []
     @Namespace private var heroNS
     @State private var navigationPath = NavigationPath()
 
@@ -986,7 +987,7 @@ struct HomeView: View {
                 .font(.system(size: 22, weight: .bold))
                 .padding(.horizontal, 16)
 
-            if offlineAlbums.isEmpty {
+            if offlineAlbums.isEmpty && offlinePlaylists.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "wifi.slash")
                         .font(.system(size: 36))
@@ -1001,41 +1002,89 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 40)
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(offlineAlbums, id: \.albumId) { album in
-                        Button {
-                            navigationPath.append(NavidromeAlbum(
-                                id: album.albumId, name: album.name, artist: album.artist,
-                                coverArt: album.coverArt, songCount: album.songCount,
-                                duration: nil, year: album.year, genre: nil, explicitStatus: nil
-                            ))
-                        } label: {
-                            HStack(spacing: 12) {
-                                AlbumCoverThumbnail(coverArt: album.coverArt, size: 50)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(album.name)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .lineLimit(1)
-                                    Text("\(album.artist) · \(album.songCount) canciones")
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.down.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .font(.system(size: 14))
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
+                // Playlists descargadas — tap = reproducir todo offline.
+                if !offlinePlaylists.isEmpty {
+                    offlineSubheader(L.playlists)
+                    LazyVStack(spacing: 0) {
+                        ForEach(offlinePlaylists, id: \.playlistId) { pl in
+                            offlineRow(
+                                coverArt: pl.coverArt, offlineKey: pl.playlistId,
+                                title: pl.name,
+                                subtitle: "\(pl.songCount) \(L.songsLabel.lowercased())"
+                            ) { playOffline(playlistId: pl.playlistId, name: pl.name) }
                         }
-                        .buttonStyle(.plain)
+                    }
+                }
+
+                // Álbumes descargados.
+                if !offlineAlbums.isEmpty {
+                    offlineSubheader(L.albums)
+                    LazyVStack(spacing: 0) {
+                        ForEach(offlineAlbums, id: \.albumId) { album in
+                            offlineRow(
+                                coverArt: album.coverArt, offlineKey: album.albumId,
+                                title: album.name,
+                                subtitle: "\(album.artist) · \(album.songCount) \(L.songsLabel.lowercased())"
+                            ) { playOffline(albumId: album.albumId, name: album.name) }
+                        }
                     }
                 }
             }
         }
         .task {
             offlineAlbums = await OfflineContentProvider.shared.cachedAlbums()
+            offlinePlaylists = await OfflineContentProvider.shared.cachedPlaylistsInfo()
+        }
+    }
+
+    private func offlineSubheader(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+    }
+
+    /// Fila de contenido offline: cover (offline-first) + título/subtítulo + icono
+    /// de reproducir. El tap reproduce TODO el contenido descargado directamente
+    /// (no depende de que el detalle funcione sin red).
+    private func offlineRow(coverArt: String, offlineKey: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                CachedCoverView(coverArt: coverArt.isEmpty ? nil : coverArt, offlineKey: offlineKey, size: 50)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "play.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 22))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func playOffline(albumId: String, name: String) {
+        Task {
+            let songs = await OfflineContentProvider.shared.navidromeSongs(albumId: albumId)
+            guard !songs.isEmpty else { return }
+            PlayerService.shared.playPlaylist(songs, contextUri: "album:\(albumId)", contextName: name)
+        }
+    }
+
+    private func playOffline(playlistId: String, name: String) {
+        Task {
+            let songs = await OfflineContentProvider.shared.navidromeSongs(playlistId: playlistId)
+            guard !songs.isEmpty else { return }
+            PlayerService.shared.playPlaylist(songs, contextUri: "playlist:\(playlistId)", contextName: name)
         }
     }
 }
@@ -1095,6 +1144,10 @@ private struct QuickPlayArtistAvatar: View {
 private struct CachedCoverView: View {
     let coverArt: String?
     var playlistId: String? = nil   // When set, tries backend cover first (personalized)
+    /// Clave de la cover persistida en disco para uso offline (albumId/playlistId).
+    /// Si está presente y hay imagen guardada, se usa primero — así las covers se
+    /// ven sin servidor.
+    var offlineKey: String? = nil
     var size: CGFloat = 48
     var cornerRadius: CGFloat = 8
     var fallbackIcon: String = "music.note"
@@ -1119,7 +1172,11 @@ private struct CachedCoverView: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .onAppear {
             guard image == nil else { return }
-            if let pid = playlistId, let cached = PlaylistCoverCache.shared.image(for: pid) {
+            // Offline-first: cover persistida en disco (sobrevive a reinicios y
+            // funciona sin servidor).
+            if let key = offlineKey, let cached = OfflineArtworkStore.shared.image(forKey: key) {
+                image = cached
+            } else if let pid = playlistId, let cached = PlaylistCoverCache.shared.image(for: pid) {
                 image = cached
             } else if let coverArt {
                 image = AlbumCoverCache.shared.image(for: coverArt)

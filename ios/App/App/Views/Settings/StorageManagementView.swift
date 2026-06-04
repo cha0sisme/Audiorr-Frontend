@@ -11,6 +11,7 @@ final class StorageManagementViewModel: ObservableObject {
     @Published var maxCacheBytes: Int64 = PersistenceService.shared.offlineMaxCacheBytes
     @Published var autoCacheEnabled: Bool = PersistenceService.shared.offlineAutoCacheEnabled
     @Published var wifiOnly: Bool = PersistenceService.shared.offlineWifiOnly
+    @Published var lockScreenMotion: String = PersistenceService.shared.lockScreenMotion
 
     // Cache limit options in bytes
     static let cacheLimitOptions: [(label: String, bytes: Int64)] = [
@@ -43,6 +44,11 @@ final class StorageManagementViewModel: ObservableObject {
     func toggleWifiOnly(_ enabled: Bool) {
         wifiOnly = enabled
         PersistenceService.shared.offlineWifiOnly = enabled
+    }
+
+    func setLockScreenMotion(_ value: String) {
+        lockScreenMotion = value
+        PersistenceService.shared.lockScreenMotion = value
     }
 
     func clearUnpinned() async {
@@ -126,11 +132,30 @@ struct StorageManagementView: View {
                 Text(L.autoCacheFooter)
             }
 
+            // Lock Screen animated artwork (motion)
+            Section {
+                Picker(selection: Binding(
+                    get: { vm.lockScreenMotion },
+                    set: { vm.setLockScreenMotion($0) }
+                )) {
+                    Text(L.motionAlways).tag("always")
+                    Text(L.motionWifiOnly).tag("wifi")
+                    Text(L.motionOff).tag("off")
+                } label: {
+                    Label(L.animatedArtworkLockScreen, systemImage: "photo.tv")
+                }
+            } header: {
+                Text(L.animatedArtwork)
+            } footer: {
+                Text(L.animatedArtworkFooter)
+            }
+
             // Downloaded groups
             if !vm.groups.isEmpty {
                 Section {
                     ForEach(vm.groups, id: \.groupId) { group in
                         HStack {
+                            DownloadGroupCover(groupId: group.groupId)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.title)
                                     .font(.subheadline.weight(.medium))
@@ -283,5 +308,33 @@ struct StorageManagementView: View {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+}
+
+// MARK: - Download group cover
+
+/// Miniatura de la cover de un grupo descargado (álbum/playlist), para que en el
+/// gestor de descargas aparezca "tal cual" con su portada. Lee la cover
+/// persistida en disco por `OfflineArtworkStore` (keyed por groupId al descargar).
+private struct DownloadGroupCover: View {
+    let groupId: String
+
+    var body: some View {
+        Group {
+            if let img = OfflineArtworkStore.shared.image(forKey: groupId) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color(.tertiarySystemFill)
+                    .overlay(
+                        Image(systemName: "music.note")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary)
+                    )
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }

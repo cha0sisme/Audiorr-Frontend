@@ -108,6 +108,21 @@ final class DownloadManager: NSObject {
             Task { await OfflineContentProvider.shared.saveAlbumMeta(album: album, songs: songs) }
         }
 
+        // Cachear la cover a disco para verla offline, y (si el motion no está
+        // desactivado) pre-fijar el clip del álbum para que anime también offline
+        // en la pantalla de bloqueo. Keyed por albumId (clave estable offline).
+        let coverArtId = album?.coverArt ?? songs.first?.coverArt
+        Task {
+            await OfflineArtworkStore.shared.ensure(
+                key: albumId,
+                url: NavidromeService.shared.coverURL(id: coverArtId, size: 600)
+            )
+            if PersistenceService.shared.lockScreenMotion != "off",
+               let remote = await AlbumArtworkService.shared.motionURL(albumId: albumId, aspect: .tall) {
+                await MotionClipCache.shared.prefetchPinned(key: "\(albumId)_t", remoteURL: remote)
+            }
+        }
+
         for song in songs {
             // Skip already cached
             if isSongDownloaded(songId: song.id) {
@@ -128,6 +143,17 @@ final class DownloadManager: NSObject {
         // Save playlist metadata for offline browsing
         if let playlist {
             Task { await OfflineContentProvider.shared.savePlaylistMeta(playlist: playlist, songs: songs) }
+        }
+
+        // Cachear la cover de la playlist a disco (verla offline). Keyed por
+        // playlistId (clave estable). El motion es per-álbum, así que no se
+        // pre-fija a nivel de playlist (lo resolverá on-demand al sonar cada tema).
+        let playlistCoverArt = playlist?.coverArt ?? songs.first?.coverArt
+        Task {
+            await OfflineArtworkStore.shared.ensure(
+                key: playlistId,
+                url: NavidromeService.shared.coverURL(id: playlistCoverArt, size: 600)
+            )
         }
 
         for song in songs {

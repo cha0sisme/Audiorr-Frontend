@@ -1,5 +1,6 @@
 import AVFoundation
 import MediaPlayer
+import UIKit
 // Capacitor removed — fully native
 
 /// Motor de audio nativo basado en AVAudioEngine.
@@ -73,6 +74,15 @@ class AudioEngineManager {
     /// (devuelve una copia y causa race conditions con read-modify-write).
     /// Esto también evita que WKWebView en Capacitor pueda borrar nuestra info.
     private var localNowPlayingInfo: [String: Any] = [:]
+
+    // MARK: - Animated artwork (motion en lock screen, iOS 26)
+    /// songId del tema cuyo motion estamos resolviendo/mostrando. Guard contra
+    /// skips rápidos: si la canción cambia, descartamos el clip en curso.
+    private var animatedArtworkSongId: String?
+    private var animatedArtworkTask: Task<Void, Never>?
+    /// Última cover estática descargada — se reutiliza como preview del motion
+    /// (recortada al aspecto que pide el sistema), evitando una segunda descarga.
+    private var currentArtworkImage: UIImage?
 
     // Play sequence counter: incremented on every play() call.
     // The completion handler captures the current value and only fires onTrackEnd
@@ -2090,7 +2100,7 @@ class AudioEngineManager {
 
     // MARK: - NowPlaying (directo, sin JS)
 
-    func updateNowPlayingMetadata(title: String, artist: String, album: String, duration: Double, artworkUrl: String?) {
+    func updateNowPlayingMetadata(title: String, artist: String, album: String, duration: Double, artworkUrl: String?, albumId: String? = nil, songId: String? = nil) {
         let update = { [weak self] in
             guard let self = self else { return }
             self.currentSongTitle = title
@@ -2132,13 +2142,114 @@ class AudioEngineManager {
                     let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                     DispatchQueue.main.async { [weak self] in
                         guard let self = self else { return }
+                        self.currentArtworkImage = image
                         self.localNowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
                         self.publishNowPlayingInfo()
                     }
                 }.resume()
             }
+
+            // Motion artwork en la pantalla de bloqueo (iOS 26). Solo en el
+            // cambio de canción "real" (caller pasa songId/albumId); los
+            // refrescos internos (crossfade preview, corrección de duración) lo
+            // omiten y mantienen el motion vigente.
+            if let songId, let albumId, !albumId.isEmpty {
+                self.scheduleLockScreenMotion(songId: songId, albumId: albumId)
+            }
         }
         if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
+    }
+
+    // MARK: - Animated Artwork (lock screen)
+
+    /// Programa la resolución y publicación del motion artwork para la pantalla
+    /// de bloqueo. Llamar SIEMPRE en el cambio de canción real (desde el main
+    /// thread, dentro del bloque de `updateNowPlayingMetadata`).
+    ///
+    /// Edge cases cubiertos:
+    ///  - Skip rápido: debounce de 1,5 s + guard de `songId` antes de cada paso;
+    ///    si la canción cambió, se aborta sin descargar/aplicar nada.
+    ///  - Dedupe por álbum: el clip se cachea por `{albumId}_{aspecto}`, así que
+    ///    varias canciones del mismo álbum comparten descarga.
+    ///  - Reduce Motion / Bajo Consumo / ajuste "off" / política Wi-Fi: no anima.
+    private func scheduleLockScreenMotion(songId: String, albumId: String) {
+        animatedArtworkTask?.cancel()
+        animatedArtworkSongId = songId
+        // Quitar el motion del tema anterior YA: el lock screen vuelve a la cover
+        // estática hasta resolver el nuevo (nunca el clip de la canción previa).
+        removeAnimatedArtworkKeys(publish: true)
+
+        let policy = PersistenceService.shared.lockScreenMotion
+        guard policy != "off",
+              !UIAccessibility.isReduceMotionEnabled,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled else { return }
+
+        animatedArtworkTask = Task { [weak self] in
+            // Debounce: si el usuario salta de tema en <1,5 s, no malgastamos red.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self else { return }
+            guard await self.isStillCurrent(songId) else { return }
+
+            // "wifi": en datos móviles / red cara, no descargamos clips.
+            if policy == "wifi" {
+                let onWifi = await MainActor.run {
+                    NetworkMonitor.shared.isConnected && !NetworkMonitor.shared.isExpensive
+                }
+                guard onWifi else { return }
+            }
+
+            // Aspecto que pide el sistema (iPhone normalmente 3:4).
+            let supported = MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys
+            let useTall: Bool
+            if supported.contains(MPNowPlayingInfoProperty3x4AnimatedArtwork) {
+                useTall = true
+            } else if supported.contains(MPNowPlayingInfoProperty1x1AnimatedArtwork) {
+                useTall = false
+            } else {
+                return  // el sistema no admite motion artwork ahora mismo
+            }
+            let key = useTall ? MPNowPlayingInfoProperty3x4AnimatedArtwork
+                              : MPNowPlayingInfoProperty1x1AnimatedArtwork
+
+            guard let remote = await AlbumArtworkService.shared.motionURL(
+                albumId: albumId, aspect: useTall ? .tall : .square
+            ) else { return }
+            guard await self.isStillCurrent(songId) else { return }
+
+            let cacheKey = "\(albumId)_\(useTall ? "t" : "s")"
+            guard let localURL = await MotionClipCache.shared.localURL(key: cacheKey, remoteURL: remote) else { return }
+            guard await self.isStillCurrent(songId) else { return }
+
+            await self.applyAnimatedArtwork(localURL: localURL, key: key, artworkID: cacheKey, songId: songId)
+        }
+    }
+
+    @MainActor
+    private func isStillCurrent(_ songId: String) -> Bool {
+        animatedArtworkSongId == songId
+    }
+
+    @MainActor
+    private func applyAnimatedArtwork(localURL: URL, key: String, artworkID: String, songId: String) {
+        guard animatedArtworkSongId == songId else { return }
+        let preview = currentArtworkImage
+        let artwork = MPMediaItemAnimatedArtwork(
+            artworkID: artworkID,
+            previewImageRequestHandler: { size, completion in
+                completion(preview?.croppedToAspect(of: size))
+            },
+            videoAssetFileURLRequestHandler: { _, completion in
+                completion(localURL)
+            }
+        )
+        localNowPlayingInfo[key] = artwork
+        publishNowPlayingInfo()
+    }
+
+    private func removeAnimatedArtworkKeys(publish: Bool) {
+        localNowPlayingInfo.removeValue(forKey: MPNowPlayingInfoProperty1x1AnimatedArtwork)
+        localNowPlayingInfo.removeValue(forKey: MPNowPlayingInfoProperty3x4AnimatedArtwork)
+        if publish { publishNowPlayingInfo() }
     }
 
     private func updateNowPlayingProgress() {
@@ -2165,6 +2276,9 @@ class AudioEngineManager {
     }
 
     private func clearNowPlaying() {
+        animatedArtworkTask?.cancel()
+        animatedArtworkSongId = nil
+        currentArtworkImage = nil
         localNowPlayingInfo = [:]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }

@@ -70,45 +70,76 @@ final class AlbumArtworkService {
         cache[albumId] = nil
     }
 
+    // MARK: - Motion por aspecto (lock screen)
+
+    /// Relación de aspecto del clip. La pantalla de bloqueo iOS 26 expone qué
+    /// claves admite (`MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys`):
+    /// 3:4 (`tall`, lo habitual en iPhone) o 1:1 (`square`). El caller resuelve
+    /// la URL del aspecto que el sistema pide para no enviar un clip cuyo aspect
+    /// el sistema rechazaría.
+    enum MotionAspect { case square, tall }
+
+    // Caché por (albumId, aspecto): "{albumId}|t" / "{albumId}|s".
+    private var aspectCache: [String: URL?] = [:]
+
+    /// URL del clip de motion para el aspecto pedido (sin fallback cruzado:
+    /// `tall` devuelve solo `fileUrlTall`, `square` solo `fileUrl`), para que el
+    /// clip coincida con la clave del lock screen.
+    func motionURL(albumId: String, aspect: MotionAspect) async -> URL? {
+        let key = "\(albumId)|\(aspect == .tall ? "t" : "s")"
+        if let cached = aspectCache[key] { return cached }
+        guard let backendBase = backendBaseURL(),
+              let json = await fetchArtworkJSON(albumId: albumId, base: backendBase) else {
+            aspectCache[key] = .some(nil)
+            return nil
+        }
+        let field = aspect == .tall ? "fileUrlTall" : "fileUrl"
+        var result: URL?
+        if let path = json[field] as? String, !path.isEmpty {
+            result = backendBase.appendingPathComponent(path)
+        }
+        aspectCache[key] = .some(result)
+        return result
+    }
+
     // MARK: - Private
 
     private func fetchArtworkUrl(albumId: String) async -> URL? {
-        guard !albumId.isEmpty,
-              let backendBase = backendBaseURL() else { return nil }
+        guard let backendBase = backendBaseURL(),
+              let json = await fetchArtworkJSON(albumId: albumId, base: backendBase) else { return nil }
 
+        // Fallback obligatorio: tall (3:4, iPhone) → square (1:1) → nil.
+        // Un álbum puede tener fileUrl pero fileUrlTall = null (best-effort
+        // del backend); en ese caso el square se ve OK con resizeAspectFill,
+        // recortado vertical.
+        if let tall = json["fileUrlTall"] as? String, !tall.isEmpty {
+            return backendBase.appendingPathComponent(tall)
+        }
+        if let square = json["fileUrl"] as? String, !square.isEmpty {
+            return backendBase.appendingPathComponent(square)
+        }
+        return nil
+    }
+
+    /// Descarga y parsea el JSON de `/api/album-artwork/{albumId}`. Devuelve nil
+    /// si 404 (sin fila) o si `matchStatus` indica que no hay motion.
+    private func fetchArtworkJSON(albumId: String, base backendBase: URL) async -> [String: Any]? {
+        guard !albumId.isEmpty else { return nil }
         let endpoint = backendBase.appendingPathComponent("api/album-artwork/\(albumId)")
         do {
-            // Sesión `interactive`: UI visible cuando el viewer está abierto.
             let (data, response) = try await AudiorrNetwork.interactive.data(from: endpoint)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                // 404 = álbum sin fila en DB. Caso normal de "sin motion", no
-                // error ruidoso. La caché del caller marca el resultado como
-                // negativo y no se reintenta.
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return nil
             }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return nil
-            }
-
             // El backend es la autoridad: si `matchStatus` indica que no hay
-            // motion para este álbum, cortocircuito sin mirar URLs. Blinda
-            // contra filas legacy con `fileUrl` poblado pero estado negativo.
+            // motion para este álbum, cortocircuito (blinda contra filas legacy
+            // con `fileUrl` poblado pero estado negativo).
             if let matchStatus = json["matchStatus"] as? String,
                matchStatus == "no-motion" || matchStatus == "not-found" {
                 return nil
             }
-
-            // Fallback obligatorio: tall (3:4, iPhone) → square (1:1) → nil.
-            // Un álbum puede tener fileUrl pero fileUrlTall = null (best-effort
-            // del backend); en ese caso el square se ve OK con resizeAspectFill,
-            // recortado vertical.
-            if let tall = json["fileUrlTall"] as? String, !tall.isEmpty {
-                return backendBase.appendingPathComponent(tall)
-            }
-            if let square = json["fileUrl"] as? String, !square.isEmpty {
-                return backendBase.appendingPathComponent(square)
-            }
-            return nil
+            return json
         } catch {
             return nil
         }

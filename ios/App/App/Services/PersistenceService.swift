@@ -123,6 +123,25 @@ final class PersistenceService {
         set { defaults.set(newValue, forKey: "audiorr_offlineWifiOnly") }
     }
 
+    // MARK: - Lock Screen Animated Artwork
+
+    /// Política del motion artwork en la pantalla de bloqueo:
+    /// "always" (por defecto) | "wifi" (solo en Wi-Fi) | "off".
+    var lockScreenMotion: String {
+        get { defaults.string(forKey: "audiorr_lockScreenMotion") ?? "always" }
+        set { defaults.set(newValue, forKey: "audiorr_lockScreenMotion") }
+    }
+
+    /// Tope de la caché en disco de clips de motion (separada de la música).
+    /// Default: 250 MB. 0 = sin límite.
+    var motionMaxCacheBytes: Int64 {
+        get {
+            let v = defaults.object(forKey: "audiorr_motionMaxCacheBytes") as? Int64
+            return v ?? 262_144_000 // 250 MB
+        }
+        set { defaults.set(newValue, forKey: "audiorr_motionMaxCacheBytes") }
+    }
+
     // MARK: - Clear All
 
     func clearAll() {

@@ -98,6 +98,13 @@ actor OfflineContentProvider {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// Playlists descargadas como tipos valor (seguro para la UI en main thread).
+    func cachedPlaylistsInfo() -> [(playlistId: String, name: String, coverArt: String, songCount: Int)] {
+        cachedPlaylists().map {
+            (playlistId: $0.playlistId, name: $0.name, coverArt: $0.coverArt, songCount: $0.songCount)
+        }
+    }
+
     /// All cached playlists (from CachedPlaylistMeta where isAlbum == false).
     func cachedPlaylists() -> [CachedPlaylistMeta] {
         let descriptor = FetchDescriptor<CachedPlaylistMeta>(
@@ -134,6 +141,18 @@ actor OfflineContentProvider {
         return orderedIds.compactMap { songMap[$0] }
     }
 
+    /// Cached songs de un álbum, ya convertidas a `NavidromeSong` (tipos valor)
+    /// dentro del actor — seguro para reproducir desde el main thread sin cruzar
+    /// modelos SwiftData entre actores.
+    func navidromeSongs(albumId: String) -> [NavidromeSong] {
+        cachedSongs(albumId: albumId).map { Self.toNavidromeSong($0) }
+    }
+
+    /// Cached songs de una playlist (en orden), convertidas a `NavidromeSong`.
+    func navidromeSongs(playlistId: String) -> [NavidromeSong] {
+        cachedSongs(playlistId: playlistId).map { Self.toNavidromeSong($0) }
+    }
+
     /// All cached songs (for general browsing).
     func allCachedSongs() -> [CachedSong] {
         let descriptor = FetchDescriptor<CachedSong>(
@@ -160,6 +179,22 @@ actor OfflineContentProvider {
     }
 
     // MARK: - Helpers
+
+    /// Convert CachedSong to NavidromeSong for playback (offline rows en Home).
+    /// El loader de reproducción resuelve el fichero local vía OfflineStorageManager,
+    /// así que reproduce sin red.
+    nonisolated static func toNavidromeSong(_ cached: CachedSong) -> NavidromeSong {
+        NavidromeSong(
+            id: cached.songId, title: cached.title, artist: cached.artist,
+            artistId: cached.artistId.isEmpty ? nil : cached.artistId,
+            album: cached.album, albumId: cached.albumId.isEmpty ? nil : cached.albumId,
+            coverArt: cached.coverArt.isEmpty ? nil : cached.coverArt,
+            duration: cached.duration, track: nil, year: nil, genre: nil,
+            explicitStatus: nil,
+            replayGainTrackGain: nil, replayGainTrackPeak: nil,
+            replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+        )
+    }
 
     /// Convert CachedSong to PersistableSong for playback.
     nonisolated static func toPersistable(_ cached: CachedSong) -> PersistableSong {

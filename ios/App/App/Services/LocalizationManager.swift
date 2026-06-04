@@ -307,6 +307,18 @@ enum L {
              : "Con auto-caché activado, cada canción que reproduzcas se guarda para escuchar sin conexión."
     }
     static var activeDownloads: String { isEn ? "Active downloads" : "Descargas activas" }
+
+    // MARK: Animated artwork (lock screen)
+    static var animatedArtwork: String { isEn ? "Animated artwork" : "Carátula animada" }
+    static var animatedArtworkLockScreen: String { isEn ? "Lock Screen animated artwork" : "Carátula animada en bloqueo" }
+    static var motionAlways: String { isEn ? "Always" : "Siempre" }
+    static var motionWifiOnly: String { isEn ? "Wi-Fi only" : "Solo Wi-Fi" }
+    static var motionOff: String { isEn ? "Off" : "Desactivada" }
+    static var animatedArtworkFooter: String {
+        isEn ? "Shows the album's motion artwork full-screen on the Lock Screen. Clips are cached (up to 250 MB) and reused; downloaded albums keep theirs offline."
+             : "Muestra el motion artwork del álbum a pantalla completa en la pantalla de bloqueo. Los clips se cachean (hasta 250 MB) y se reutilizan; los álbumes descargados conservan el suyo offline."
+    }
+
     static var management: String { isEn ? "Management" : "Gestión" }
     static var clearUnpinnedCache: String { isEn ? "Clear unpinned cache" : "Borrar caché no fijado" }
     static var clearAllCache: String { isEn ? "Clear all cache" : "Borrar todo el caché" }
