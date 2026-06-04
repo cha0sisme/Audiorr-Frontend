@@ -92,7 +92,11 @@ final class AlbumArtworkService {
 
         let json: [String: Any]?
         do {
-            json = try await fetchArtworkJSON(albumId: albumId, base: backendBase)
+            // El lookup del motion para el LOCK SCREEN / descarga offline va por la
+            // sesión `background` (tier más bajo): bajo mala cobertura cede el paso
+            // al audio y a la cover, igual que el propio clip. El viewer a pantalla
+            // completa usa `resolve()` por `interactive` (UI visible enfocada).
+            json = try await fetchArtworkJSON(albumId: albumId, base: backendBase, session: AudiorrNetwork.background)
         } catch {
             // Error TRANSITORIO (red lenta/caída, o el caller canceló al saltar de
             // tema con poca cobertura): NO cacheamos negativo, así el motion se
@@ -137,10 +141,11 @@ final class AlbumArtworkService {
     /// DEFINITIVO (404 / sin fila / `matchStatus` no-motion). LANZA el error de
     /// red (timeout, caída, cancelación) para que el caller distinga un fallo
     /// transitorio —que no debe cachearse como "sin motion"— de un negativo real.
-    private func fetchArtworkJSON(albumId: String, base backendBase: URL) async throws -> [String: Any]? {
+    private func fetchArtworkJSON(albumId: String, base backendBase: URL,
+                                  session: URLSession = AudiorrNetwork.interactive) async throws -> [String: Any]? {
         guard !albumId.isEmpty else { return nil }
         let endpoint = backendBase.appendingPathComponent("api/album-artwork/\(albumId)")
-        let (data, response) = try await AudiorrNetwork.interactive.data(from: endpoint)
+        let (data, response) = try await session.data(from: endpoint)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
