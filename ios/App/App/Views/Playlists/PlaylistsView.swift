@@ -22,6 +22,12 @@ final class PlaylistsViewModel: ObservableObject {
     private let api = NavidromeService.shared
     private var lastLoadedAt: Date?
     private let cacheTTL: TimeInterval = 120
+    /// TTL propio (independiente del de la lista) para el refresco de hashes de
+    /// cover. Recargar la lista entera es caro y se cachea 120 s, pero detectar
+    /// que una carátula cambió es barato y debe reaccionar antes — el detalle ya
+    /// lo fuerza en cada apertura, así que la rejilla debe hacer lo propio.
+    private var lastCoverHashRefreshAt: Date?
+    private let coverHashTTL: TimeInterval = 30
 
     var isConfigured: Bool { api.isConfigured }
 
@@ -30,6 +36,24 @@ final class PlaylistsViewModel: ObservableObject {
             return
         }
         await load()
+    }
+
+    /// Refresca SOLO los hashes de cover, desacoplado del TTL de la lista. Si el
+    /// backend reporta una carátula nueva, `registerContentHashes` invalida la
+    /// entrada en caché y emite `coverInvalidated`; los cards vivos recargan y el
+    /// `prefetch` recalienta el disco para los que estén fuera de pantalla.
+    ///
+    /// Respeta los tiers de prioridad de descarga: `refreshPlaylistCoverHashes`
+    /// pide el JSON masivo por `AudiorrNetwork.background` y autolimita la
+    /// revalidación por ETag a 60 s por playlist; el `prefetch` baja las
+    /// miniaturas también por `background`. El TTL de 30 s de aquí evita repetir
+    /// ese trabajo en cada evento de ciclo de vida.
+    func refreshCoverHashesIfNeeded() async {
+        guard BackendState.shared.isAvailable, api.isConfigured, !playlists.isEmpty else { return }
+        if let last = lastCoverHashRefreshAt, Date().timeIntervalSince(last) < coverHashTTL { return }
+        lastCoverHashRefreshAt = Date()   // antes del await: evita refrescos solapados
+        await api.refreshPlaylistCoverHashes()
+        PlaylistCoverCache.shared.prefetch(playlists: Array(playlists.prefix(20)))
     }
 
     private var hasData: Bool { !playlists.isEmpty }
@@ -71,6 +95,7 @@ final class PlaylistsViewModel: ObservableObject {
             async let hashesTask: Void = api.refreshPlaylistCoverHashes()
             let fetched = await layoutTask
             _ = await hashesTask
+            lastCoverHashRefreshAt = Date()   // load() ya refrescó hashes: dedupe con refreshCoverHashesIfNeeded
             sections = fetched.isEmpty ? defaultSections : fetched
         } else {
             sections = []
@@ -136,6 +161,7 @@ final class PlaylistsViewModel: ObservableObject {
 
 struct PlaylistsView: View {
     @ObservedObject private var vm = PlaylistsViewModel.shared
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showCreateSheet = false
     @State private var newPlaylistName = ""
@@ -156,11 +182,26 @@ struct PlaylistsView: View {
             .navigationBarTitleDisplayMode(.large)
             .task {
                 await vm.loadIfNeeded()
+                await vm.refreshCoverHashesIfNeeded()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
             }
             .refreshable {
                 await vm.load()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // Al volver a primer plano, revalida carátulas (una cover puede
+                // haber cambiado en el backend mientras la app estaba en background).
+                if phase == .active {
+                    Task { await vm.refreshCoverHashesIfNeeded() }
+                }
+            }
+            .onChange(of: navigationPath) { _, path in
+                // Al regresar a la rejilla (pop a la raíz): si el detalle mostró
+                // una carátula nueva, el card debe ponerse al día igual que él.
+                if path.isEmpty {
+                    Task { await vm.refreshCoverHashesIfNeeded() }
+                }
             }
             .navigationDestination(for: NavidromePlaylist.self) {
                 PlaylistDetailView(playlist: $0, onDeleted: {
