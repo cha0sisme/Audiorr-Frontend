@@ -685,7 +685,10 @@ struct HomeView: View {
             let visible = Array(vm.recentReleases.prefix(releasesVisibleLimit))
             let overflow = vm.recentReleases.count - releasesVisibleLimit
 
-            HorizontalScrollSection(title: L.recentReleases) {
+            HorizontalScrollSection(
+                title: L.recentReleases,
+                seeAll: overflow > 0 ? .albums(title: L.recentReleases, items: vm.recentReleases) : nil
+            ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
@@ -805,7 +808,10 @@ struct HomeView: View {
             let visible = Array(vm.latestAlbums.prefix(latestVisibleLimit))
             let overflow = vm.latestAlbums.count - latestVisibleLimit
 
-            HorizontalScrollSection(title: L.latestAlbums) {
+            HorizontalScrollSection(
+                title: L.latestAlbums,
+                seeAll: overflow > 0 ? .albums(title: L.latestAlbums, items: vm.latestAlbums) : nil
+            ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, size: 150, heroNamespace: heroNS)

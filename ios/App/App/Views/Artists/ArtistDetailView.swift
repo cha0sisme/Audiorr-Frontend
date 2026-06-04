@@ -506,6 +506,16 @@ struct ArtistDetailView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                // Tarjeta "Ver todo" al final del scroll (además del chevron del
+                // encabezado): ambas vías llevan al mismo SeeAllGridView.
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(
+                        title: L.albums, items: vm.albums
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -528,6 +538,14 @@ struct ArtistDetailView: View {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
                         AlbumCardView(album: album, subtitle: .artist, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.albums(
+                        title: L.appearsIn, items: vm.collaborations
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -555,6 +573,14 @@ struct ArtistDetailView: View {
                 ForEach(visible) { playlist in
                     NavigationLink(value: playlist) {
                         PlaylistCardView(playlist: playlist, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.playlists(
+                        title: L.playlistsWith(vm.artist.name), items: vm.playlists
+                    )) {
+                        SeeAllCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
@@ -589,6 +615,14 @@ struct ArtistDetailView: View {
                 ForEach(visible) { artist in
                     NavigationLink(value: artist) {
                         ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if overflow > 0 {
+                    NavigationLink(value: SeeAllDestination.artists(
+                        title: L.fansAlsoListen, items: artists
+                    )) {
+                        SeeAllArtistCard(remaining: overflow, isLight: isLight)
                     }
                     .buttonStyle(.plain)
                 }
