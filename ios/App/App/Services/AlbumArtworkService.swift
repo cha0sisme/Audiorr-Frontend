@@ -88,16 +88,26 @@ final class AlbumArtworkService {
     func motionURL(albumId: String, aspect: MotionAspect) async -> URL? {
         let key = "\(albumId)|\(aspect == .tall ? "t" : "s")"
         if let cached = aspectCache[key] { return cached }
-        guard let backendBase = backendBaseURL(),
-              let json = await fetchArtworkJSON(albumId: albumId, base: backendBase) else {
-            aspectCache[key] = .some(nil)
+        guard let backendBase = backendBaseURL() else { return nil }
+
+        let json: [String: Any]?
+        do {
+            json = try await fetchArtworkJSON(albumId: albumId, base: backendBase)
+        } catch {
+            // Error TRANSITORIO (red lenta/caída, o el caller canceló al saltar de
+            // tema con poca cobertura): NO cacheamos negativo, así el motion se
+            // reintenta la próxima vez que suene el álbum en lugar de quedar
+            // marcado como "sin motion" para siempre.
             return nil
         }
+
         let field = aspect == .tall ? "fileUrlTall" : "fileUrl"
         var result: URL?
-        if let path = json[field] as? String, !path.isEmpty {
+        if let json, let path = json[field] as? String, !path.isEmpty {
             result = backendBase.appendingPathComponent(path)
         }
+        // Negativo DEFINITIVO (404 / matchStatus no-motion / sin ese aspecto) o
+        // positivo: ambos se cachean.
         aspectCache[key] = .some(result)
         return result
     }
@@ -106,7 +116,7 @@ final class AlbumArtworkService {
 
     private func fetchArtworkUrl(albumId: String) async -> URL? {
         guard let backendBase = backendBaseURL(),
-              let json = await fetchArtworkJSON(albumId: albumId, base: backendBase) else { return nil }
+              let json = try? await fetchArtworkJSON(albumId: albumId, base: backendBase) else { return nil }
 
         // Fallback obligatorio: tall (3:4, iPhone) → square (1:1) → nil.
         // Un álbum puede tener fileUrl pero fileUrlTall = null (best-effort
@@ -123,26 +133,26 @@ final class AlbumArtworkService {
 
     /// Descarga y parsea el JSON de `/api/album-artwork/{albumId}`. Devuelve nil
     /// si 404 (sin fila) o si `matchStatus` indica que no hay motion.
-    private func fetchArtworkJSON(albumId: String, base backendBase: URL) async -> [String: Any]? {
+    /// Devuelve el JSON del endpoint, o `nil` si la respuesta es un negativo
+    /// DEFINITIVO (404 / sin fila / `matchStatus` no-motion). LANZA el error de
+    /// red (timeout, caída, cancelación) para que el caller distinga un fallo
+    /// transitorio —que no debe cachearse como "sin motion"— de un negativo real.
+    private func fetchArtworkJSON(albumId: String, base backendBase: URL) async throws -> [String: Any]? {
         guard !albumId.isEmpty else { return nil }
         let endpoint = backendBase.appendingPathComponent("api/album-artwork/\(albumId)")
-        do {
-            let (data, response) = try await AudiorrNetwork.interactive.data(from: endpoint)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return nil
-            }
-            // El backend es la autoridad: si `matchStatus` indica que no hay
-            // motion para este álbum, cortocircuito (blinda contra filas legacy
-            // con `fileUrl` poblado pero estado negativo).
-            if let matchStatus = json["matchStatus"] as? String,
-               matchStatus == "no-motion" || matchStatus == "not-found" {
-                return nil
-            }
-            return json
-        } catch {
+        let (data, response) = try await AudiorrNetwork.interactive.data(from: endpoint)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
+        // El backend es la autoridad: si `matchStatus` indica que no hay motion
+        // para este álbum, cortocircuito (blinda contra filas legacy con
+        // `fileUrl` poblado pero estado negativo).
+        if let matchStatus = json["matchStatus"] as? String,
+           matchStatus == "no-motion" || matchStatus == "not-found" {
+            return nil
+        }
+        return json
     }
 
     private func backendBaseURL() -> URL? {

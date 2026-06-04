@@ -2187,6 +2187,9 @@ class AudioEngineManager {
         animatedArtworkTask = Task { [weak self] in
             // Debounce: si el usuario salta de tema en <1,5 s, no malgastamos red.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
+            // Si se canceló durante el sleep (skip), salir SIN tocar la caché: así
+            // un task cancelado nunca arranca la descarga ni interfiere con otro.
+            if Task.isCancelled { return }
             guard let self else { return }
             guard await self.isStillCurrent(songId) else { return }
 

@@ -46,10 +46,22 @@ actor MotionClipCache {
             return fileURL(entry.fileName)
         }
 
-        if let inflight = pending[key] { return await inflight.value }
-        let task = Task<URL?, Never> { await download(key: key, remoteURL: remoteURL, pin: pin) }
-        pending[key] = task
-        let url = await task.value
+        let task: Task<URL?, Never>
+        if let inflight = pending[key] {
+            task = inflight
+        } else {
+            task = Task<URL?, Never> { await download(key: key, remoteURL: remoteURL, pin: pin) }
+            pending[key] = task
+        }
+        // Propaga la cancelación del caller (p.ej. un skip de canción) a la
+        // descarga: si el tema cambia mientras el clip se está bajando —típico
+        // con poca cobertura, donde la descarga es lenta— se aborta la petición
+        // de red en vez de seguir gastando datos por un tema ya saltado.
+        let url = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         pending[key] = nil
         return url
     }
