@@ -571,7 +571,6 @@ struct NowPlayingViewerView: View {
         // no interferir con la transición de apertura/cierre del contenedor.
         .scaleEffect(coverEntered ? 1.0 : 0.86)
         .animation(.spring(response: 0.5, dampingFraction: 0.78), value: coverEntered)
-        .coverParallax()   // parallax sintético (giroscopio)
     }
 
     private var artworkPlaceholder: some View {

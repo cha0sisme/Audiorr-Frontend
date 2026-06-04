@@ -565,7 +565,6 @@ struct AlbumDetailView: View {
                     x: 0,
                     y: vm.palette.isSolid ? 2 : 8
                 )
-                .coverParallax()   // animated artwork sintético (giroscopio)
 
             Spacer().frame(height: 20)   // hueco FIJO cover↔título (= resto)
 
