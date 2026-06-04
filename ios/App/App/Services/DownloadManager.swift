@@ -217,6 +217,13 @@ final class DownloadManager: NSObject {
         try? context.save()
         updateObservableState()
         processQueue()
+
+        // Desfijar el clip de motion del álbum (si se pre-fijó al descargar), para
+        // que vuelva a ser evictable por LRU y no se acumule pinned para siempre.
+        Task {
+            await MotionClipCache.shared.unpin(key: "\(groupId)_t")
+            await MotionClipCache.shared.unpin(key: "\(groupId)_s")
+        }
     }
 
     func cancelAll() {

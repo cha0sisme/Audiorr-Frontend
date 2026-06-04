@@ -237,6 +237,11 @@ actor OfflineStorageManager {
         guard let songs = try? context.fetch(descriptor) else { return }
         for song in songs { song.isPinned = false }
         try? context.save()
+        // Desfijar también el clip de motion del álbum (se pre-fija al descargar).
+        Task {
+            await MotionClipCache.shared.unpin(key: "\(groupId)_t")
+            await MotionClipCache.shared.unpin(key: "\(groupId)_s")
+        }
     }
 
     // MARK: - Public API: Storage Stats
