@@ -82,6 +82,14 @@ final class FavoritesStore {
                 } else {
                     starredIds.remove(songId)
                 }
+                return
+            }
+
+            // Con backend: avisar para que resincronice la playlist
+            // "Favoritos" materializada (fire-and-forget — si falla, el
+            // cron de reconciliación del backend lo recoge en ≤15 min).
+            if BackendState.shared.isAvailable {
+                try? await BackendService.shared.syncStarred()
             }
         }
     }

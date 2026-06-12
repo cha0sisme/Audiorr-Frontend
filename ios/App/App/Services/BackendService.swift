@@ -284,6 +284,18 @@ final class BackendService {
         return try jsonDict(from: data)
     }
 
+    // MARK: - Starred sync
+
+    /// Avisa al backend tras un star/unstar para que resincronice la playlist
+    /// "Favoritos" materializada del usuario (consistencia <2s; el cron de
+    /// reconciliación del backend cubre los fallos). El username lo deriva el
+    /// backend del Bearer — este endpoint ignora headers de usuario a propósito.
+    func syncStarred() async throws {
+        var request = try makeRequest(path: "/api/starred/sync", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        _ = try await performRequest(request)
+    }
+
     // MARK: - Hub / Connect
 
     struct HubStatus: Decodable {
