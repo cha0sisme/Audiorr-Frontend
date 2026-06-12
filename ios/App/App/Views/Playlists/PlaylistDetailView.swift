@@ -135,21 +135,32 @@ final class PlaylistDetailViewModel: ObservableObject {
     /// aplicaron localmente (el segundo índice ya asume el primero aplicado).
     private var removalChain: Task<Void, Never>?
 
+    /// Generación de la cadena de borrados. Si un borrado falla, la
+    /// generación avanza: los borrados que quedaran encolados detrás se
+    /// calcularon sobre un estado local que el server nunca llegó a aplicar —
+    /// ejecutar sus índices borraría canciones equivocadas. Al detectar la
+    /// generación desfasada, se descartan; la recarga del fallo ya restauró
+    /// la verdad del server en la UI.
+    private var removalGeneration = 0
+
     /// Quita la pista en `index` de la playlist. Optimista: la fila desaparece
     /// ya; si Navidrome rechaza, se recarga la lista completa para restaurar
     /// la verdad del server (reinsertar a ciegas podría divergir si hubo más
-    /// borrados encolados detrás).
+    /// borrados encolados detrás) y se invalida lo que quede en cadena.
     func removeSong(at index: Int) {
         guard songs.indices.contains(index) else { return }
         songs.remove(at: index)
 
+        let generation = removalGeneration
         let previous = removalChain
         let playlistId = initialPlaylist.id
         removalChain = Task { @MainActor in
             await previous?.value
+            guard generation == self.removalGeneration else { return }
             do {
                 try await self.api.removeSongFromPlaylist(playlistId: playlistId, songIndex: index)
             } catch {
+                self.removalGeneration += 1
                 if let (pl, fresh) = try? await self.api.getPlaylistSongs(playlistId: playlistId) {
                     self.songs = fresh
                     if let pl { self.playlist = pl }
