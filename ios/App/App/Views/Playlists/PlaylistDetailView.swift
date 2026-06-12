@@ -226,10 +226,12 @@ struct PlaylistDetailView: View {
     var onDeleted: (() -> Void)?
 
     /// Altura del hero = inset + cover + título (medido) + huecos fijos. Misma
-    /// mecánica que AlbumDetailView: la cover queda anclada bajo la barra y el
-    /// hueco hacia la lista es constante. 164 = inset extra (88) + 3 huecos de
-    /// 20 + bloque de botones (~48), menos el hueco final reducido.
-    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 164 }
+    /// mecánica Y mismo desglose que AlbumDetailView: 189 = inset extra (88) +
+    /// hueco cover↔título (20) + hueco info↔botones (21) + bloque de botones
+    /// (~48) + hueco botones↔lista (12). El frame contiene EXACTAMENTE el
+    /// contenido, así que el Spacer final descansa en sus 12pt y el hueco
+    /// hacia la lista es idéntico al de AlbumDetailView.
+    private var heroHeight: CGFloat { safeAreaTop + coverSize + titleBlockHeight + 189 }
 
     init(playlist: NavidromePlaylist, onDismiss: (() -> Void)? = nil, onDeleted: (() -> Void)? = nil) {
         _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlist: playlist))
@@ -460,12 +462,12 @@ struct PlaylistDetailView: View {
                 }
             )
 
-            // Action buttons. Hueco superior fijo (20pt); el inferior, hacia la
-            // lista, lo da el spacer final (pequeño y constante).
+            // Action buttons. Huecos info↔botones (21) y botones↔lista (12)
+            // iguales a AlbumDetailView; heroHeight presupuesta ambos.
             actionButtons
-                .padding(.top, 20)
+                .padding(.top, 21)
 
-            Spacer(minLength: 8)   // hueco FIJO botones↔lista (≈18pt con heroHeight)
+            Spacer(minLength: 12)   // hueco FIJO botones↔lista (= AlbumDetail)
         }
         .frame(maxWidth: .infinity)
         .onPreferenceChange(PlaylistTitleBlockHeightKey.self) { titleBlockHeight = $0 }
