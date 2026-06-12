@@ -223,14 +223,6 @@ struct SettingsView: View {
         } message: {
             Text(alertMessage)
         }
-        .confirmationDialog(L.logout, isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button(L.logout, role: .destructive) {
-                vm.logout()
-            }
-            Button(L.cancel, role: .cancel) {}
-        } message: {
-            Text(L.logoutConfirm)
-        }
     }
 
     // MARK: - Helpers
@@ -521,6 +513,18 @@ struct SettingsView: View {
                         showLogoutConfirm = true
                     } label: {
                         Label(L.logout, systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    // El dialog cuelga del BOTÓN que lo dispara (no de la
+                    // raíz): el sistema lo ancla a la vista que lleva el
+                    // modificador, y colgado del ScrollView raíz aparecía
+                    // arriba de la pantalla, lejos del origen del gesto.
+                    .confirmationDialog(L.logout, isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+                        Button(L.logout, role: .destructive) {
+                            vm.logout()
+                        }
+                        Button(L.cancel, role: .cancel) {}
+                    } message: {
+                        Text(L.logoutConfirm)
                     }
                 }
             }

@@ -232,16 +232,35 @@ struct StorageManagementView: View {
             }
 
             // Danger zone
+            // Los confirmationDialog cuelgan de SU botón (no del List raíz):
+            // el sistema los ancla a la vista del modificador, y colgados de
+            // la raíz aparecían arriba de la pantalla, lejos del origen.
             Section {
                 Button(L.clearUnpinnedCache) {
                     showClearUnpinnedConfirm = true
                 }
                 .foregroundStyle(.orange)
+                .confirmationDialog(L.clearUnpinnedCache, isPresented: $showClearUnpinnedConfirm, titleVisibility: .visible) {
+                    Button(L.delete, role: .destructive) {
+                        Task { await vm.clearUnpinned() }
+                    }
+                    Button(L.cancel, role: .cancel) {}
+                } message: {
+                    Text(L.clearUnpinnedConfirm(formatBytes(vm.totalCacheSize - vm.pinnedSize)))
+                }
 
                 Button(L.clearAllCache) {
                     showClearAllConfirm = true
                 }
                 .foregroundStyle(.red)
+                .confirmationDialog(L.clearAllCache, isPresented: $showClearAllConfirm, titleVisibility: .visible) {
+                    Button(L.deleteAll, role: .destructive) {
+                        Task { await vm.clearAll() }
+                    }
+                    Button(L.cancel, role: .cancel) {}
+                } message: {
+                    Text(L.clearAllConfirm)
+                }
             } header: {
                 Text(L.management)
             } footer: {
@@ -260,22 +279,6 @@ struct StorageManagementView: View {
             }
         }
         .refreshable { await vm.load() }
-        .confirmationDialog(L.clearUnpinnedCache, isPresented: $showClearUnpinnedConfirm, titleVisibility: .visible) {
-            Button(L.delete, role: .destructive) {
-                Task { await vm.clearUnpinned() }
-            }
-            Button(L.cancel, role: .cancel) {}
-        } message: {
-            Text(L.clearUnpinnedConfirm(formatBytes(vm.totalCacheSize - vm.pinnedSize)))
-        }
-        .confirmationDialog(L.clearAllCache, isPresented: $showClearAllConfirm, titleVisibility: .visible) {
-            Button(L.deleteAll, role: .destructive) {
-                Task { await vm.clearAll() }
-            }
-            Button(L.cancel, role: .cancel) {}
-        } message: {
-            Text(L.clearAllConfirm)
-        }
     }
 
     // MARK: - Storage Bar
