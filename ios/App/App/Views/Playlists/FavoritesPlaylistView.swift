@@ -153,15 +153,18 @@ struct FavoritesPlaylistView: View {
 
                 Spacer(minLength: 20)
 
-                // Title + metadata
+                // Title + metadata — solo el título y el nombre del usuario
+                // debajo, espejo del subtítulo de la playlist materializada.
                 VStack(alignment: .center, spacing: 5) {
                     Text(L.favorites)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(.white)
 
-                    Text(L.songCount(visibleSongs.count))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
+                    if let username = NavidromeService.shared.credentials?.username {
+                        Text(username)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 20)

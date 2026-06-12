@@ -532,6 +532,13 @@ struct PlaylistDetailView: View {
         // modo que "Incluye X, Y y Z" sale también en editorial, smart y spotify.
         let pl = vm.initialPlaylist
         let text: String? = {
+            // Playlist "Favoritos" (starred materializada por el backend):
+            // solo el nombre del usuario bajo el título — ni "Incluye..."
+            // ni "Creada por...". Va ANTES del branch isSystemPlaylist
+            // porque 'starred synced' también cuenta como sistema.
+            if (pl.comment ?? "").lowercased().contains("starred synced") {
+                return pl.owner ?? NavidromeService.shared.credentials?.username
+            }
             if pl.isSystemPlaylist {
                 let included = firstUniqueArtists(in: vm.songs, max: 3)
                 if included.isEmpty { return nil } // tracklist aún cargando
