@@ -222,25 +222,47 @@ actor OfflineStorageManager {
     }
 
     func pinGroup(groupId: String) {
-        let descriptor = FetchDescriptor<CachedSong>(
-            predicate: #Predicate { $0.albumId == groupId }
-        )
-        guard let songs = try? context.fetch(descriptor) else { return }
-        for song in songs { song.isPinned = true }
-        try? context.save()
+        setGroupPinned(true, groupId: groupId)
     }
 
     func unpinGroup(groupId: String) {
-        let descriptor = FetchDescriptor<CachedSong>(
-            predicate: #Predicate { $0.albumId == groupId }
+        setGroupPinned(false, groupId: groupId)
+    }
+
+    /// Asociación canción↔grupo: para ÁLBUMES el `albumId` de cada canción
+    /// coincide con el groupId; para PLAYLISTS no (cada canción conserva el
+    /// id de su álbum real), así que los songIds del grupo se resuelven
+    /// desde la meta de descarga (`CachedPlaylistMeta`). Sin esa segunda
+    /// vía, fijar una playlist era un no-op silencioso: ninguna canción se
+    /// marcaba y el LRU (o "borrar no fijado") podía evictarlas igualmente.
+    private func setGroupPinned(_ pinned: Bool, groupId: String) {
+        var groupSongIds = Set<String>()
+        let metaDescriptor = FetchDescriptor<CachedPlaylistMeta>(
+            predicate: #Predicate { $0.playlistId == groupId }
         )
+        if let meta = try? context.fetch(metaDescriptor).first {
+            groupSongIds = Set(meta.songIds)
+        }
+
+        let descriptor = FetchDescriptor<CachedSong>()
         guard let songs = try? context.fetch(descriptor) else { return }
-        for song in songs { song.isPinned = false }
-        try? context.save()
-        // Desfijar también el clip de motion del álbum (se pre-fija al descargar).
-        Task {
-            await MotionClipCache.shared.unpin(key: "\(groupId)_t")
-            await MotionClipCache.shared.unpin(key: "\(groupId)_s")
+        var touched = false
+        for song in songs where song.albumId == groupId || groupSongIds.contains(song.songId) {
+            if song.isPinned != pinned {
+                song.isPinned = pinned
+                touched = true
+            }
+        }
+        if touched { try? context.save() }
+
+        // Desfijar también el clip de motion del álbum (se pre-fija al
+        // descargar). Solo aplica al unpin; para playlists la key no existe
+        // y el unpin del clip es un no-op inocuo.
+        if !pinned {
+            Task {
+                await MotionClipCache.shared.unpin(key: "\(groupId)_t")
+                await MotionClipCache.shared.unpin(key: "\(groupId)_s")
+            }
         }
     }
 
