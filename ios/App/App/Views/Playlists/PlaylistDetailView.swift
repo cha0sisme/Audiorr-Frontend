@@ -665,8 +665,15 @@ struct PlaylistDetailView: View {
 
         if hasMenuItems {
             Menu {
-                // Download (user playlists only)
-                if hasSongs && !pl.isSystemPlaylist {
+                // Download (user playlists only). Excepción: la playlist
+                // "Favoritos" (starred materializada) cuenta como sistema
+                // para que nadie la borre/edite (el resync la machacaría),
+                // pero SÍ debe poder descargarse — es contenido personal.
+                // Evaluada sobre `initialPlaylist` (el detalle llega sin
+                // comment, mismo motivo que el gate de eliminar).
+                let isStarredPlaylist = (vm.initialPlaylist.comment ?? "")
+                    .lowercased().contains("starred synced")
+                if hasSongs && (!pl.isSystemPlaylist || isStarredPlaylist) {
                     Button {
                         DownloadManager.shared.downloadPlaylist(
                             playlistId: pl.id,
