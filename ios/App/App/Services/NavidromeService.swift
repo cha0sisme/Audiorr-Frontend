@@ -368,6 +368,10 @@ final class NavidromeService: ObservableObject {
             if comment.contains("smart playlist") { return false }
             if comment.contains("[editorial]") { return false }
             if comment.contains("spotify synced") { return false }
+            // Playlist "Favoritos" materializada por el backend desde los
+            // star del usuario: añadirle pistas a mano sería sobreescrito
+            // por el resync — se alimenta solo vía star/unstar.
+            if comment.contains("starred synced") { return false }
             if name.hasPrefix("[spotify] ") { return false }
             if name.hasPrefix("mix diario") { return false }
 

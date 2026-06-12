@@ -361,12 +361,17 @@ struct NavidromePlaylist: Identifiable, Decodable, Hashable {
     let coverArt: String?
     let changed: String?
 
-    /// True for editorial, smart, or spotify-synced playlists (not user-deletable).
+    /// True for editorial, smart, spotify-synced, or starred-synced playlists
+    /// (not user-deletable). 'Starred Synced' es la playlist "Favoritos" que
+    /// materializa el backend desde los star del propio usuario: el owner es
+    /// el usuario pero el resync periódico sobreescribiría cualquier edición
+    /// manual (borrarla, quitar/añadir pistas) — se gestiona vía star/unstar.
     var isSystemPlaylist: Bool {
         let c = (comment ?? "").lowercased()
         return c.contains("smart playlist")
             || c.contains("[editorial]")
             || c.contains("spotify synced")
+            || c.contains("starred synced")
             || name.lowercased().hasPrefix("mix diario")
     }
 
