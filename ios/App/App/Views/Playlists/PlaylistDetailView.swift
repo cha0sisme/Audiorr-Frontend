@@ -128,6 +128,36 @@ final class PlaylistDetailViewModel: ObservableObject {
         if BackendState.shared.isAvailable { await loadPinnedStatus() }
     }
 
+    // MARK: - Remove song
+
+    /// Cadena de borrados en serie: Subsonic elimina POR ÍNDICE, así que dos
+    /// borrados rápidos deben llegar al server en el mismo orden en que se
+    /// aplicaron localmente (el segundo índice ya asume el primero aplicado).
+    private var removalChain: Task<Void, Never>?
+
+    /// Quita la pista en `index` de la playlist. Optimista: la fila desaparece
+    /// ya; si Navidrome rechaza, se recarga la lista completa para restaurar
+    /// la verdad del server (reinsertar a ciegas podría divergir si hubo más
+    /// borrados encolados detrás).
+    func removeSong(at index: Int) {
+        guard songs.indices.contains(index) else { return }
+        songs.remove(at: index)
+
+        let previous = removalChain
+        let playlistId = initialPlaylist.id
+        removalChain = Task { @MainActor in
+            await previous?.value
+            do {
+                try await self.api.removeSongFromPlaylist(playlistId: playlistId, songIndex: index)
+            } catch {
+                if let (pl, fresh) = try? await self.api.getPlaylistSongs(playlistId: playlistId) {
+                    self.songs = fresh
+                    if let pl { self.playlist = pl }
+                }
+            }
+        }
+    }
+
     // MARK: - Pinned Playlists (backend-synced)
 
     func loadPinnedStatus() async {
@@ -769,9 +799,21 @@ struct PlaylistDetailView: View {
                     showCover: true
                 )
             } else {
-                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, showCover: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
+                SongListView(songs: vm.songs, palette: vm.palette, showAlbumInMenu: true, showCover: true, contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name, onRemoveFromPlaylist: removeSongHandler)
             }
         }
+    }
+
+    /// Handler de "Quitar de esta playlist" — nil (opción oculta) salvo en
+    /// playlists PROPIAS no gestionadas: mismo gate que "Eliminar" del toolbar
+    /// y que los destinos de "Añadir a playlist". Se evalúa sobre
+    /// `initialPlaylist` y NO `displayPlaylist`: el detalle de Subsonic llega
+    /// con `comment`/`owner` a nil (ver metadataLine), así que el gate solo es
+    /// fiable con los datos del listado.
+    private var removeSongHandler: ((NavidromeSong, Int) -> Void)? {
+        let pl = vm.initialPlaylist
+        guard pl.isOwnedByCurrentUser && !pl.isSystemPlaylist else { return nil }
+        return { [weak vm] _, idx in vm?.removeSong(at: idx) }
     }
 
     /// Footer "N canciones · ~M h" estilo Apple Music, alineado a la izquierda
@@ -783,12 +825,16 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private var statsFooter: some View {
         let pl = vm.displayPlaylist
-        if pl.songCount > 0 {
-            let totalSeconds = vm.songs.isEmpty
+        // Mientras carga: datos del header de Subsonic. Cargada: la verdad es
+        // `vm.songs` (también tras quitar pistas, donde el header queda
+        // obsoleto hasta el próximo fetch).
+        let count = vm.isLoading ? pl.songCount : vm.songs.count
+        if count > 0 {
+            let totalSeconds = vm.isLoading
                 ? pl.duration
                 : Int(vm.songs.reduce(0.0) { $0 + ($1.duration ?? 0) })
             let durationText = totalSeconds > 0 ? " · \(approxDuration(totalSeconds))" : ""
-            Text("\(L.songCount(pl.songCount))\(durationText)")
+            Text("\(L.songCount(count))\(durationText)")
                 .font(.system(size: 12))
                 .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
                 .frame(maxWidth: .infinity, alignment: .leading)

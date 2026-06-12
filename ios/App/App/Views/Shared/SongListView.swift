@@ -55,6 +55,11 @@ struct SongListView: View {
     /// (artistas distintos del titular del álbum) — formato Apple Music
     /// "Drake feat. Snoop Dogg". Sobrescribe a `showArtist`.
     var albumArtist: String? = nil
+    /// Si se proporciona, el menú ··· ofrece "Quitar de esta playlist"
+    /// (canción + índice de fila). El contenedor decide CUÁNDO pasarlo:
+    /// solo playlists propias y no gestionadas (editorial / smart / synced
+    /// quedan fuera, mismo gate que "Añadir a playlist").
+    var onRemoveFromPlaylist: ((NavidromeSong, Int) -> Void)? = nil
 
     /// Path del NavigationStack contenedor (inyectado por la raíz del stack).
     /// Los pushes (ir al álbum / al artista) se hacen por aquí, usando los
@@ -115,13 +120,13 @@ struct SongListView: View {
             }
             .buttonStyle(.plain)
 
-            menuButton(for: song)
+            menuButton(for: song, at: idx)
         }
     }
 
     // MARK: - ··· menu button (UIKit — instant, no gesture delay)
 
-    private func menuButton(for song: NavidromeSong) -> some View {
+    private func menuButton(for song: NavidromeSong, at idx: Int) -> some View {
         let tint: UIColor = isLight
             ? UIColor.black.withAlphaComponent(0.30)
             : UIColor.white.withAlphaComponent(0.45)
@@ -213,6 +218,21 @@ struct SongListView: View {
                 }
             }
             sections.append(UIMenu(title: "", options: .displayInline, children: [favoriteAction, addToPlaylist]))
+
+            // — Quitar de ESTA playlist (Subsonic elimina por índice; el
+            // handler del contenedor serializa borrados consecutivos)
+            if let onRemoveFromPlaylist {
+                let removeAction = UIAction(
+                    title: L.removeFromThisPlaylist,
+                    image: UIImage(systemName: "minus.circle"),
+                    attributes: .destructive
+                ) { _ in
+                    DispatchQueue.main.async {
+                        onRemoveFromPlaylist(song, idx)
+                    }
+                }
+                sections.append(UIMenu(title: "", options: .displayInline, children: [removeAction]))
+            }
 
             return UIMenu(children: sections)
         }

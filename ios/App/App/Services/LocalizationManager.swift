@@ -112,6 +112,7 @@ enum L {
     static var artistsSheetTitle: String { isEn ? "Artists" : "Artistas" }
     static var addToPlaylist: String { isEn ? "Add to playlist" : "Añadir a playlist" }
     static var addToFavorites: String { isEn ? "Add to favorites" : "Añadir a favoritos" }
+    static var removeFromThisPlaylist: String { isEn ? "Remove from this playlist" : "Quitar de esta playlist" }
     static var removeFromFavorites: String { isEn ? "Remove from favorites" : "Quitar de favoritos" }
     static var favorites: String { isEn ? "Favorites" : "Favoritos" }
     static var noFavoriteSongs: String { isEn ? "No favorite songs yet" : "Aún no tienes favoritos" }

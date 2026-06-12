@@ -328,6 +328,20 @@ final class NavidromeService: ObservableObject {
         }
     }
 
+    /// Remove a song from a playlist (Subsonic updatePlaylist with
+    /// songIndexToRemove). OJO: Subsonic elimina por ÍNDICE de la pista
+    /// dentro de la playlist, no por id — el caller debe serializar
+    /// borrados consecutivos para que los índices no se desplacen.
+    func removeSongFromPlaylist(playlistId: String, songIndex: Int) async throws {
+        guard let base = baseURL() else { return }
+        let url = URL(string: "\(base)/rest/updatePlaylist.view?\(authQuery())&playlistId=\(playlistId)&songIndexToRemove=\(songIndex)")!
+        let (data, _) = try await AudiorrNetwork.background.data(from: url)
+        let response = try JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
+        guard response.status == "ok" else {
+            throw NSError(domain: "NavidromeService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to remove song from playlist"])
+        }
+    }
+
     /// Create a new playlist (Subsonic createPlaylist).
     func createPlaylist(name: String) async throws -> String? {
         guard let base = baseURL() else { return nil }
