@@ -318,13 +318,24 @@ struct PlaylistsView: View {
 
     // MARK: - Virtual "Favorites" playlist card (solo modo sin backend)
 
-    /// Card de la playlist virtual "Favoritos". Solo aparece SIN backend:
-    /// con backend, la playlist real "Favoritos" la materializa el backend
-    /// en Navidrome y llega por `getPlaylists` como una playlist más.
+    /// `true` si la playlist "Favoritos" materializada por el backend ya
+    /// existe en Navidrome. Es una playlist REAL: llega por `getPlaylists`
+    /// incluso con el backend caído, así que sin este guard la card virtual
+    /// conviviría con ella y habría DOS "Favoritos" en la misma pantalla.
+    private var hasMaterializedFavorites: Bool {
+        vm.playlists.contains { ($0.comment ?? "").lowercased().contains("starred synced") }
+    }
+
+    /// Card de la playlist virtual "Favoritos". Solo aparece SIN backend
+    /// disponible Y sin la materializada en Navidrome: con backend (o si la
+    /// materializada ya existe), la playlist real llega por `getPlaylists`
+    /// como una playlist más y la virtual sobra.
     /// Mismo lenguaje visual que la cover backend (degradado azul + estrella).
     @ViewBuilder
     private var favoritesCard: some View {
-        if !BackendState.shared.isAvailable && !FavoritesStore.shared.starredIds.isEmpty {
+        if !BackendState.shared.isAvailable
+            && !FavoritesStore.shared.starredIds.isEmpty
+            && !hasMaterializedFavorites {
             NavigationLink(destination: FavoritesPlaylistView()) {
                 HStack(spacing: 14) {
                     ZStack {
