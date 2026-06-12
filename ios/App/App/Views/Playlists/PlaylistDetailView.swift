@@ -674,10 +674,18 @@ struct PlaylistDetailView: View {
                 }
 
                 // Delete — only playlists OWNED by the current user, and never
-                // for editorial / smart / spotify-synced / mix diario (covered
-                // by `isSystemPlaylist`). A user can favourite or follow another
-                // user's public playlist; we must not let them delete it.
-                if !pl.isSystemPlaylist && pl.isOwnedByCurrentUser {
+                // for editorial / smart / spotify-synced / starred / mix diario
+                // (covered by `isSystemPlaylist`). A user can favourite or follow
+                // another user's public playlist; we must not let them delete it.
+                //
+                // Gate sobre `initialPlaylist` (datos del LISTADO) y no sobre
+                // `pl` (= displayPlaylist): el detalle de Subsonic llega con
+                // `comment`/`owner` a nil y escondía la opción en playlists
+                // propias en cuanto cargaba la lista. OJO: las editoriales se
+                // crean desde la cuenta admin (su owner coincide con el del
+                // admin logueado) — el comment del listado es la defensa que
+                // las mantiene fuera; no fiarse nunca del owner a secas.
+                if !vm.initialPlaylist.isSystemPlaylist && vm.initialPlaylist.isOwnedByCurrentUser {
                     Section {
                         Button(role: .destructive) {
                             showDeleteConfirm = true
