@@ -72,7 +72,13 @@ final class NavidromeService: ObservableObject {
         // introducir creds nuevas, no debe heredar el bloqueo del set anterior.
         AuthTokenStore.shared.clearBackendUnauthorized()
         AuthTokenStore.shared.clearLoginFailures()
-        Task { @MainActor in BackendState.shared.invalidateAndRecheck() }
+        Task { @MainActor in
+            // Credenciales/server nuevos = entitlement nuevo: la fase
+            // `everConnected` del contexto anterior no vale. El re-check de
+            // login decide, y el primer 2xx con Bearer la vuelve a marcar.
+            BackendState.shared.resetEntitlement()
+            BackendState.shared.invalidateAndRecheck()
+        }
         NotificationCenter.default.post(name: .audiorrDidLogin, object: nil)
     }
 

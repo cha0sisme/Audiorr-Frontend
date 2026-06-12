@@ -15,6 +15,35 @@ final class BackendState {
     /// True while the initial check is in flight (lets UI show shimmer vs hiding sections).
     private(set) var isChecking: Bool = false
 
+    // MARK: - Entitlement por fases (2026-06-12)
+
+    /// `true` si este dispositivo consiguió ALGUNA VEZ una respuesta 2xx
+    /// AUTENTICADA (con Bearer) del backend — prueba simultánea de whitelist
+    /// y de backend vivo. Decide si merece la pena sondear `/api/health`
+    /// fuera del arranque: quien nunca conectó no genera tráfico recurrente.
+    ///
+    /// El ancla es el 2xx con Bearer y NO el health (público, responde a
+    /// cualquiera) ni un 2xx cualquiera: las rutas soft del backend
+    /// (canvas, artwork, covers) devuelven 2xx sin validar el Bearer, y
+    /// `performRequest` puede salir sin Bearer cuando no hay sesión.
+    /// Persistido en UserDefaults; se resetea al cambiar credenciales/logout.
+    private(set) var everConnected: Bool = UserDefaults.standard.bool(forKey: BackendState.everConnectedKey)
+    private static let everConnectedKey = "audiorr_backend_ever_connected"
+
+    private func markEverConnected() {
+        guard !everConnected else { return }
+        everConnected = true
+        UserDefaults.standard.set(true, forKey: Self.everConnectedKey)
+    }
+
+    /// Cuenta o server nuevos = entitlement nuevo. Lo invocan
+    /// `saveCredentials` y `reset()` (logout); el siguiente 2xx con Bearer
+    /// lo vuelve a marcar si el nuevo contexto tiene acceso.
+    func resetEntitlement() {
+        everConnected = false
+        UserDefaults.standard.removeObject(forKey: Self.everConnectedKey)
+    }
+
     private var checkTask: Task<Void, Never>?
 
     /// v12 (audit 2026-05-05) — punto unico de mutacion de `isAvailable`.
@@ -121,6 +150,7 @@ final class BackendState {
         consecutiveInBandFailures = 0
         setAvailable(false)
         isChecking = false
+        resetEntitlement()
     }
 
     // MARK: - In-band reachability (VPN → Cloudflare, audit 2026-06)
@@ -129,7 +159,8 @@ final class BackendState {
     /// de forma proactiva en cada flap. En su lugar, el propio tráfico REST
     /// informa del estado: `BackendService.performRequest` llama a estos
     /// hooks. El health-check proactivo queda reducido al arranque
-    /// (`ContentView .task`) y al re-check de foreground.
+    /// (`ContentView .task`), al login, y a las sondas de RECUPERACIÓN
+    /// (foreground / vuelta de red, solo en estado caído + `everConnected`).
     private var consecutiveInBandFailures = 0
     /// Fallos de transporte seguidos antes de marcar no-disponible. >1 para
     /// no parpadear ante un 502/timeout puntual de Cloudflare.
@@ -137,11 +168,17 @@ final class BackendState {
 
     /// Una request REST real ha respondido 2xx: el backend está vivo y nos
     /// atiende. Confirma disponibilidad sin gastar un ping y resetea el
-    /// contador de fallos. Un usuario sin backend (Navidrome puro) nunca llega
-    /// aquí — sus requests reciben 401/403, que NO pasan por este hook —, así
-    /// que el gate de UI no se enciende por error.
-    func noteRequestSucceeded() {
+    /// contador de fallos.
+    ///
+    /// `authenticated` indica si la request viajó con Bearer: solo entonces
+    /// el 2xx prueba entitlement y marca `everConnected`. Las rutas soft
+    /// (canvas, artwork, covers) responden 2xx sin validar el token, así que
+    /// un 2xx sin Bearer NO puede activar la fase.
+    func noteRequestSucceeded(authenticated: Bool = false) {
         consecutiveInBandFailures = 0
+        if authenticated {
+            markEverConnected()
+        }
         if !isAvailable {
             setAvailable(true)
         }
@@ -161,13 +198,13 @@ final class BackendState {
 
     // MARK: - Private
 
-    /// Observa la conectividad de red. Solo reacciona a la **caída total** de
-    /// red marcando no-disponible de inmediato (UX offline correcta). La
-    /// recuperación ya NO dispara un re-check por cada flap: ese comportamiento
-    /// nervioso existía para detectar la VPN cayéndose/volviendo, y con acceso
-    /// por Cloudflare (transporte estable) sobra. La disponibilidad se
-    /// reevalúa al volver a foreground (`observeForeground`) y cuando el propio
-    /// tráfico REST vuelve a funcionar (inferencia in-band en BackendService).
+    /// Observa la conectividad de red. La **caída total** marca no-disponible
+    /// de inmediato (UX offline correcta). La **recuperación** solo dispara
+    /// una sonda cuando estamos caídos Y este dispositivo conectó alguna vez
+    /// (`everConnected`): es la única transición donde el ping aporta — sin
+    /// ella, una red que vuelve en mitad de la sesión no se recuperaría hasta
+    /// el próximo foreground. En estado sano no se pingea jamás por flaps
+    /// (eso era de la era VPN; con Cloudflare el transporte es estable).
     /// Se re-arma a sí misma porque `withObservationTracking` es one-shot.
     private func observeNetwork() {
         withObservationTracking {
@@ -177,16 +214,20 @@ final class BackendState {
                 guard let self else { return }
                 if !NetworkMonitor.shared.isConnected {
                     self.setAvailable(false)
+                } else if !self.isAvailable && self.everConnected {
+                    self.invalidateAndRecheck()
                 }
                 self.observeNetwork()
             }
         }
     }
 
-    /// Re-evalúa la disponibilidad al volver a primer plano. Sustituye al
-    /// re-check por cada cambio de red: con un transporte estable basta con
-    /// comprobar una vez por foreground, y cubre el caso "el backend del
-    /// operador se cayó mientras la app estaba en background".
+    /// Re-evalúa la disponibilidad al volver a primer plano — pero SOLO como
+    /// sonda de recuperación (estado caído + `everConnected`). En estado sano
+    /// el propio tráfico REST confirma la disponibilidad (inferencia in-band
+    /// en BackendService) y el ping no aporta; y quien nunca conectó al
+    /// backend no debe generar tráfico recurrente hacia él (su vía de
+    /// descubrimiento es el check de arranque y el de login).
     private func observeForeground() {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
@@ -194,7 +235,10 @@ final class BackendState {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.invalidateAndRecheck()
+                guard let self else { return }
+                if !self.isAvailable && self.everConnected {
+                    self.invalidateAndRecheck()
+                }
             }
         }
     }

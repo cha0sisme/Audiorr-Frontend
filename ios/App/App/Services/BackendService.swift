@@ -547,8 +547,10 @@ final class BackendService {
         // Hub haya logueado antes. Si no hay sesion establecible (sin creds, gate
         // activo, backend legacy), devuelve nil y la request sale sin Bearer
         // (degradacion a modo Navidrome puro, comportamiento pre-migracion).
+        var hadBearer = false
         if injectBearer, let token = try? await AuthTokenStore.shared.ensureSession() {
             finalRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            hadBearer = true
         }
         // Identifica la plataforma del cliente al backend (sesiones activas,
         // métricas). El backend normaliza "iOS" → "ios" contra la whitelist
@@ -572,8 +574,10 @@ final class BackendService {
         do {
             try checkResponse(response)
             // 2xx: el backend esta vivo y nos atiende → confirma disponibilidad
-            // in-band, sin gastar un /api/health proactivo.
-            await BackendState.shared.noteRequestSucceeded()
+            // in-band, sin gastar un /api/health proactivo. `authenticated`
+            // solo si viajo Bearer: las rutas soft (canvas/artwork/covers)
+            // devuelven 2xx sin validar token y no prueban entitlement.
+            await BackendState.shared.noteRequestSucceeded(authenticated: hadBearer)
             return data
         } catch BackendError.unauthorized {
             guard injectBearer, allowRetry else {
