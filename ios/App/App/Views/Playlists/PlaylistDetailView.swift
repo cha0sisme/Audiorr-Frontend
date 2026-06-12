@@ -774,16 +774,20 @@ struct PlaylistDetailView: View {
         }
     }
 
-    /// Footer "N canciones · M min" estilo Apple Music, alineado a la izquierda
-    /// debajo del tracklist. Se basa en `displayPlaylist.songCount` y
-    /// `displayPlaylist.duration` (datos del header de Subsonic) para que
-    /// aparezca antes incluso de que `vm.songs` termine de cargar. Si la
-    /// playlist está vacía, no se renderiza.
+    /// Footer "N canciones · ~M h" estilo Apple Music, alineado a la izquierda
+    /// debajo del tracklist. La duración es APROXIMADA: redondeo a la hora más
+    /// cercana (minutos exactos solo por debajo de 1 h). Prefiere la suma real
+    /// de las pistas cargadas (coherente con la lista visible); mientras
+    /// `vm.songs` carga, usa la duración del header de Subsonic.
+    /// Si la playlist está vacía, no se renderiza.
     @ViewBuilder
     private var statsFooter: some View {
         let pl = vm.displayPlaylist
         if pl.songCount > 0 {
-            let durationText = pl.duration > 0 ? " · \(formatDuration(pl.duration))" : ""
+            let totalSeconds = vm.songs.isEmpty
+                ? pl.duration
+                : Int(vm.songs.reduce(0.0) { $0 + ($1.duration ?? 0) })
+            let durationText = totalSeconds > 0 ? " · \(approxDuration(totalSeconds))" : ""
             Text("\(L.songCount(pl.songCount))\(durationText)")
                 .font(.system(size: 12))
                 .foregroundStyle(isLight ? Color.black.opacity(0.30) : Color.white.opacity(0.35))
@@ -795,10 +799,12 @@ struct PlaylistDetailView: View {
 
     // MARK: - Helpers
 
-    private func formatDuration(_ seconds: Int) -> String {
-        let h = seconds / 3600
-        let m = (seconds % 3600) / 60
-        return h > 0 ? "\(h) h \(m) min" : "\(m) min"
+    /// "2 h aprox." a partir de 1 h (redondeo a la hora más cercana:
+    /// 2 h 40 min → "3 h aprox."); por debajo de 1 h, minutos exactos.
+    private func approxDuration(_ seconds: Int) -> String {
+        guard seconds >= 3600 else { return "\(seconds / 60) min" }
+        let roundedHours = max(1, Int((Double(seconds) / 3600).rounded()))
+        return L.approxHours(roundedHours)
     }
 }
 

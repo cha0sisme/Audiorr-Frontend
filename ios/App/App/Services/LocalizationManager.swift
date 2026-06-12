@@ -116,6 +116,8 @@ enum L {
     static var favorites: String { isEn ? "Favorites" : "Favoritos" }
     static var noFavoriteSongs: String { isEn ? "No favorite songs yet" : "Aún no tienes favoritos" }
     static var favoritesHint: String { isEn ? "Tap the star on any song to add it here" : "Toca la estrella en cualquier canción para añadirla aquí" }
+    /// Duración aproximada del footer de playlist ("3 h aprox." / "about 3 hr").
+    static func approxHours(_ h: Int) -> String { isEn ? "about \(h) hr" : "\(h) h aprox." }
 
     // MARK: - Home
 
