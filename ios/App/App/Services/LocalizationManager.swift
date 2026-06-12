@@ -114,6 +114,8 @@ enum L {
     static var addToFavorites: String { isEn ? "Add to favorites" : "Añadir a favoritos" }
     static var removeFromFavorites: String { isEn ? "Remove from favorites" : "Quitar de favoritos" }
     static var favorites: String { isEn ? "Favorites" : "Favoritos" }
+    static var noFavoriteSongs: String { isEn ? "No favorite songs yet" : "Aún no tienes favoritos" }
+    static var favoritesHint: String { isEn ? "Tap the star on any song to add it here" : "Toca la estrella en cualquier canción para añadirla aquí" }
 
     // MARK: - Home
 

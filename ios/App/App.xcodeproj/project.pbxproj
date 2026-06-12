@@ -49,6 +49,7 @@
 		3400FF412FA8000000000041 /* BackendState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF402FA8000000000040 /* BackendState.swift */; };
 		3400FFA12FA80000000000A1 /* AuthTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FFA02FA80000000000A0 /* AuthTokenStore.swift */; };
 		3400FFB12FA80000000000B1 /* FavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FFB02FA80000000000B0 /* FavoritesStore.swift */; };
+		3400FFB32FA80000000000B3 /* FavoritesPlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FFB22FA80000000000B2 /* FavoritesPlaylistView.swift */; };
 		3400FF432FA8000000000043 /* TransitionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF422FA8000000000042 /* TransitionDiagnostics.swift */; };
 		3400FF452FA8000000000045 /* TransitionDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */; };
 		3400FF492FA8000000000049 /* TransitionDiagnosticsBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */; };
@@ -128,6 +129,7 @@
 		3400FF402FA8000000000040 /* BackendState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendState.swift; sourceTree = "<group>"; };
 		3400FFA02FA80000000000A0 /* AuthTokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthTokenStore.swift; sourceTree = "<group>"; };
 		3400FFB02FA80000000000B0 /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
+		3400FFB22FA80000000000B2 /* FavoritesPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesPlaylistView.swift; sourceTree = "<group>"; };
 		3400FF422FA8000000000042 /* TransitionDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnostics.swift; sourceTree = "<group>"; };
 		3400FF442FA8000000000044 /* TransitionDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnosticsView.swift; sourceTree = "<group>"; };
 		3400FF482FA8000000000048 /* TransitionDiagnosticsBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionDiagnosticsBackend.swift; sourceTree = "<group>"; };
@@ -282,6 +284,7 @@
 			children = (
 				342286C42F90D87900785736 /* PlaylistDetailView.swift */,
 				342286C52F90D87900785736 /* PlaylistsView.swift */,
+				3400FFB22FA80000000000B2 /* FavoritesPlaylistView.swift */,
 			);
 			path = Playlists;
 			sourceTree = "<group>";
@@ -503,6 +506,7 @@
 				3400FF412FA8000000000041 /* BackendState.swift in Sources */,
 				3400FFA12FA80000000000A1 /* AuthTokenStore.swift in Sources */,
 				3400FFB12FA80000000000B1 /* FavoritesStore.swift in Sources */,
+				3400FFB32FA80000000000B3 /* FavoritesPlaylistView.swift in Sources */,
 				3400FF372FA8000000000037 /* DownloadManager.swift in Sources */,
 				3400FF3B2FA800000000003B /* StorageManagementView.swift in Sources */,
 				3400FF5B2FA800000000005B /* SessionsView.swift in Sources */,

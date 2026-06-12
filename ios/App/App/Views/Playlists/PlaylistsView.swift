@@ -263,6 +263,7 @@ struct PlaylistsView: View {
         } else if !vm.isConfigured {
             notConfiguredView
         } else if vm.playlists.isEmpty {
+            favoritesCard
             downloadsCard
             if !NetworkMonitor.shared.isConnected {
                 ContentUnavailableView(
@@ -283,6 +284,7 @@ struct PlaylistsView: View {
             downloadsCard
             sectionsContent
         } else {
+            favoritesCard
             downloadsCard
             gridContent
         }
@@ -312,6 +314,58 @@ struct PlaylistsView: View {
             Spacer()
         }
         .padding(.horizontal, 32)
+    }
+
+    // MARK: - Virtual "Favorites" playlist card (solo modo sin backend)
+
+    /// Card de la playlist virtual "Favoritos". Solo aparece SIN backend:
+    /// con backend, la playlist real "Favoritos" la materializa el backend
+    /// en Navidrome y llega por `getPlaylists` como una playlist más.
+    /// Mismo lenguaje visual que la cover backend (degradado azul + estrella).
+    @ViewBuilder
+    private var favoritesCard: some View {
+        if !BackendState.shared.isAvailable && !FavoritesStore.shared.starredIds.isEmpty {
+            NavigationLink(destination: FavoritesPlaylistView()) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.0, green: 0.59, blue: 1.0).opacity(0.85),
+                                             Color(red: 0.0, green: 0.30, blue: 0.60).opacity(0.9)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 26, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 56, height: 56)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L.favorites)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(L.songCount(FavoritesStore.shared.starredIds.count))
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        }
     }
 
     // MARK: - Virtual "Downloads" playlist card
