@@ -587,10 +587,17 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                 // PlaylistDetailView) en vez de un ping fresco de 2s que en CarPlay
                 // fallaba en frio (primera peticion via CF o cache expirada) y
                 // ocultaba el item. Fallback al ping solo si el estado aun no se
-                // establecio (CarPlay arrancado en frio sin UI de iPhone).
+                // establecio (CarPlay arrancado en frio sin UI de iPhone) Y este
+                // dispositivo conecto alguna vez (`everConnected`): un usuario sin
+                // backend no debe generar pings al navegar playlists en CarPlay,
+                // y el health (publico, responde a cualquiera) le pintaria una
+                // fila SmartMix que luego fallaria.
                 var backendUp = await MainActor.run { BackendState.shared.isAvailable }
                 if !backendUp {
-                    backendUp = await NavidromeService.shared.checkBackendAvailable()
+                    let everConnected = await MainActor.run { BackendState.shared.everConnected }
+                    if everConnected {
+                        backendUp = await NavidromeService.shared.checkBackendAvailable()
+                    }
                 }
                 if backendUp {
                     let smartMixItem = CPListItem(
