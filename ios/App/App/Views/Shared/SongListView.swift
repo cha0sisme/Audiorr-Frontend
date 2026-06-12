@@ -129,6 +129,10 @@ struct SongListView: View {
         // Capturar el binding del path AHORA (durante el body) para que las
         // UIActions diferidas del menú no lean @Environment fuera de tiempo.
         let path = navPath
+        // Estado de favorito capturado en el body (contexto MainActor): la
+        // lectura aquí registra la dependencia en Observation, así el menú
+        // se reconstruye fresco cuando cambia el Set de favoritos.
+        let isStarred = FavoritesStore.shared.isStarred(song.id)
 
         return InstantMenuButton(tint: tint) {
             // — Playback section
@@ -190,7 +194,16 @@ struct SongListView: View {
                 }
             }
 
-            // — Add to playlist
+            // — Favorites + Add to playlist (sección "biblioteca")
+            let favoriteAction = UIAction(
+                title: isStarred ? L.removeFromFavorites : L.addToFavorites,
+                image: UIImage(systemName: isStarred ? "star.slash" : "star")
+            ) { _ in
+                Task { @MainActor in
+                    FavoritesStore.shared.toggle(songId: song.id)
+                }
+            }
+
             let addToPlaylist = UIAction(
                 title: L.addToPlaylist,
                 image: UIImage(systemName: "music.note.list")
@@ -199,7 +212,7 @@ struct SongListView: View {
                     addToPlaylistSong = song
                 }
             }
-            sections.append(UIMenu(title: "", options: .displayInline, children: [addToPlaylist]))
+            sections.append(UIMenu(title: "", options: .displayInline, children: [favoriteAction, addToPlaylist]))
 
             return UIMenu(children: sections)
         }
@@ -242,6 +255,7 @@ private struct SongRowView: View {
 
     @State private var cacheState: CacheState = .none
     private let nowPlaying = NowPlayingState.shared
+    private let favorites = FavoritesStore.shared
 
     private var isLight: Bool { palette.isPrimaryLight }
     private var primaryText:   Color { isLight ? .black                  : .white }
@@ -324,6 +338,18 @@ private struct SongRowView: View {
         .padding(.leading, 16)
         .padding(.trailing, 4)
         .padding(.vertical, showCover ? 6 : 10)
+        // Estrella de favorito en el gutter izquierdo (estilo Apple Music):
+        // se dibuja SOBRE el padding leading de 16pt existente, sin desplazar
+        // ninguna columna — vale tanto para playlist (cover) como para álbum
+        // (número de pista) y la fila no salta al togglear.
+        .overlay(alignment: .leading) {
+            if favorites.isStarred(song.id) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(tertiaryText)
+                    .padding(.leading, 3)
+            }
+        }
         .task { await checkCacheState() }
         .task(id: cacheState) {
             // Poll while not yet cached: detect download start (none→downloading)

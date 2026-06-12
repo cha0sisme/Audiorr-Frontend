@@ -111,6 +111,9 @@ enum L {
     /// artistas de la canción.
     static var artistsSheetTitle: String { isEn ? "Artists" : "Artistas" }
     static var addToPlaylist: String { isEn ? "Add to playlist" : "Añadir a playlist" }
+    static var addToFavorites: String { isEn ? "Add to favorites" : "Añadir a favoritos" }
+    static var removeFromFavorites: String { isEn ? "Remove from favorites" : "Quitar de favoritos" }
+    static var favorites: String { isEn ? "Favorites" : "Favoritos" }
 
     // MARK: - Home
 

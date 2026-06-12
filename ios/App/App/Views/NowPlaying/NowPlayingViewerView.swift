@@ -328,8 +328,19 @@ struct NowPlayingViewerView: View {
 
             var sections: [UIMenuElement] = [playbackSection]
 
-            // — Add to playlist
+            // — Favorites + Add to playlist
             if !state.songId.isEmpty {
+                let songId = state.songId
+                let isStarred = FavoritesStore.shared.isStarred(songId)
+                let favoriteAction = UIAction(
+                    title: isStarred ? L.removeFromFavorites : L.addToFavorites,
+                    image: UIImage(systemName: isStarred ? "star.slash" : "star")
+                ) { _ in
+                    DispatchQueue.main.async {
+                        FavoritesStore.shared.toggle(songId: songId)
+                    }
+                }
+
                 let addToPlaylist = UIAction(
                     title: "Añadir a playlist",
                     image: UIImage(systemName: "music.note.list")
@@ -338,7 +349,7 @@ struct NowPlayingViewerView: View {
                         self.showAddToPlaylist = true
                     }
                 }
-                sections.append(UIMenu(title: "", options: .displayInline, children: [addToPlaylist]))
+                sections.append(UIMenu(title: "", options: .displayInline, children: [favoriteAction, addToPlaylist]))
             }
 
             // — Navigation section
@@ -608,10 +619,31 @@ struct NowPlayingViewerView: View {
 
             Spacer(minLength: 8)
 
+            favoriteButton(size: 20)
+                .frame(width: 40, height: 40)
+
             contextMenuButton()
                 .frame(width: 40, height: 40)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Favorite button (estrella junto al menú ···, estilo Apple Music)
+
+    /// Toggle de favorito de la canción actual. Optimista (FavoritesStore
+    /// revierte solo si Navidrome rechaza), con bounce al cambiar de estado.
+    private func favoriteButton(size: CGFloat, opacity: Double = 0.6) -> some View {
+        let isStarred = FavoritesStore.shared.isStarred(state.songId)
+        return Button {
+            FavoritesStore.shared.toggle(songId: state.songId)
+        } label: {
+            Image(systemName: isStarred ? "star.fill" : "star")
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(.white.opacity(isStarred ? 0.92 : opacity))
+        }
+        .buttonStyle(.plain)
+        .symbolEffect(.bounce, value: isStarred)
+        .disabled(state.songId.isEmpty)
     }
 
     /// Lyrics mode header: small cover + title/artist + 3-dot menu (Apple Music style)
@@ -657,6 +689,9 @@ struct NowPlayingViewerView: View {
             }
 
             Spacer(minLength: 4)
+
+            favoriteButton(size: 16, opacity: 0.5)
+                .frame(width: 32, height: 32)
 
             contextMenuButton(tintColor: UIColor.white.withAlphaComponent(0.5))
                 .frame(width: 36, height: 36)
