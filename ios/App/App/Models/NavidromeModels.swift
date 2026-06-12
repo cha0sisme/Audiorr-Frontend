@@ -504,6 +504,16 @@ struct PlaylistsResponse: Decodable {
     }
 }
 
+/// Subsonic `getStarred2` — canciones marcadas como favoritas por el usuario.
+/// Solo consumimos `song`; `album`/`artist` starred no tienen UI todavía.
+struct StarredResponse: Decodable {
+    let status: String
+    let starred2: StarredContainer?
+    struct StarredContainer: Decodable {
+        let song: [NavidromeSong]?
+    }
+}
+
 struct CreatePlaylistResponse: Decodable {
     let status: String
     let playlist: CreatedPlaylist?

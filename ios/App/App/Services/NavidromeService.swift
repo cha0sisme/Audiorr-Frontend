@@ -375,6 +375,46 @@ final class NavidromeService: ObservableObject {
         }
     }
 
+    // MARK: - Favorites (star / unstar / getStarred2)
+
+    /// Marca una canción como favorita (Subsonic `star`). Devuelve `true`
+    /// solo si el server confirmó — el caller (FavoritesStore) usa el bool
+    /// para revertir su actualización optimista en caso de fallo.
+    func star(id: String) async -> Bool {
+        await setStarred(id: id, endpoint: "star")
+    }
+
+    /// Quita una canción de favoritos (Subsonic `unstar`).
+    func unstar(id: String) async -> Bool {
+        await setStarred(id: id, endpoint: "unstar")
+    }
+
+    private func setStarred(id: String, endpoint: String) async -> Bool {
+        guard let base = baseURL() else { return false }
+        let urlStr = "\(base)/rest/\(endpoint).view?\(authQuery())&id=\(id)"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(SubsonicBaseResponse.self, from: data)
+        else { return false }
+        return response.status == "ok"
+    }
+
+    /// Canciones favoritas del usuario (Subsonic `getStarred2`).
+    ///
+    /// Devuelve `nil` en error de red/auth para que el caller distinga fallo
+    /// de "0 favoritos legítimo" — un transporte caído no debe vaciar el
+    /// estado local (misma lección que el sync starred del backend).
+    func getStarredSongs() async -> [NavidromeSong]? {
+        guard let base = baseURL() else { return nil }
+        let urlStr = "\(base)/rest/getStarred2.view?\(authQuery())"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(StarredResponse.self, from: data),
+              response.status == "ok"
+        else { return nil }
+        return response.starred2?.song ?? []
+    }
+
     // MARK: - All artists (getArtists.view)
 
     func getArtists() async -> [NavidromeArtist] {
