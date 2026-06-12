@@ -185,6 +185,14 @@ struct PlaylistsView: View {
                 await vm.refreshCoverHashesIfNeeded()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
             }
+            // Refresco en vivo de la card Descargas: si el caché cambia
+            // (vaciado desde Almacenamiento, descarga completada, evicción),
+            // el contador se actualiza sin esperar a re-entrar en la pestaña.
+            .task {
+                for await _ in NotificationCenter.default.notifications(named: .audiorrOfflineCacheChanged) {
+                    cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
+                }
+            }
             .refreshable {
                 await vm.load()
                 cachedSongCount = await OfflineContentProvider.shared.allCachedSongs().count
@@ -555,6 +563,16 @@ struct DownloadsPlaylistView: View {
             }
         }
         .task { await loadSongs() }
+        // Contenido en vivo: si el caché cambia mientras la vista está
+        // abierta (borrado desde Almacenamiento, descarga que completa,
+        // evicción LRU), la lista se actualiza sola. Sin pasar por
+        // `loadSongs()` para no parpadear el ProgressView de isLoading.
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: .audiorrOfflineCacheChanged) {
+                let cached = await OfflineContentProvider.shared.allCachedSongs()
+                songs = cached.map { $0.toNavidromeSong() }
+            }
+        }
     }
 
     private func loadSongs() async {

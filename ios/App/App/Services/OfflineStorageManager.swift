@@ -188,6 +188,7 @@ actor OfflineStorageManager {
 
         let sizeMB = Double(fileSize) / 1024.0 / 1024.0
         print("[OfflineStorage] Stored: \(songId) (\(String(format: "%.1f", sizeMB))MB) → \(relPath)")
+        notifyCacheChanged()
 
         return destURL
     }
@@ -300,6 +301,7 @@ actor OfflineStorageManager {
         context.delete(cached)
         try? context.save()
         print("[OfflineStorage] Deleted: \(songId)")
+        notifyCacheChanged()
     }
 
     func deleteUnpinned() {
@@ -314,6 +316,7 @@ actor OfflineStorageManager {
         }
         try? context.save()
         print("[OfflineStorage] Deleted all unpinned cache")
+        notifyCacheChanged()
     }
 
     func deleteAll() {
@@ -326,6 +329,7 @@ actor OfflineStorageManager {
         }
         try? context.save()
         print("[OfflineStorage] Deleted all cache")
+        notifyCacheChanged()
     }
 
     // MARK: - LRU Eviction
@@ -362,10 +366,18 @@ actor OfflineStorageManager {
         if evictedCount > 0 {
             try? context.save()
             print("[OfflineStorage] Evicted \(evictedCount) songs, new size: \(currentSize / 1_048_576)MB / \(maxBytes / 1_048_576)MB")
+            notifyCacheChanged()
         }
     }
 
     // MARK: - Private Helpers
+
+    /// Avisa a las vistas que pintan contenido offline (card Descargas,
+    /// DownloadsPlaylistView, Almacenamiento) de que el caché cambió, para
+    /// que recarguen en vivo sin esperar a un re-enter o pull-to-refresh.
+    private func notifyCacheChanged() {
+        NotificationCenter.default.post(name: .audiorrOfflineCacheChanged, object: nil)
+    }
 
     private func fetchCachedSong(songId: String) -> CachedSong? {
         let descriptor = FetchDescriptor<CachedSong>(

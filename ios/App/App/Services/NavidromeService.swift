@@ -1324,4 +1324,9 @@ final class NavidromeService: ObservableObject {
 
 extension Notification.Name {
     static let audiorrDidLogin = Notification.Name("audiorrDidLogin")
+    /// El contenido del caché offline cambió (canción guardada/borrada,
+    /// vaciado total o parcial, evicción LRU). Las vistas que pintan
+    /// contenido offline (card Descargas, DownloadsPlaylistView,
+    /// Almacenamiento) la observan para recargar en vivo.
+    static let audiorrOfflineCacheChanged = Notification.Name("audiorrOfflineCacheChanged")
 }

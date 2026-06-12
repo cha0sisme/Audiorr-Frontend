@@ -251,6 +251,14 @@ struct StorageManagementView: View {
         .navigationTitle(L.storage)
         .navigationBarTitleDisplayMode(.inline)
         .task { await vm.load() }
+        // Recarga en vivo: cubre cambios del caché originados fuera de esta
+        // vista (eliminar descarga desde el botón de un álbum/playlist,
+        // evicción LRU, descargas que completan) mientras está abierta.
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: .audiorrOfflineCacheChanged) {
+                await vm.load()
+            }
+        }
         .refreshable { await vm.load() }
         .confirmationDialog(L.clearUnpinnedCache, isPresented: $showClearUnpinnedConfirm, titleVisibility: .visible) {
             Button(L.delete, role: .destructive) {
