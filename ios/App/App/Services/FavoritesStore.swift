@@ -59,8 +59,15 @@ final class FavoritesStore {
         isLoaded = true
     }
 
+    /// Cadena de requests en serie: dos toggles rápidos (doble tap, o dos
+    /// canciones seguidas) deben llegar al server en el orden en que se
+    /// aplicaron localmente — en paralelo podrían adelantarse y dejar el
+    /// server al revés que la UI hasta el siguiente refresh.
+    private var toggleChain: Task<Void, Never>?
+
     /// Alterna el favorito de una canción. Optimista: la UI cambia ya; si
-    /// Navidrome rechaza (sin red, auth caída), se revierte al estado previo.
+    /// Navidrome rechaza (sin red, auth caída), se revierte al estado previo
+    /// — salvo que un toggle posterior ya sea el dueño del estado.
     func toggle(songId: String) {
         guard !songId.isEmpty else { return }
         let wasStarred = starredIds.contains(songId)
@@ -70,17 +77,26 @@ final class FavoritesStore {
             starredIds.insert(songId)
         }
 
-        Task {
+        let previous = toggleChain
+        toggleChain = Task {
+            await previous?.value
+
             let ok = wasStarred
                 ? await NavidromeService.shared.unstar(id: songId)
                 : await NavidromeService.shared.star(id: songId)
 
             if !ok {
-                // Rollback — solo si nadie lo volvió a tocar entre medias.
-                if wasStarred {
-                    starredIds.insert(songId)
-                } else {
-                    starredIds.remove(songId)
+                // Rollback solo si la UI aún muestra el resultado de ESTE
+                // toggle. Si hubo otro tap sobre la misma canción después,
+                // ese toggle posterior (encolado detrás) manda y revertir
+                // aquí pisaría su estado.
+                let expected = !wasStarred
+                if starredIds.contains(songId) == expected {
+                    if wasStarred {
+                        starredIds.insert(songId)
+                    } else {
+                        starredIds.remove(songId)
+                    }
                 }
                 return
             }
