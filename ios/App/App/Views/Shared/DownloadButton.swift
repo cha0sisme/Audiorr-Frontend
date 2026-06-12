@@ -126,10 +126,14 @@ struct DownloadButton: View {
     }
 
     private func removeDownload() {
+        // cancelGroup ya borra el registro DownloadGroup; la meta de browsing
+        // offline (CachedPlaylistMeta) hay que borrarla aparte o la playlist
+        // seguiría listada en el modo offline sin canciones reales.
         DownloadManager.shared.cancelGroup(groupId: groupId)
         for song in songs {
             Task { await OfflineStorageManager.shared.deleteFile(songId: song.id) }
         }
+        Task { await OfflineContentProvider.shared.deleteMeta(id: groupId) }
         withAnimation(Anim.small) { downloadState = .none }
     }
 

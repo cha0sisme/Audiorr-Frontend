@@ -53,11 +53,18 @@ final class StorageManagementViewModel: ObservableObject {
 
     func clearUnpinned() async {
         await OfflineStorageManager.shared.deleteUnpinned()
+        // Limpiar también los registros de grupo (y sus metas de browsing
+        // offline) de lo no fijado — sin esto la sección "Descargas"
+        // seguiría listando grupos cuyas canciones ya no existen.
+        let removed = DownloadManager.shared.deleteGroupRecords(onlyUnpinned: true)
+        await OfflineContentProvider.shared.deleteMetas(ids: removed)
         await load()
     }
 
     func clearAll() async {
         await OfflineStorageManager.shared.deleteAll()
+        DownloadManager.shared.deleteGroupRecords(onlyUnpinned: false)
+        await OfflineContentProvider.shared.deleteAllMetas()
         await load()
     }
 }

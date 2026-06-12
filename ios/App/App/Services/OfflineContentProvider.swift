@@ -64,6 +64,30 @@ actor OfflineContentProvider {
         try? context.save()
     }
 
+    // MARK: - Delete Metadata
+
+    /// Borra la metadata de una playlist/álbum descargado. Se invoca al
+    /// eliminar la descarga del grupo: sin esto, la meta huérfana seguiría
+    /// listando la playlist en el browsing offline con 0 canciones reales.
+    func deleteMeta(id: String) {
+        guard let meta = fetchPlaylistMeta(id: id) else { return }
+        context.delete(meta)
+        try? context.save()
+    }
+
+    /// Borra varias metas de golpe (vaciado de caché desde Almacenamiento).
+    func deleteMetas(ids: [String]) {
+        for id in ids { deleteMeta(id: id) }
+    }
+
+    /// Borra TODAS las metas (vaciado completo del caché).
+    func deleteAllMetas() {
+        let descriptor = FetchDescriptor<CachedPlaylistMeta>()
+        guard let metas = try? context.fetch(descriptor) else { return }
+        for meta in metas { context.delete(meta) }
+        try? context.save()
+    }
+
     // MARK: - Query: Albums
 
     /// All albums that have at least one cached song.

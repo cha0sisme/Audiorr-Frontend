@@ -311,6 +311,23 @@ final class DownloadManager: NSObject {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Borra los registros de grupos de descarga y devuelve sus groupIds.
+    /// Se invoca al vaciar el caché desde Almacenamiento: sin esto, la
+    /// sección "Descargas" seguiría listando playlists/álbumes completados
+    /// cuyas canciones ya no existen en disco (grupos fantasma).
+    /// `onlyUnpinned` limita el borrado a los grupos no fijados.
+    @discardableResult
+    func deleteGroupRecords(onlyUnpinned: Bool) -> [String] {
+        var removedIds: [String] = []
+        for group in groups() where !onlyUnpinned || !group.isPinned {
+            removedIds.append(group.groupId)
+            context.delete(group)
+        }
+        guard !removedIds.isEmpty else { return [] }
+        try? context.save()
+        return removedIds
+    }
+
     // MARK: - Enqueue & Process
 
     private func enqueue(song: PersistableSong, priority: Int, groupId: String?, groupType: String?) {
