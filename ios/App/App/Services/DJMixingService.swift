@@ -73,6 +73,12 @@ enum EntryPointSource: String, Codable {
     /// `vocalEntryTarget` por estar el cálculo original >5s después del
     /// primer evento vocal de B. Permite cohort split en análisis post-coche.
     case punchVocalCappedRollback
+    /// v15.q — lateEntryRetreat: B entraba tarde (>30s) pegado a su primer
+    /// evento vocal con BPM incompatible; el entry se retrajo a
+    /// `introEndHeuristicB` ("el principio del cuerpo de B") para no aterrizar
+    /// a media canción sobre el verso. Fuente propia para aislar estos casos
+    /// en la telemetría.
+    case punchLateEntryRetreat
     case minimal               // .minimal case (cuando exista)
     case unknown               // sin asignar (no debería ocurrir si todo el switch está cableado)
 }
@@ -822,6 +828,53 @@ enum DJMixingService {
                 // siempre más restrictivo, así que el cap final ya no actúa.
                 entryFinalCapApplied: entry.entryFinalCapApplied
             )
+        }
+
+        // ── 2c. lateEntryRetreat (v15.q) ──
+        // Cuando B entra tarde (>30s), pegado a su primer evento vocal (gap<4s)
+        // y con BPM incompatible (|Δbpm|≥16), el entry aterriza a media canción
+        // sobre el verso de B saltándose su intro instrumental — se percibe como
+        // un salto en mitad del tema entrante en vez de una presentación. Si
+        // existe una zona instrumental temprana real (introEndHeuristicB
+        // suficientemente por delante del entry), se retrae el entry al principio
+        // del cuerpo de B.
+        //
+        // Floor `min(introH, vocalStartB−2)`: introEndTimeHeuristic puede
+        // inflarse por encima de la voz en pistas de voz inmediata (mismo riesgo
+        // que el bug ML-override de introEndTime); el floor garantiza no
+        // retroceder DENTRO del verso. La guarda `|entry−introH|≥3` evita actuar
+        // cuando B ya entra por su principio. Se aplica antes del cálculo de fade
+        // a propósito: calculateAdaptiveFadeDuration recalcula con el entry
+        // retrocedido → el fade se acorta en consecuencia.
+        //
+        // El umbral |Δbpm|≥16 es el discriminante que preserva las entradas
+        // tardías legítimas: una B con BPM compatible y colchón instrumental
+        // antes de la voz no se ve afectada.
+        if let nextB = safeNext, entry.entrySource != .punchLateEntryRetreat {
+            let ep = entry.entryPoint
+            let vocalStartB = nextB.vocalStartTime ?? -1
+            let introH: Double? = nextB.introEndTimeHeuristic
+                ?? (nextB.hasIntroData ? nextB.introEndTime : nil)
+            let bpmDiff: Double = safeCurrent.map { abs($0.bpm - nextB.bpm) } ?? 0
+            if ep > 30, vocalStartB >= 0, (vocalStartB - ep) < 4, bpmDiff >= 16,
+               let ih = introH, abs(ep - ih) >= 3 {
+                let retreatTarget = max(2, min(ih, vocalStartB - 2))
+                // Solo si es un retroceso real y significativo (>1s hacia atrás).
+                if retreatTarget < ep - 1 {
+                    print("[DJMixingService] ⏪ lateEntryRetreat: entry \(String(format: "%.1f", ep))s → \(String(format: "%.1f", retreatTarget))s (vocalStartB=\(String(format: "%.1f", vocalStartB))s, introH=\(String(format: "%.1f", ih))s, Δbpm=\(String(format: "%.0f", bpmDiff)))")
+                    entry = EntryPointResult(
+                        entryPoint: retreatTarget,
+                        beatSyncInfo: entry.beatSyncInfo + " [lateEntryRetreat]",
+                        usedFallback: entry.usedFallback,
+                        // El snap original se ataba al downbeat pre-retreat; el
+                        // retroceso nos saca de ahí.
+                        isBeatSynced: false,
+                        entrySource: .punchLateEntryRetreat,
+                        genreCapApplied: entry.genreCapApplied,
+                        entryFinalCapApplied: entry.entryFinalCapApplied
+                    )
+                }
+            }
         }
 
         // ── 3. Fade duration — driven by profile ──
