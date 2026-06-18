@@ -175,6 +175,40 @@ final class BackendService {
         return dict["avatarUrl"] as? String
     }
 
+    // MARK: - Related albums (footer de AlbumDetail, paridad web)
+
+    private struct RelatedAlbumsResponse: Decodable {
+        let relatedAlbums: [RelatedAlbumDTO]
+        struct RelatedAlbumDTO: Decodable {
+            let id: String
+            let name: String
+            let artist: String
+            let coverArt: String?
+        }
+    }
+
+    /// Álbumes relacionados de un álbum. El backend resuelve la similitud vía
+    /// `getSimilarSongs2` (Navidrome → Last.fm), excluye el álbum origen, aplica
+    /// cap de diversidad por artista y solo devuelve álbumes presentes en la
+    /// biblioteca. Feature ADITIVA: ante 404 (endpoint no desplegado) / 5xx / red
+    /// devuelve [] y la sección se oculta sola — nunca rompe AlbumDetail.
+    func getRelatedAlbums(albumId: String, limit: Int = 12) async -> [NavidromeAlbum] {
+        guard !albumId.isEmpty else { return [] }
+        do {
+            let data = try await get(path: "/api/related-albums?albumId=\(albumId.urlEncoded)&limit=\(limit)")
+            let resp = try jsonDecoder.decode(RelatedAlbumsResponse.self, from: data)
+            return resp.relatedAlbums.map { dto in
+                NavidromeAlbum(
+                    id: dto.id, name: dto.name, artist: dto.artist,
+                    coverArt: dto.coverArt, songCount: nil, duration: nil,
+                    year: nil, genre: nil, explicitStatus: nil
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
     // MARK: - Playback Position Persistence
 
     struct LastPlaybackQueueItem: Codable {

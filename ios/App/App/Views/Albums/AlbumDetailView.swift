@@ -19,6 +19,9 @@ final class AlbumDetailViewModel: ObservableObject {
     /// fondo del header con la cover estática encima — bucle decorativo,
     /// independiente del estado de reproducción.
     @Published var animatedArtworkUrl: URL?
+    /// Álbumes relacionados (footer estilo Apple Music, paridad con la web).
+    /// Vacío = sección oculta (sin backend, sin similares, o endpoint no desplegado).
+    @Published var relatedAlbums: [NavidromeAlbum] = []
 
     private let api = NavidromeService.shared
     let initialAlbum: NavidromeAlbum
@@ -62,8 +65,9 @@ final class AlbumDetailViewModel: ObservableObject {
         async let notesDone: Void = loadNotes()
         async let coverDone: Void = loadCoverAndPalette()
         async let motionDone: Void = loadAnimatedArtwork()
+        async let relatedDone: Void = loadRelatedAlbums()
 
-        _ = await (songsDone, notesDone, coverDone, motionDone)
+        _ = await (songsDone, notesDone, coverDone, motionDone, relatedDone)
     }
 
     private func loadAnimatedArtwork() async {
@@ -71,6 +75,14 @@ final class AlbumDetailViewModel: ObservableObject {
         if case .video(let url) = result {
             self.animatedArtworkUrl = url
         }
+    }
+
+    /// Álbumes relacionados — solo con backend (la API vive en el backend, no en
+    /// Navidrome). getRelatedAlbums degrada a [] ante 404/5xx/red, así que la
+    /// sección nunca rompe el detalle: simplemente no aparece.
+    private func loadRelatedAlbums() async {
+        guard BackendState.shared.isAvailable else { return }
+        relatedAlbums = await BackendService.shared.getRelatedAlbums(albumId: initialAlbum.id)
     }
 
     private func loadSongs() async {
@@ -308,6 +320,7 @@ struct AlbumDetailView: View {
                     if isSolidMode { titleButtonsSection }
                     albumNotesSection
                     songListSection
+                    relatedAlbumsSection
                     Spacer(minLength: 120) // mini-player clearance
                 }
                 .frame(maxWidth: .infinity)
@@ -356,6 +369,31 @@ struct AlbumDetailView: View {
                     toolbarMenu
                 }
             }
+        }
+    }
+
+    // MARK: - Álbumes relacionados (footer, paridad web)
+
+    /// Carrusel "Álbumes relacionados" al final del detalle (estilo Apple Music).
+    /// Oculto si la lista viene vacía (sin backend, sin similares o endpoint no
+    /// desplegado). El título tappable abre el grid completo vía SeeAllGridView;
+    /// cada card navega a su propio AlbumDetail por el destino del stack raíz.
+    @ViewBuilder
+    private var relatedAlbumsSection: some View {
+        if !vm.relatedAlbums.isEmpty {
+            HorizontalScrollSection(
+                title: "Álbumes relacionados",
+                isLight: isLight,
+                seeAll: .albums(title: "Álbumes relacionados", items: vm.relatedAlbums)
+            ) {
+                ForEach(vm.relatedAlbums) { album in
+                    NavigationLink(value: album) {
+                        AlbumCardView(album: album, isLight: isLight, size: 150)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 8)
         }
     }
 
