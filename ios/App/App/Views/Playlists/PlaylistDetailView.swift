@@ -98,7 +98,7 @@ final class PlaylistDetailViewModel: ObservableObject {
         // Songs first — don't let cover fetch block the list
         if let (pl, songs) = try? await api.getPlaylistSongs(playlistId: initialPlaylist.id) {
             self.songs = songs
-            if let pl { self.playlist = pl }
+            if let pl { self.playlist = mergedWithInitial(pl) }
         }
 
         // Songs ready — show them immediately
@@ -126,6 +126,26 @@ final class PlaylistDetailViewModel: ObservableObject {
 
     private func loadPinnedIfAvailable() async {
         if BackendState.shared.isAvailable { await loadPinnedStatus() }
+    }
+
+    /// Funde el detalle de Subsonic (`getPlaylist.view`) con el objeto del listado.
+    /// Garantiza que `displayPlaylist` NUNCA pierde los campos de identidad que ya
+    /// traía el objeto inicial: si el detalle viene sin `comment`/`owner` (o si
+    /// navegamos desde Home/Jump Back In con un objeto PARCIAL, donde llegan nil),
+    /// se conservan los del listado. Patrón "preview inmediato + verdad al cargar",
+    /// sin parpadeo — por eso `metadataLine` y el gating del menú pueden leer de
+    /// `displayPlaylist` con seguridad.
+    private func mergedWithInitial(_ detail: NavidromePlaylist) -> NavidromePlaylist {
+        NavidromePlaylist(
+            id: detail.id,
+            name: detail.name,
+            comment: detail.comment ?? initialPlaylist.comment,
+            songCount: detail.songCount,
+            duration: detail.duration,
+            owner: detail.owner ?? initialPlaylist.owner,
+            coverArt: detail.coverArt ?? initialPlaylist.coverArt,
+            changed: detail.changed ?? initialPlaylist.changed
+        )
     }
 
     // MARK: - Remove song
@@ -525,12 +545,14 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private var metadataLine: some View {
         let textColor: Color = isLight ? Color.black.opacity(0.55) : Color.white.opacity(0.75)
-        // Usamos `initialPlaylist` (de la lista) y NO `displayPlaylist`: el
-        // detalle de Subsonic (`getPlaylistSongs`) llega con `comment` y `owner`
-        // a nil, así que `displayPlaylist.isSystemPlaylist` solo detectaría las
-        // Mix Diario (por nombre). `initialPlaylist` conserva el comment, de
-        // modo que "Incluye X, Y y Z" sale también en editorial, smart y spotify.
-        let pl = vm.initialPlaylist
+        // `displayPlaylist` es seguro: el VM funde el detalle de Subsonic con el
+        // objeto del listado (mergedWithInitial), así que `comment`/`owner` nunca
+        // se pierden — vengan del detalle (getPlaylist.view ya los decodifica) o
+        // del objeto inicial. Antes esto leía `initialPlaylist` porque
+        // getPlaylist.view descartaba comment/owner; ya no. Esto arregla además el
+        // caso de abrir la playlist desde Home (Jump Back In), donde el objeto
+        // inicial llega parcial y la metadata salía vacía.
+        let pl = vm.displayPlaylist
         let text: String? = {
             // Playlist "Favoritos" (starred materializada por el backend):
             // solo el nombre del usuario bajo el título — ni "Incluye..."
@@ -669,9 +691,8 @@ struct PlaylistDetailView: View {
                 // "Favoritos" (starred materializada) cuenta como sistema
                 // para que nadie la borre/edite (el resync la machacaría),
                 // pero SÍ debe poder descargarse — es contenido personal.
-                // Evaluada sobre `initialPlaylist` (el detalle llega sin
-                // comment, mismo motivo que el gate de eliminar).
-                let isStarredPlaylist = (vm.initialPlaylist.comment ?? "")
+                // `pl` (= displayPlaylist) ya trae comment fundido (mergedWithInitial).
+                let isStarredPlaylist = (pl.comment ?? "")
                     .lowercased().contains("starred synced")
                 if hasSongs && (!pl.isSystemPlaylist || isStarredPlaylist) {
                     Button {
@@ -703,14 +724,13 @@ struct PlaylistDetailView: View {
                 // (covered by `isSystemPlaylist`). A user can favourite or follow
                 // another user's public playlist; we must not let them delete it.
                 //
-                // Gate sobre `initialPlaylist` (datos del LISTADO) y no sobre
-                // `pl` (= displayPlaylist): el detalle de Subsonic llega con
-                // `comment`/`owner` a nil y escondía la opción en playlists
-                // propias en cuanto cargaba la lista. OJO: las editoriales se
-                // crean desde la cuenta admin (su owner coincide con el del
-                // admin logueado) — el comment del listado es la defensa que
-                // las mantiene fuera; no fiarse nunca del owner a secas.
-                if !vm.initialPlaylist.isSystemPlaylist && vm.initialPlaylist.isOwnedByCurrentUser {
+                // Gate sobre `pl` (= displayPlaylist), cuyo comment/owner el VM
+                // funde con los del listado (mergedWithInitial) — fiable venga de
+                // donde venga. OJO: las editoriales se crean desde la cuenta admin
+                // (su owner coincide con el del admin logueado) — el `comment`
+                // ("smart playlist", "[editorial]"…) es la defensa que las mantiene
+                // fuera; no fiarse nunca del owner a secas.
+                if !pl.isSystemPlaylist && pl.isOwnedByCurrentUser {
                     Section {
                         Button(role: .destructive) {
                             showDeleteConfirm = true
@@ -839,12 +859,11 @@ struct PlaylistDetailView: View {
 
     /// Handler de "Quitar de esta playlist" — nil (opción oculta) salvo en
     /// playlists PROPIAS no gestionadas: mismo gate que "Eliminar" del toolbar
-    /// y que los destinos de "Añadir a playlist". Se evalúa sobre
-    /// `initialPlaylist` y NO `displayPlaylist`: el detalle de Subsonic llega
-    /// con `comment`/`owner` a nil (ver metadataLine), así que el gate solo es
-    /// fiable con los datos del listado.
+    /// y que los destinos de "Añadir a playlist". Se evalúa sobre `displayPlaylist`,
+    /// cuyo comment/owner el VM funde con los del listado (mergedWithInitial), así
+    /// que el gate es fiable venga de donde venga (incluido abrir desde Home).
     private var removeSongHandler: ((NavidromeSong, Int) -> Void)? {
-        let pl = vm.initialPlaylist
+        let pl = vm.displayPlaylist
         guard pl.isOwnedByCurrentUser && !pl.isSystemPlaylist else { return nil }
         return { [weak vm] _, idx in vm?.removeSong(at: idx) }
     }

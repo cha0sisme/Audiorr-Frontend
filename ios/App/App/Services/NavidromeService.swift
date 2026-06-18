@@ -316,9 +316,9 @@ final class NavidromeService: ObservableObject {
         let response = try JSONDecoder.decodeSubsonic(PlaylistDetailResponse.self, from: data)
         guard response.status == "ok", let detail = response.playlist else { return (nil, []) }
         let playlist = NavidromePlaylist(
-            id: detail.id, name: detail.name, comment: nil,
+            id: detail.id, name: detail.name, comment: detail.comment,
             songCount: detail.entry?.count ?? 0, duration: 0,
-            owner: nil, coverArt: detail.coverArt, changed: nil
+            owner: detail.owner, coverArt: detail.coverArt, changed: nil
         )
         return (playlist, detail.entry ?? [])
     }

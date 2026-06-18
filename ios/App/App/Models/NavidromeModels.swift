@@ -534,6 +534,8 @@ struct PlaylistDetailResponse: Decodable {
     struct PlaylistDetail: Decodable {
         let id: String
         let name: String
+        let comment: String?
+        let owner: String?
         let coverArt: String?
         let entry: [NavidromeSong]?
     }
