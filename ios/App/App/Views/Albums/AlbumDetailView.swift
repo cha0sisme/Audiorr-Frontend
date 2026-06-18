@@ -157,7 +157,8 @@ struct AlbumDetailView: View {
     /// Prioridad de efectos (sin mezclar), como pidió el diseño:
     ///   1. animated artwork → MISMO recorte/resolución que NowPlaying: vídeo
     ///      full-width en el 62% superior de pantalla, centrado, fundido a fondo
-    ///      y título/botones DEBAJO (motionHeroSection + titleButtonsSection).
+    ///      y título/botones SUPERPUESTOS sobre el tercio inferior del hero, sobre
+    ///      el fundido (motionHeroSection + motionTitleOverlay), estilo Apple Music.
     ///   2. isSolid (y SIN animated) → cover cuadrada full-screen + fondo del
     ///      color del borde (sin costura), título debajo.
     ///   3. normal → layout estándar (cover-tarjeta).
@@ -166,9 +167,9 @@ struct AlbumDetailView: View {
     private var isSolidMode: Bool { vm.animatedArtworkUrl == nil && vm.palette.isSolid }
 
     private var heroHeight: CGFloat {
-        // Motion: el hero es SOLO el vídeo (62% de pantalla, igual que el
-        // backdrop de NowPlaying); título/botones van debajo en su propia
-        // sección, como isSolid.
+        // Motion: el hero es el vídeo (62% de pantalla, igual que el backdrop de
+        // NowPlaying) con el título/botones SUPERPUESTOS sobre su tercio inferior
+        // (overlay, no flujo). La altura del hero es solo la del vídeo.
         if isMotionMode { return motionVideoHeight }
         // 189 = inset extra (88) + hueco cover↔título (20) + hueco info↔botones
         // (21) + alto del bloque de botones (~48) + hueco botones↔bio (12). El
@@ -265,6 +266,15 @@ struct AlbumDetailView: View {
     /// recorte aspect-fill y el zoom coincidan pixel a pixel.
     private var motionVideoHeight: CGFloat { screenHeight * 0.62 }
 
+    /// Fracción del alto del hero (medida desde el FONDO) a la que se ancla el
+    /// borde inferior del bloque título/botones SUPERPUESTO en modo motion. El
+    /// bloque flota sobre el tercio inferior del hero (zona del heroFade), no
+    /// debajo del vídeo, eliminando el "hueco muerto" de los motion con el arte
+    /// anclado arriba (p.ej. Beerbongs). Ajustable dentro de [0.10, 0.20] hasta
+    /// la posición óptima en dispositivo. Subir el valor → el texto sube; bajarlo
+    /// → el texto baja, más metido en el fundido.
+    private let motionTextBottomFraction: CGFloat = 0.14
+
     /// Inset superior del cover en modo isSolid: arranca bajo la barra de
     /// navegación, con heroBgColor (color del borde) en la franja de arriba.
     private var coverTopInset: CGFloat { safeAreaTop + 48 }
@@ -292,9 +302,10 @@ struct AlbumDetailView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     heroSection
-                    // isSolid y motion comparten el patrón "cover/vídeo arriba,
-                    // título+botones debajo".
-                    if isSolidMode || isMotionMode { titleButtonsSection }
+                    // isSolid: título+botones DEBAJO del cover (flujo). En motion
+                    // el bloque va SUPERPUESTO sobre el hero (overlay dentro de
+                    // motionHeroSection), no en el flujo del VStack.
+                    if isSolidMode { titleButtonsSection }
                     albumNotesSection
                     songListSection
                     Spacer(minLength: 120) // mini-player clearance
@@ -383,6 +394,14 @@ struct AlbumDetailView: View {
                 .scaleEffect(stretchScale, anchor: .bottom)
         }
         .frame(width: screenWidth, height: heroHeight)
+        // Título + metadata + botones SUPERPUESTOS sobre el tercio inferior del
+        // hero (sobre el heroFade), no debajo del vídeo. FUERA del scaleEffect del
+        // vídeo: el texto NO se deforma con el stretchy pull-down. Anclado al fondo
+        // del hero con una fracción ajustable (motionTextBottomFraction).
+        .overlay(alignment: .bottom) {
+            motionTitleOverlay
+                .padding(.bottom, heroHeight * motionTextBottomFraction)
+        }
         .ignoresSafeArea(edges: .top)
     }
 
@@ -414,6 +433,37 @@ struct AlbumDetailView: View {
         // cover). La base de pantalla (pageBg) es el cuerpo más oscuro, así que
         // sin esto la franja superior se oscurecería y rompería la costura.
         .background(heroBgColor)
+    }
+
+    /// Variante de `titleButtonsSection` para modo motion: MISMO contenido
+    /// (título + metadata + botones) compuesto como overlay sobre el tercio
+    /// inferior del hero, no en el flujo del VStack. Sin el `padding(.top, -8)`
+    /// ni el `.padding(.bottom, 12)` de isSolid (allí pegan el bloque al cover;
+    /// aquí el anclaje vertical lo pone el caller con
+    /// `padding(.bottom, heroHeight * motionTextBottomFraction)`). Recibe taps
+    /// (botones); el heroFade queda por debajo con allowsHitTesting(false).
+    private var motionTitleOverlay: some View {
+        VStack(alignment: .center, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(vm.displayAlbum.name)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(isLight ? Color.black : .white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+
+                if vm.displayAlbum.isExplicit {
+                    ExplicitBadge(color: isLight ? Color.black.opacity(0.45) : Color.white.opacity(0.75), size: 18)
+                }
+            }
+
+            metadataLine
+
+            playButtons
+                .padding(.top, 16)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 20)
     }
 
     /// Título + metadata + botones DEBAJO del cover (solo modo isSolid), sobre
