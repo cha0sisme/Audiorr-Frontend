@@ -69,9 +69,9 @@ final class PlaylistDetailViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self else { return }
-                // También la versión #hires del hero (clave separada), si no
-                // el detalle seguiría mostrando la portada antigua tras cambiar.
-                PlaylistCoverCache.shared.invalidate(playlistId: myId + "#hires")
+                // invalidate(myId) ya purgó la clave base y la derivada #hires del
+                // hero. Aquí solo recargamos en vivo cuando el detalle está abierto
+                // (coverImage en @State sobreviviría stale si no lo refrescáramos).
                 self.coverImage = nil
                 self.paletteReady = false
                 Task { await self.loadCover() }
@@ -1042,21 +1042,42 @@ final class PlaylistCoverCache: @unchecked Sendable {
 
     // MARK: Invalidate
 
+    /// Sufijos de claves DERIVADAS de la clave base de un playlist. El detalle guarda
+    /// la cover hi-res del hero bajo `id + "#hires"` (clave separada de la del grid,
+    /// que es `id`). Estas derivadas NO entran en el tracking de hash
+    /// (`registerContentHashes` solo conoce ids pelados del backend), así que
+    /// `invalidate` DEBE purgarlas explícitamente o el hero se quedaría con la cover
+    /// vieja para siempre aunque el grid se actualice. Cualquier variante futura
+    /// (otro tamaño, otro origen) se añade aquí y queda cubierta.
+    private static let derivedKeySuffixes = ["#hires"]
+
     func invalidate(playlistId: String) {
-        memory.removeObject(forKey: playlistId as NSString)
+        // Clave base + derivadas. Guard anti-re-derivación: `invalidate` se llama con
+        // ids pelados; si llegara una clave ya derivada (contiene "#"), se purga sola
+        // sin volver a derivar (evita "id#hires#hires").
+        let baseId = playlistId
+        let keys: [String] = baseId.contains("#")
+            ? [baseId]
+            : [baseId] + Self.derivedKeySuffixes.map { baseId + $0 }
+
+        for k in keys { memory.removeObject(forKey: k as NSString) }
         hashLock.lock()
-        cachedHashes.removeValue(forKey: playlistId)
+        for k in keys { cachedHashes.removeValue(forKey: k) }
         hashLock.unlock()
         persistHashes()
-        let path = diskPath(for: playlistId)
+
         // SYNC delete is load-bearing: image(for:) reads disk synchronously, so any
         // caller that runs between this line and the async drain (prefetch on the
         // same run loop, onReceive→loadCover subscribers) would otherwise find the
         // stale JPG, repopulate the memory cache, and silently undo the invalidation.
-        ioQueue.sync { try? FileManager.default.removeItem(at: path) }
+        // Un único ioQueue.sync borra base + derivadas (NO anidar syncs en la serial queue).
+        let paths = keys.map { diskPath(for: $0) }
+        ioQueue.sync { for p in paths { try? FileManager.default.removeItem(at: p) } }
+
         // Palette is derived from the cover — keep them in sync.
-        PaletteCache.shared.invalidate(key: playlistId)
-        coverInvalidated.send(playlistId)
+        PaletteCache.shared.invalidate(key: baseId)
+        // Emitir UNA sola vez con la clave base (los suscriptores filtran por id pelado).
+        coverInvalidated.send(baseId)
     }
 
     // MARK: Content hash management
