@@ -275,8 +275,8 @@ enum L {
              : "Crossfade mezcla las canciones con una transición de \(seconds)s. ReplayGain normaliza el volumen entre canciones."
     }
     static var scrobbleFooter: String {
-        isEn ? "Listens will be recorded automatically after playing at least 50% or 4 minutes."
-             : "Las escuchas se registraran automaticamente tras reproducir al menos el 50% o 4 minutos."
+        isEn ? "Listens are recorded on Last.fm automatically after playing at least 50% or 4 minutes."
+             : "Las escuchas se registran en Last.fm automáticamente tras reproducir al menos el 50% o 4 minutos."
     }
 
     // MARK: - User Profile

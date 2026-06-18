@@ -98,12 +98,15 @@ final class SettingsViewModel: ObservableObject {
     // MARK: - Scrobble
 
     private func loadScrobble() {
-        scrobbleEnabled = UserDefaults.standard.bool(forKey: "scrobbleEnabled")
+        // Fuente única: ScrobbleService ya resuelve el default (ON salvo que el
+        // usuario lo haya desactivado). bool(forKey:) daba OFF en el primer arranque
+        // porque la preferencia se persiste como string ("true"/"false"), no como Bool.
+        scrobbleEnabled = ScrobbleService.shared.isEnabled
     }
 
     func toggleScrobble(_ enabled: Bool) {
         scrobbleEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "scrobbleEnabled")
+        // setEnabled es el único punto de persistencia (guarda string "true"/"false").
         ScrobbleService.shared.setEnabled(enabled)
         scrobbleStatus = .idle
     }
@@ -256,7 +259,7 @@ struct SettingsView: View {
             // crossfade. Sin backend, el usuario configura su crossfade aquí.
             settingsSection(
                 header: L.playback,
-                footer: BackendState.shared.isAvailable ? nil : crossfadeFooter
+                footer: playbackSectionFooter
             ) {
                 // Crossfade toggle (only when backend is unavailable — with backend, crossfade is always on)
                 if !BackendState.shared.isAvailable {
@@ -309,22 +312,17 @@ struct SettingsView: View {
                         Label(L.replayGain, systemImage: "speaker.wave.2.fill")
                     }
                 }
-            }
 
-            // ── Last.fm ──
-            if BackendState.shared.isAvailable {
-                settingsSection(
-                    header: "Last.fm",
-                    footer: vm.scrobbleEnabled
-                        ? L.scrobbleFooter
-                        : nil
-                ) {
+                // ── Scrobbling ── última fila de Reproducción. Sólo con backend; la
+                // marca "Last.fm" se nombra en el footer de la sección, no como header.
+                if BackendState.shared.isAvailable {
+                    Divider().padding(.leading, 16)
                     settingsRow {
                         Toggle(isOn: Binding(
                             get: { vm.scrobbleEnabled },
                             set: { vm.toggleScrobble($0) }
                         )) {
-                            Label(L.scrobbling, systemImage: "arrow.up.right.circle.fill")
+                            Label(L.scrobbling, systemImage: "dot.radiowaves.up.forward")
                         }
                     }
                     if vm.scrobbleEnabled {
@@ -572,6 +570,16 @@ struct SettingsView: View {
         vm.crossfadeEnabled
             ? L.crossfadeFooterOn(Int(vm.crossfadeDuration))
             : L.crossfadeFooterOff()
+    }
+
+    /// Footer de la sección Reproducción (ya fusionada con el scrobbling).
+    /// - Con backend: explica el scrobbling (nombrando Last.fm) sólo cuando está activo.
+    /// - Sin backend: explica el crossfade manual.
+    private var playbackSectionFooter: String? {
+        if BackendState.shared.isAvailable {
+            return vm.scrobbleEnabled ? L.scrobbleFooter : nil
+        }
+        return crossfadeFooter
     }
 
     // MARK: - Section / row helpers
