@@ -519,6 +519,28 @@ struct StarredResponse: Decodable {
     }
 }
 
+// MARK: - getNowPlaying (presencia "Escuchando ahora")
+
+struct NowPlayingResponse: Decodable {
+    let status: String
+    let nowPlaying: NowPlayingContainer?
+    struct NowPlayingContainer: Decodable {
+        let entry: [NowPlayingEntry]?
+    }
+}
+
+/// Una entrada de `getNowPlaying.view`: quién está sonando ahora mismo en el
+/// servidor. `minutesAgo` = minutos desde el último report (Navidrome conserva
+/// la entrada un rato tras el play; el filtrado de presencia descarta > 10).
+struct NowPlayingEntry: Decodable {
+    let username: String?
+    let minutesAgo: Int?
+    let title: String?
+    let artist: String?
+    let albumId: String?
+    let coverArt: String?
+}
+
 struct CreatePlaylistResponse: Decodable {
     let status: String
     let playlist: CreatedPlaylist?

@@ -303,6 +303,11 @@ struct HomeView: View {
     @State private var topWeeklyArtistsSong: NavidromeSong? = nil
     /// Top Weekly · canción para el sheet "Añadir a playlist".
     @State private var topWeeklyPlaylistSong: NavidromeSong? = nil
+    /// Presencia "Escuchando ahora" — poll de getNowPlaying cada 30s.
+    private var listenersService = LiveListenersService.shared
+    /// Listener cuyo perfil público está presentado (sheet).
+    @State private var presentedListener: ListenerProfileID? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -313,6 +318,20 @@ struct HomeView: View {
                     } else if vm.isLoading {
                         loadingSkeleton
                     } else {
+                        // Fila viva "Escuchando ahora" (presencia). Self-condicional:
+                        // si no hay nadie sonando, no se renderiza (sin hueco). Entra
+                        // desde arriba con fundido; el reflow del Home lo anima el
+                        // .animation(value:) del VStack más abajo.
+                        if !listenersService.listeners.isEmpty {
+                            ListenersRow(listeners: listenersService.listeners) { username in
+                                presentedListener = ListenerProfileID(username: username)
+                            }
+                            .transition(.asymmetric(
+                                insertion: reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                        }
+
                         // Personal sections first
                         quickPlayGrid
                         topWeeklySection
@@ -334,6 +353,14 @@ struct HomeView: View {
 
                     Spacer(minLength: 80)
                 }
+                // Anima SOLO los cambios de IDENTIDAD de la lista (entra/sale/reordena),
+                // no el contenido: con `.map(\.id)` un cambio de canción de un listener
+                // (mismo username, otro título) NO dispara este ancestro, así el
+                // crossfade interno de cover/subtítulo de la tarjeta corre con sus
+                // curvas locales sin que esta animación lo pise. .smooth (críticamente
+                // amortiguado, sin overshoot) para que la rejilla Reanudar no rebote.
+                .animation(reduceMotion ? .easeInOut(duration: 0.25) : .smooth(duration: 0.35),
+                           value: listenersService.listeners.map(\.id))
             }
             .background(Color(.systemBackground))
             .navigationTitle(vm.greeting)
@@ -371,7 +398,14 @@ struct HomeView: View {
             .sheet(item: $topWeeklyPlaylistSong) { song in
                 AddToPlaylistView(songId: song.id, songTitle: song.title)
             }
+            // Tap en una tarjeta de listener → perfil público (el MISMO sheet que
+            // "Ver mi perfil", parametrizado con el username del listener).
+            .sheet(item: $presentedListener) { item in
+                UserProfileSheet(username: item.username)
+            }
             .task { await vm.loadIfNeeded() }
+            .onAppear { listenersService.start() }
+            .onDisappear { listenersService.stop() }
             .refreshable { await vm.load() }
             .onChange(of: BackendState.shared.isAvailable) { _, available in
                 if available {

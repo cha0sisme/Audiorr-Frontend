@@ -439,6 +439,23 @@ final class NavidromeService: ObservableObject {
         return response.starred2?.song ?? []
     }
 
+    // MARK: - Now playing (presencia "Escuchando ahora")
+
+    /// `getNowPlaying.view` (Subsonic): quién está escuchando ahora mismo en el
+    /// servidor. Devuelve los entries crudos; el filtrado de presencia (excluir
+    /// al propio usuario, > 10 min, dedup, orden alfabético) lo hace
+    /// `LiveListenersService`. Degrada a [] sin red/sesión.
+    func getNowPlaying() async -> [NowPlayingEntry] {
+        guard let base = baseURL() else { return [] }
+        let urlStr = "\(base)/rest/getNowPlaying.view?\(authQuery())"
+        guard let url = URL(string: urlStr),
+              let (data, _) = try? await AudiorrNetwork.background.data(from: url),
+              let response = try? JSONDecoder.decodeSubsonic(NowPlayingResponse.self, from: data),
+              response.status == "ok"
+        else { return [] }
+        return response.nowPlaying?.entry ?? []
+    }
+
     // MARK: - All artists (getArtists.view)
 
     func getArtists() async -> [NavidromeArtist] {

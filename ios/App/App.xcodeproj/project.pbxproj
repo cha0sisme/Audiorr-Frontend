@@ -13,6 +13,7 @@
 		3400AA012FA1000000000001 /* ArtistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400AA002FA1000000000001 /* ArtistsView.swift */; };
 		3400BB012FA2000000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400BB002FA2000000000001 /* SettingsView.swift */; };
 		3400CC012FA4000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400CC002FA4000000000001 /* HomeView.swift */; };
+		3400FACE0000000000000002 /* LiveListeners.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400FACE0000000000000001 /* LiveListeners.swift */; };
 		3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD002FA6000000000001 /* NowPlayingState.swift */; };
 		3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD042FA6000000000004 /* MiniPlayerView.swift */; };
 		3400DD072FA6000000000007 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3400DD062FA6000000000006 /* ContentView.swift */; };
@@ -93,6 +94,7 @@
 		3400AA002FA1000000000001 /* ArtistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistsView.swift; sourceTree = "<group>"; };
 		3400BB002FA2000000000001 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		3400CC002FA4000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		3400FACE0000000000000001 /* LiveListeners.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveListeners.swift; sourceTree = "<group>"; };
 		3400DD002FA6000000000001 /* NowPlayingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingState.swift; sourceTree = "<group>"; };
 		3400DD042FA6000000000004 /* MiniPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniPlayerView.swift; sourceTree = "<group>"; };
 		3400DD062FA6000000000006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -189,6 +191,7 @@
 			isa = PBXGroup;
 			children = (
 				3400CC002FA4000000000001 /* HomeView.swift */,
+				3400FACE0000000000000001 /* LiveListeners.swift */,
 			);
 			path = Home;
 			sourceTree = "<group>";
@@ -493,6 +496,7 @@
 				CA11CA22CA33CA44CA55CA10 /* CarPlaySceneDelegate.swift in Sources */,
 				DA11DA22DA33DA44DA55DA10 /* MainSceneDelegate.swift in Sources */,
 				3400CC012FA4000000000001 /* HomeView.swift in Sources */,
+				3400FACE0000000000000002 /* LiveListeners.swift in Sources */,
 				3400DD012FA6000000000001 /* NowPlayingState.swift in Sources */,
 				3400DD052FA6000000000005 /* MiniPlayerView.swift in Sources */,
 				3400DD072FA6000000000007 /* ContentView.swift in Sources */,
