@@ -58,6 +58,13 @@ final class LiveListenersService {
     }
 
     private func refresh() async {
+        // La presencia social es una feature del ecosistema Audiorr: solo se muestra
+        // con backend disponible (sin él, el perfil público —getUserStats— tampoco
+        // funcionaría). Sin backend → lista vacía → sección oculta.
+        guard BackendState.shared.isAvailable else {
+            if !listeners.isEmpty { listeners = [] }
+            return
+        }
         let entries = await api.getNowPlaying()
         let me = api.credentials?.username.lowercased()
 
@@ -184,7 +191,7 @@ private struct ListenerCard: View {
                         .foregroundStyle(.white)
                 )
 
-            CachedCoverView(coverArt: listener.coverArt, size: 22, cornerRadius: 6)
+            CachedCoverThumbnail(coverArt: listener.coverArt, size: 22, cornerRadius: 6)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(Color(.secondarySystemGroupedBackground), lineWidth: 1.5)
