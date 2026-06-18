@@ -563,9 +563,11 @@ struct HomeView: View {
         let isCurrentSong = nowPlaying.isVisible && nowPlaying.songId == song.songId
 
         return HStack(spacing: 12) {
-            // Rank or equalizer, con estrella de favorito superpuesta en el gutter
-            // izquierdo (estilo SongList: marca discreta que no desplaza columnas y
-            // no hace saltar la fila al togglear). Visible también cuando suena.
+            // Rank or equalizer, con estrella de favorito superpuesta a la
+            // IZQUIERDA del número y CENTRADA verticalmente con él (no en el gutter
+            // ni abajo). Overlay → no desplaza columnas ni hace saltar la fila al
+            // togglear. El offset evita que el dígito de 2 cifras la pise. Visible
+            // también cuando suena.
             Group {
                 if isCurrentSong {
                     NowPlayingIndicator(
@@ -582,11 +584,12 @@ struct HomeView: View {
                         .frame(width: 20, alignment: .trailing)
                 }
             }
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: .leading) {
                 if favorites.isStarred(song.songId) {
                     Image(systemName: "star.fill")
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
+                        .offset(x: -2)
                 }
             }
 
