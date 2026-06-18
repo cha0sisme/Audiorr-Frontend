@@ -152,6 +152,17 @@ class AudioEngineManager {
     private var streamItemStatusObservation: NSKeyValueObservation?
     private var streamTimeControlObservation: NSKeyValueObservation?
     private var streamStallReportTask: Task<Void, Never>?
+    /// Fix baja cobertura: el AVPlayer está en stall recuperable (buffer hambriento,
+    /// waitingToPlayAtSpecifiedRate). Mientras dure, publicamos playbackRate=0 al lock
+    /// screen/CarPlay para que NO extrapolen el tiempo con el reloj del sistema (síntoma
+    /// "el tiempo avanza aunque no suene"). Se limpia al volver a .playing / pausar / parar.
+    private var streamIsStalled = false
+    /// Reintentos del stream tras un AVPlayerItem .failed TERMINAL (item muerto). Acotados
+    /// con backoff; en stall recuperable NO se reintenta (recrear el item tiraría el buffer
+    /// ya descargado). Se resetea al recuperar (.playing) o al cambiar de canción.
+    private var streamRetryCount = 0
+    private var streamRetryTask: Task<Void, Never>?
+    private let streamRetryBackoffNs: [UInt64] = [0, 4_000_000_000, 10_000_000_000]
     /// URL del ultimo stream activo. Persiste mientras streamPlayer != nil
     /// para que retryStreamPlayback pueda recrear un AVPlayerItem identico
     /// sin reiniciar la pipeline desde QueueManager.playCurrentSong.
@@ -539,6 +550,7 @@ class AudioEngineManager {
             let time = currentTime()
             streamPlayer?.pause()
             isPlaying = false
+            streamIsStalled = false // pausa real: limpiar stall fantasma (rate lo fija isPlaying=false)
             stopAutomixTimer()
             stopProgressTimer()
             notifyPlaybackStateChanged()
@@ -908,11 +920,15 @@ class AudioEngineManager {
         streamTimeControlObservation = nil
         streamStallReportTask?.cancel()
         streamStallReportTask = nil
+        streamRetryTask?.cancel()
+        streamRetryTask = nil
+        streamRetryCount = 0
         streamPlayer?.pause()
         streamPlayer = nil
         lastStreamURL = nil
         lastStreamSongId = nil
         isStreamMode = false
+        streamIsStalled = false
     }
 
     /// Reintento rapido de stream playback cuando el AVPlayer entro en .failed
@@ -973,10 +989,12 @@ class AudioEngineManager {
 
     /// Instala observers KVO sobre AVPlayer/AVPlayerItem para detectar fallos
     /// que dejarian la reproduccion muda sin notificacion al delegate.
-    /// - currentItem.status == .failed -> notificacion inmediata.
-    /// - timeControlStatus == .waitingToPlayAtSpecifiedRate con razon stall
-    ///   por > 5s -> notificacion (microcortes < 5s se ignoran, AVPlayer los
-    ///   resuelve solo y dispararlos seria falso positivo).
+    /// - currentItem.status == .failed (TERMINAL) -> handleStreamItemFailed: retry
+    ///   acotado con backoff (sustituye la red que daba SAFETY NET 2 antes del guard
+    ///   !isStreamMode).
+    /// - timeControlStatus == .waitingToPlayAtSpecifiedRate con razon stall ->
+    ///   handleStreamTimeControlChange: marca streamIsStalled (rate=0) y NO reintenta
+    ///   (AVPlayer reanuda solo al volver bytes); a >20s marca intent de fallo.
     private func installStreamFailureObservers(player: AVPlayer, item: AVPlayerItem, songId: String?) {
         streamItemStatusObservation?.invalidate()
         streamTimeControlObservation?.invalidate()
@@ -987,7 +1005,7 @@ class AudioEngineManager {
             guard let self else { return }
             if item.status == .failed {
                 let reason = item.error?.localizedDescription ?? "AVPlayerItem.status = failed"
-                Task { @MainActor in self.notifyStreamFailed(songId: songId, reason: reason) }
+                Task { @MainActor in self.handleStreamItemFailed(songId: songId, reason: reason) }
             }
         }
 
@@ -1009,19 +1027,78 @@ class AudioEngineManager {
         streamStallReportTask?.cancel()
         streamStallReportTask = nil
 
+        // Reproducción activa: el stream está sano. Limpiar el flag de stall (restaura
+        // playbackRate=1.0 en lock screen/CarPlay) y resetear el contador de reintentos
+        // — un fallo futuro merece su tanda completa de retries.
+        if status == .playing {
+            streamRetryCount = 0
+            if streamIsStalled {
+                streamIsStalled = false
+                updateNowPlayingProgress() // empuja rate=1.0 ya, sin esperar al tick
+                print("[AudioEngineManager] Stream recuperado (.playing) — stall flag limpiado")
+            }
+            return
+        }
+
         guard status == .waitingToPlayAtSpecifiedRate,
               reason == .toMinimizeStalls || reason == .noItemToPlay else {
             return
         }
 
+        // Stall RECUPERABLE (buffer hambriento). NO reintentamos: AVPlayer tiene
+        // automaticallyWaitsToMinimizeStalling=true (default) y reanuda solo en cuanto
+        // vuelven bytes; recrear el item tiraría el buffer ya descargado y alargaría el
+        // bache. Solo marcamos el flag (congela el tiempo en lock screen/CarPlay) y, si
+        // el stall se eterniza (>20s), marcamos intent de fallo para que
+        // executeNetworkRecovery lo retome cuando NetworkMonitor vea volver la red.
+        if !streamIsStalled {
+            streamIsStalled = true
+            updateNowPlayingProgress() // congela el tiempo en lock screen/CarPlay ya
+            print("[AudioEngineManager] Stream stall (waiting) — congelando tiempo, esperando bytes")
+        }
+
         let watchedSongId = songId
         streamStallReportTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
             guard !Task.isCancelled, let self else { return }
-            // Si el estado mejoro durante la espera el handler lo habria
-            // cancelado. Llegar aqui significa que el stall persiste >5s.
+            // 20s de stall continuo. NO saltamos de canción (SAFETY NET 2 ya no lo hace
+            // en stream mode) ni reintentamos (el stall recuperable no muere, solo espera
+            // bytes). Marcamos intent para que executeNetworkRecovery lo retome.
             self.notifyStreamFailed(songId: watchedSongId,
-                                    reason: "stream stall > 5s (waitingToPlayAtSpecifiedRate)")
+                                    reason: "stream stall > 20s (waitingToPlayAtSpecifiedRate)")
+        }
+    }
+
+    /// AVPlayerItem en estado .failed TERMINAL (item muerto, irrecuperable por sí solo).
+    /// Antes lo atrapaba SAFETY NET 2 saltando de canción; con el guard !isStreamMode ya
+    /// no lo hace, así que aquí sustituimos esa red con un retry acotado que recrea el
+    /// item (retryStreamPlayback) con backoff 0/4/10s. Agotados los reintentos, marcamos
+    /// intent de fallo (lo retoma executeNetworkRecovery cuando vuelve la red).
+    @MainActor
+    private func handleStreamItemFailed(songId: String?, reason: String) {
+        guard isStreamMode, isPlaying else { return }
+
+        guard streamRetryCount < streamRetryBackoffNs.count else {
+            print("[AudioEngineManager] Stream .failed tras \(streamRetryCount) reintentos — marcando intent: \(reason)")
+            notifyStreamFailed(songId: songId,
+                               reason: "stream .failed tras \(streamRetryCount) reintentos: \(reason)")
+            return
+        }
+
+        let delay = streamRetryBackoffNs[streamRetryCount]
+        streamRetryCount += 1
+        let attempt = streamRetryCount
+        print("[AudioEngineManager] Stream .failed — retry \(attempt)/\(streamRetryBackoffNs.count) en \(delay / 1_000_000_000)s: \(reason)")
+
+        streamRetryTask?.cancel()
+        streamRetryTask = Task { @MainActor [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            guard !Task.isCancelled, let self, self.isStreamMode, self.isPlaying else { return }
+            if self.retryStreamPlayback() {
+                print("[AudioEngineManager] Stream retry \(attempt) lanzado")
+            } else {
+                print("[AudioEngineManager] Stream retry \(attempt) no aplicable (ya no en stream mode)")
+            }
         }
     }
 
@@ -1841,13 +1918,23 @@ class AudioEngineManager {
             }
         }
 
-        // SAFETY NET 2: detect stalled playback — progress not advancing for 3+ seconds
-        // while isPlaying is true. This catches post-crossfade stalls where:
+        // SAFETY NET 2: detect stalled playback — progress not advancing for ~6s
+        // (12 ticks × 0.5s progressInterval) while isPlaying is true. This catches
+        // post-crossfade ENGINE stalls where:
         // - The new playerA's segment ended but the completion handler was discarded
         //   (CrossfadeExecutor cancelled, playSequence incremented)
         // - currentSongDuration is 0 so SAFETY NET 1 can't fire
         // - Any other case where the engine thinks it's playing but audio stopped
-        if isPlaying && !isCrossfading && rawTime > 0 {
+        //
+        // EXCLUDES stream mode (!isStreamMode): under low coverage an AVPlayer stall
+        // freezes currentTime(), which used to trip this net and SKIP to the next song
+        // unprompted (~6s into a stall, when the buffer runs empty). In stream mode a
+        // frozen position means a HUNGRY BUFFER, not a dead segment:
+        // AVPlayer recovers on its own when bytes return (automaticallyWaitsToMinimizeStalling),
+        // a terminal .failed item is handled by handleStreamItemFailed (bounded retry),
+        // and the legitimate end of a streamed track is covered by
+        // .AVPlayerItemDidPlayToEndTime + SAFETY NET 1.
+        if isPlaying && !isCrossfading && !isStreamMode && rawTime > 0 {
             // Grace period: skip stalled-progress detection for 5s after crossfade.
             // playerTime(forNodeTime:) may return nil briefly after the swap/DSP reset,
             // causing currentTime() to use the wall-clock fallback. During this window
@@ -1859,7 +1946,7 @@ class AudioEngineManager {
             } else if abs(rawTime - lastReportedTime) < 0.01 {
                 // Time hasn't changed since last tick
                 stalledTickCount += 1
-                // 3s / 0.25s (progressInterval) = 12 ticks
+                // ~6s / 0.5s (progressInterval) = 12 ticks
                 if stalledTickCount >= 12 {
                     print("[AudioEngineManager] ⚠️ SAFETY NET 2: progress stalled at \(String(format: "%.1f", rawTime))s for \(stalledTickCount) ticks — forcing advance")
                     stalledTickCount = 0
@@ -2260,7 +2347,11 @@ class AudioEngineManager {
 
     private func updateNowPlayingProgress() {
         localNowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime()
-        localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        // Stream en stall: publicar rate=0 aunque isPlaying siga true, para que el lock
+        // screen/CarPlay NO extrapolen el tiempo con el reloj del sistema mientras el
+        // audio está congelado esperando buffer. Se restaura a 1.0 al volver a .playing.
+        let effectiveRate = (isPlaying && !streamIsStalled) ? 1.0 : 0.0
+        localNowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = effectiveRate
         publishNowPlayingInfo()
     }
 
