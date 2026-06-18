@@ -299,6 +299,10 @@ struct HomeView: View {
     @State private var offlinePlaylists: [(playlistId: String, name: String, coverArt: String, songCount: Int)] = []
     @Namespace private var heroNS
     @State private var navigationPath = NavigationPath()
+    /// Top Weekly · canción cuyo sheet "Ver artistas" (plural) está abierto.
+    @State private var topWeeklyArtistsSong: NavidromeSong? = nil
+    /// Top Weekly · canción para el sheet "Añadir a playlist".
+    @State private var topWeeklyPlaylistSong: NavidromeSong? = nil
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -355,6 +359,18 @@ struct HomeView: View {
                     .navigationTransition(.zoom(sourceID: $0.id, in: heroNS))
             }
             .navigationDestination(for: SeeAllDestination.self) { SeeAllGridView(destination: $0) }
+            // Top Weekly · "Ver artistas" (plural): mismo sheet nativo que SongListView;
+            // al elegir un artista hace push por el path del propio stack del Home.
+            .sheet(item: $topWeeklyArtistsSong) { song in
+                ViewArtistsSheet(
+                    artists: song.artists ?? [],
+                    songTitle: song.title,
+                    onSelect: { artist in navigationPath.append(artist) }
+                )
+            }
+            .sheet(item: $topWeeklyPlaylistSong) { song in
+                AddToPlaylistView(songId: song.id, songTitle: song.title)
+            }
             .task { await vm.loadIfNeeded() }
             .refreshable { await vm.load() }
             .onChange(of: BackendState.shared.isAvailable) { _, available in
@@ -509,23 +525,35 @@ struct HomeView: View {
 
     private func topWeeklyRow(_ song: TopWeeklySong) -> some View {
         let nowPlaying = NowPlayingState.shared
+        let favorites = FavoritesStore.shared
         let isCurrentSong = nowPlaying.isVisible && nowPlaying.songId == song.songId
 
         return HStack(spacing: 12) {
-            // Rank or equalizer
-            if isCurrentSong {
-                NowPlayingIndicator(
-                    isPlaying: nowPlaying.isPlaying,
-                    bpm: nowPlaying.currentBpm,
-                    color: .accentColor,
-                    barWidth: 2.5, height: 12
-                )
-                .frame(width: 20)
-            } else {
-                Text("\(song.rank)")
-                    .font(.system(size: 15, weight: .bold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, alignment: .trailing)
+            // Rank or equalizer, con estrella de favorito superpuesta en el gutter
+            // izquierdo (estilo SongList: marca discreta que no desplaza columnas y
+            // no hace saltar la fila al togglear). Visible también cuando suena.
+            Group {
+                if isCurrentSong {
+                    NowPlayingIndicator(
+                        isPlaying: nowPlaying.isPlaying,
+                        bpm: nowPlaying.currentBpm,
+                        color: .accentColor,
+                        barWidth: 2.5, height: 12
+                    )
+                    .frame(width: 20)
+                } else {
+                    Text("\(song.rank)")
+                        .font(.system(size: 15, weight: .bold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, alignment: .trailing)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if favorites.isStarred(song.songId) {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             // Cover (uses AlbumCoverCache to survive tab switches)
@@ -574,23 +602,68 @@ struct HomeView: View {
             }
         }
         .contextMenu {
+            // NavidromeSong completo (con artists[] y replayGain) para playback y
+            // artista plural; si la lista aún no se hidrató, uno ligero como fallback.
+            let resolved = vm.topWeeklySongs.first(where: { $0.id == song.songId })
+            let navSong = resolved ?? NavidromeSong(
+                id: song.songId, title: song.title, artist: song.artist,
+                artistId: song.artistId, album: song.album, albumId: song.albumId,
+                coverArt: song.coverArt, duration: 0, track: nil,
+                year: nil, genre: nil, explicitStatus: nil,
+                replayGainTrackGain: nil, replayGainTrackPeak: nil,
+                replayGainAlbumGain: nil, replayGainAlbumPeak: nil
+            )
+
+            // — Reproducción
+            Button { PlayerService.shared.insertNext(navSong) } label: {
+                Label(L.playNext, systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+            Button { PlayerService.shared.addToQueue(navSong) } label: {
+                Label(L.addToQueue, systemImage: "text.badge.plus")
+            }
+
+            Divider()
+
+            // — Álbum
             Button {
-                let album = NavidromeAlbum(
+                navigationPath.append(NavidromeAlbum(
                     id: song.albumId, name: song.album, artist: song.artist,
                     coverArt: song.coverArt, songCount: nil, duration: nil,
                     year: nil, genre: nil, explicitStatus: nil
-                )
-                navigationPath.append(album)
+                ))
             } label: {
-                Label(L.goToAlbum, systemImage: "square.stack")
+                Label(L.goToAlbum, systemImage: "music.note")
             }
 
-            if let artistId = song.artistId {
+            Divider()
+
+            // — Artista(s): plural si el tema resuelto trae 2+ artistas (mismo sheet
+            // que el resto de la app), singular si no.
+            let songArtists = navSong.artists ?? []
+            if songArtists.count > 1 {
+                Button { topWeeklyArtistsSong = navSong } label: {
+                    Label(L.goToArtists, systemImage: "person.2.crop.square.stack")
+                }
+            } else if let artistId = song.artistId, !artistId.isEmpty {
                 Button {
                     navigationPath.append(NavidromeArtist(id: artistId, name: song.artist, albumCount: nil))
                 } label: {
-                    Label(L.goToArtist, systemImage: "person")
+                    Label(L.goToArtist, systemImage: "person.crop.circle")
                 }
+            }
+
+            Divider()
+
+            // — Biblioteca: favorito + añadir a playlist
+            let isStarred = FavoritesStore.shared.isStarred(song.songId)
+            Button {
+                FavoritesStore.shared.toggle(songId: song.songId)
+            } label: {
+                Label(isStarred ? L.removeFromFavorites : L.addToFavorites,
+                      systemImage: isStarred ? "star.slash" : "star")
+            }
+            Button { topWeeklyPlaylistSong = navSong } label: {
+                Label(L.addToPlaylist, systemImage: "music.note.list")
             }
         }
     }
