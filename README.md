@@ -4,7 +4,7 @@
 
 **A native iOS music player for your Navidrome library — with a DSP crossfade engine you can hear**
 
-*Pure Swift from the UI down to the audio render thread.*
+*Your library. Mixed like you mean it.*
 
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)](https://developer.apple.com/swift/)
 [![SwiftUI](https://img.shields.io/badge/SwiftUI-iOS_26+-007AFF?logo=apple&logoColor=white)](https://developer.apple.com/swiftui/)
@@ -19,79 +19,119 @@
 
 ## What Audiorr is
 
-Audiorr is a **native iOS client for [Navidrome](https://www.navidrome.org/)** (and any Subsonic-compatible server). Plug your server URL, log in, and you have your entire self-hosted library on your iPhone with a custom audio pipeline that competes with — and in some areas exceeds — the major streaming apps.
+Audiorr is a **native iOS client for [Navidrome](https://www.navidrome.org/)** (and any Subsonic-compatible server). Point it at your server, log in, and your entire self-hosted library lives on your iPhone — wrapped in a custom audio pipeline written from scratch in Swift.
 
-The whole audio path is written from scratch in Swift: a dual-player engine with sample-level crossfade, four cascaded biquad filters per channel, and a transition decision system that listens to the music and picks the right blend instead of forcing one default fade for everything.
+The whole audio path is ours: a dual-player engine with sample-level crossfade, four cascaded biquad filters per channel, ReplayGain loudness control and a peak limiter on the master bus. No streaming service, no cloud catalogue, no tracking. Just your music, on your hardware, sounding the way it was recorded.
+
+> **Two tiers, no surprises.** Everything in **[What you get out of the box](#what-you-get-out-of-the-box)** works with nothing but a Navidrome server — that's the complete, self-contained experience. If you also run a homelab, there's an optional second layer in **[Power-user mode](#power-user-mode--audiorr-backend-optional)** that turns the crossfade engine into a full DJ. The app never advertises what you can't use: backend features simply don't appear unless the backend is there.
+
+---
 
 ## What you get out of the box
 
-You only need a Navidrome (or Subsonic) server. Connect, and these features are available immediately on every device:
+**All you need is a Navidrome (or Subsonic) server.** Connect it and everything below is available immediately, on every device, fully offline-capable. No extra infrastructure, no account, no homelab.
+
+### Your whole library, the way you left it
+
+- Full Subsonic browsing — albums, artists, playlists, search and queue.
+- A **Home** built from your own server: recent releases, genres, latest additions, recently played, and a *Discover Something New* shuffle to dig back into your collection.
+- Light/Dark theme with system override.
 
 ### Playback that sounds right
 
-- **Dual-player gapless crossfade** with eleven transition algorithms (`CROSSFADE`, `EQ_MIX`, `BEAT_MATCH_BLEND`, `NATURAL_BLEND`, `CUT`, `CUT_A_FADE_IN_B`, `FADE_OUT_A_CUT_B`, `STEM_MIX`, `DROP_MIX`, `CLEAN_HANDOFF`, `VINYL_STOP`). Audiorr picks one per song pair. *Without the optional backend, the picker falls back to a conservative default crossfade — the per-track analysis that drives the smarter choices comes from the backend.*
-- **Seven filter presets** running on a real-time DSP node: highpass sweeps, low-shelf bass swap, parametric mid scoop, high-shelf cleanup. The outgoing track thins out while the incoming track opens up.
-- **DJ-grade effects**: instant beat-aligned bass kill and bell-shaped Q resonance for the "sweeping filter" sound. Activate when analysis data confirms they'll sound good (the backend supplies that data).
-- **ReplayGain v2** loudness normalization with Apple's `kAudioUnitSubType_PeakLimiter` on the master mixer to catch inter-sample peaks.
-- **Tempo matching** within ±12 BPM using `AVAudioUnitTimePitch`, beat-quantized so the rate ramp lands on the downbeat. Requires backend BPM data.
+- **Dual-player gapless crossfade** with a real DSP engine — not a volume dip. Two players run through four cascaded biquad filters per channel, so the outgoing track thins out as the incoming one opens up.
+- **Seven filter presets** on a real-time DSP node: highpass sweeps, low-shelf bass swap, parametric mid scoop, high-shelf cleanup.
+- **ReplayGain v2** loudness normalization with Apple's `kAudioUnitSubType_PeakLimiter` on the master mixer to catch inter-sample peaks — no track jumps out louder than the rest.
 - **Automatic transcoding** of VBR MP3 and other troublesome formats to PCM, transparent to the listener.
 
-### Library and navigation
-
-- Full Subsonic API browsing — albums, artists, playlists, search, queue.
-- Mini player + Now Playing viewer with hero animation on album art.
-- Synced **lock screen, Control Center, and Dynamic Island** with transport controls.
-- Light/Dark theme with system override.
+> Out of the box, Audiorr blends every transition with a smooth, conservative crossfade. The engine doing the work is the real thing — the same DSP graph the DJ layer drives. What the standalone app *doesn't* do is make the smart calls (which transition, where to come in, beat-matching). That intelligence needs per-track analysis, and that's exactly what the optional **[Audiorr Backend](#power-user-mode--audiorr-backend-optional)** adds. Without it you still get a clean, great-sounding crossfade — you just don't get the DJ.
 
 ### Synchronized lyrics
 
-- Pulled from **LRCLib** for any song that has them.
+- Pulled from **LRCLib**, plus any lyrics embedded in your own server's files.
 - Karaoke-style scroll locked to the audio position.
 - Tap any line to seek to that timestamp.
 - Falls back to plain text when no timed data is available.
 
-### Offline mode
+### Offline, done properly
 
 - **Auto-cache** every song you play to a persistent store.
-- **Pre-cache** the next three songs in the queue so you never see a buffer.
-- **Manual downloads** for entire albums or playlists with one tap.
-- **Background downloads** continue when the app is suspended.
-- **Pin protection** for content you don't want auto-evicted.
-- **LRU eviction** on a configurable cache size limit (default 2 GB).
-- Browse and play your offline library when there's no network at all.
+- **Pre-cache** the next three songs in the queue, so you never hit a buffer.
+- **Manual downloads** for entire albums or playlists in one tap.
+- **Background downloads** that keep going when the app is suspended.
+- **Pin protection** for content you never want auto-evicted.
+- **LRU eviction** on a configurable cache limit (default 2 GB).
+- A fully browsable offline library when there's no network at all.
 
-### CarPlay
+```
+  Triggers                          Engine                           Persistent store
+  ┌─────────────────────────┐       ┌──────────────────────┐         ┌───────────────────────┐
+  │ Auto-cache              │       │ DownloadManager      │         │ OfflineStorageManager │
+  │  every song you play    │──────>│  URLSession          │────────>│  on-disk, survives    │
+  │                         │       │  .background(id:)    │         │  cold launch          │
+  │ Pre-cache              │──────>│  - keeps going while │         │                       │
+  │  next 3 in the queue    │       │    app is suspended  │         │  ┌─────────────────┐  │
+  │                         │       │  - resumable         │         │  │ pinned          │  │
+  │ Manual download        │──────>│  - progress + dedupe │         │  │ never evicted   │  │
+  │  album / playlist · 1 tap│      └──────────────────────┘         │  └─────────────────┘  │
+  └─────────────────────────┘                                       │  LRU eviction         │
+                                                                    │  (2 GB default cap)   │
+  ┌─────────────────────────┐                                       └──────────┬────────────┘
+  │ NWPathMonitor          │   no network ──> playback + full browse ──────────┘
+  │  reachability watch     │                 served straight from local store
+  └─────────────────────────┘
+```
 
-- Full template-based browsing and playback with optimized I/O buffers (40 ms wireless, 20 ms wired).
+### Now Playing, everywhere
 
----
+- Mini player + full Now Playing viewer with a hero animation on the album art.
+- Synced **lock screen, Control Center and Dynamic Island** transport controls.
+- **CarPlay** — full template-based browsing and playback, with I/O buffers tuned per connection (40 ms wireless, 20 ms wired).
 
-## Privacy and data
+### Private by design
 
-- **All your music streams from your own Navidrome server.** Audiorr never reaches out to a streaming service or cloud catalogue.
+- **Every track streams from your own Navidrome server.** Audiorr never touches a streaming service or cloud catalogue.
 - **No tracking. No analytics. No ads.**
-- The only outbound calls Audiorr makes on its own are to **LRCLib** for lyrics, by song title and artist name only.
-- Credentials live in the iOS Keychain. Listening data lives only where you put it.
+- The only call Audiorr makes on its own is to **LRCLib** for lyrics — by song title and artist name only.
+- Credentials live in the iOS Keychain. Your listening data lives only where you put it.
 
 ---
 
 ## Power-user mode — Audiorr Backend (optional)
 
-If you also self-host the **[Audiorr Backend](https://github.com/cha0sisme/Audiorr-backend)** (Node.js + SQLite) on your own homelab, Audiorr unlocks a second tier of features that depend on offline audio analysis of your library.
+> **Heads up:** this entire section is **optional** and requires you to self-host a separate server on your own machine. **Most people will never run it — and they don't need to.** Everything above is the complete Audiorr experience. This is the deep end for people who already run a homelab and want their library to mix itself.
 
-The app detects whether the backend is reachable on launch and only shows these features when it is. **Without the backend, none of this is missed in the UI** — the standalone experience is fully self-contained.
+If you also deploy the **[Audiorr Backend](https://github.com/cha0sisme/Audiorr-backend)** (Node.js + SQLite) on your LAN, it analyzes your library offline and unlocks a second layer of features. The app detects the backend on launch and **only shows these features when it's reachable** — without it, none of this appears in the UI, and nothing feels missing.
+
+This is where the crossfade engine stops being a smart fade and becomes a DJ.
+
+### The DJ layer
 
 | Feature | What it does |
 |---|---|
-| **Smart Mix** | The iOS app reorders any playlist using the backend's per-track analysis: Camelot-wheel harmonic compatibility, energy arc, BPM progression with half/double-tempo harmonic matching, vocal-trainwreck avoidance, artist diversity, key-fatigue tracking. Greedy sequencing followed by windowed 2-opt optimization. The algorithm runs on-device; the analysis it consumes lives on the backend. |
-| **Smart Playlists** | The backend generates three rotating playlists nightly from your listening history: *Tiempo Atrás* (forgotten tracks), *En Bucle* (your current rotation), *Radar de Novedades* (new releases from artists you know). |
-| **Daily Mixes** | Up to five personalized mixes regenerated every night at 03:00 UTC. Familiarity/discovery balance with deterministic clustering. The "five" is the cap — fewer if your 30-day history is short. |
-| **AutoMix DJ** | The crossfade engine reads the backend's per-track analysis to drive every transition decision: entry point, fade duration, transition type, filter preset, bass-swap timing, time-stretch ratio, anticipation. Fields consumed include `bpm` with confidence, `key`/`camelotKey`, `energyProfile`, `rmsCurve`, `rmsTailCurve`, `percussiveCurve`, `harmonicCurve`, `onsetDensity`, vocal segments, song structure. |
-| **Audiorr Connect** | Spotify-Connect-style multi-device control over Socket.io. Transfer playback, remote-control any device, receiver-only mode. |
-| **Canvas** | Looping video or still per song in the Now Playing viewer, sourced from Spotify's Canvas service via the backend. Requires Spotify credentials configured server-side; only works for tracks present on Spotify. |
-| **Listening stats** | The backend records every play in its own SQLite store and exposes weekly Top 10 and Wrapped-style yearly summaries — all queryable only from your own clients. The backend itself does not scrobble to external services; that happens on the iOS side if you enable Last.fm there. |
+| **AutoMix DJ** | The brain that turns the crossfade engine into a real DJ. Reading the backend's per-track analysis, it makes every transition decision: entry point, fade duration, transition type, filter preset, bass-swap timing, time-stretch ratio, anticipation. Beat-aligned bass kills and sweeping resonant filters fire only when the data says they'll sound good. Fields it consumes include `bpm` (with confidence), `key`/`camelotKey`, `energyProfile`, `rmsCurve`, `percussiveCurve`, `harmonicCurve`, `onsetDensity`, vocal segments and song structure. |
+| **Smart Mix** | Reorders any playlist for the best possible flow — Camelot-wheel harmonic compatibility, energy arc, BPM progression with half/double-tempo matching, vocal-clash avoidance, artist diversity, key-fatigue tracking. Greedy sequencing followed by windowed 2-opt optimization, run on-device against backend analysis. |
 
-The backend runs in a Docker container on your LAN and is not required for the App Store experience. Deploy when (and if) you want the deeper integration — see the backend repository for setup.
+### Knows your taste
+
+| Feature | What it does |
+|---|---|
+| **Smart Playlists** | Three playlists the backend regenerates nightly from your listening history: forgotten favorites, your current rotation, and new releases from artists you already know. |
+| **Daily Mixes** | Up to five personalized mixes, rebuilt every night. Balances the familiar with the new; fewer than five if your recent history is short. |
+| **Jump Back In** | Recent listening contexts resurfaced on the Home screen, so you can pick up right where you left off. |
+| **Related Albums** | "If you like this" suggestions on every album detail page, drawn from your own library. |
+
+### Stats and presence
+
+| Feature | What it does |
+|---|---|
+| **Top Weekly & Rewind** | A weekly Top chart, weekly listening stats, and **Audiorr Rewind** — your year in music, generated from plays recorded in the backend's own store. All queryable from your own clients only; nothing is scrobbled to an external service. |
+| **Pinned Playlists** | Pin the playlists you live in to the top of your Home. |
+| **Listening Now** | See what other users on your server are playing right now, in real time. |
+| **Audiorr Connect** | Spotify-Connect-style multi-device control over Socket.io: transfer playback, remote-control any device, run a receiver-only screen. |
+| **Canvas & Motion Artwork** | Looping video and animated album art in the Now Playing viewer. Canvas is sourced from Spotify's service via the backend (requires server-side Spotify credentials; only for tracks that exist on Spotify). |
+
+The backend runs in a Docker container on your LAN and is **never required** for the App Store experience. Deploy it if and when you want the deeper integration — setup lives in the backend repository.
 
 ---
 
@@ -148,13 +188,13 @@ The DSP pipeline is written entirely in Swift. No C/C++ bridging, no Obj-C wrapp
 
 Filter formulas come from Robert Bristow-Johnson's *Audio EQ Cookbook* (1998). Frequencies clamp to `[20 Hz, Nyquist − 1 Hz]`, gains clamp to ±60 dB, `safeNormalize()` returns passthrough on NaN/Inf, and stages with all-zero coefficients are skipped via `isPassthrough` epsilon comparison.
 
-The crossfade decision system is a pure analyzer with no side effects: it consumes a `TransitionProfile` (BPM relationship, energy flow, vocal overlap risk, harmonic compatibility, style affinity, character) and emits the full plan — entry point, transition type, filter preset, bass-swap time, DJ-effect flags, time-stretch ratios, anticipation — in one pass. Every output is testable in isolation.
+The crossfade decision system is a pure analyzer with no side effects: it consumes a `TransitionProfile` (BPM relationship, energy flow, vocal overlap risk, harmonic compatibility, style affinity, character) and emits the full plan — entry point, transition type, filter preset, bass-swap time, DJ-effect flags, time-stretch ratios, anticipation — in one pass. Every output is testable in isolation. (This is the analysis the **Audiorr Backend** feeds; standalone, the picker falls back to a single conservative crossfade.)
 
 ---
 
 ## Companion projects
 
-- **Audiorr Backend** — Node.js + SQLite analysis server. Optional. Powers Smart Mix, AutoMix, Daily Mixes, Connect, Canvas, listening stats. Currently kept as a private self-hosted service; release plan TBD.
+- **Audiorr Backend** — Node.js + SQLite analysis server. Optional, self-hosted. Powers AutoMix DJ, Smart Mix, Daily Mixes, Connect, Canvas, Rewind and listening stats. Currently kept as a private self-hosted service; release plan TBD.
 - **[Audiorr Web](https://github.com/cha0sisme/Audiorr-web)** — SvelteKit web client for the same Navidrome + backend setup. Different surface, same philosophy.
 
 ---
