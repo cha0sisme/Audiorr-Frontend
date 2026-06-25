@@ -602,3 +602,82 @@ struct ExplicitBadge: View {
             .background(color.opacity(0.18), in: RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 }
+
+// MARK: - Pop-aware hit testing
+
+/// Hace que el contenido deje de capturar toques mientras el pop de navegación
+/// está en curso, de modo que los toques ATRAVIESEN hacia la pantalla anterior.
+/// Resuelve dos síntomas del zoom-out de `.navigationTransition(.zoom)`: la grid
+/// de detrás recupera el scroll de inmediato y un toque ya no dispara acciones de
+/// la pantalla que se abandona (ghost tap DURANTE la animación, que el guard por
+/// `onDisappear`/`detailIsActive` no cubre porque llega al final del pop).
+///
+/// No toca la animación ni los gestos de navegación: el swipe-back y la
+/// pinch-to-dismiss viven en el UINavigationController, fuera de este contenido,
+/// así que desactivar el hit-test del contenido no los afecta.
+private struct PopHitTestGuard: ViewModifier {
+    @State private var isPopping = false
+
+    func body(content: Content) -> some View {
+        content
+            .allowsHitTesting(!isPopping)
+            .background(
+                NavigationTransitionObserver { popping in
+                    if isPopping != popping { isPopping = popping }
+                }
+            )
+    }
+}
+
+extension View {
+    /// Ver `PopHitTestGuard`. Aplicar al contenido raíz de una pantalla de
+    /// detalle que se abre con `.navigationTransition(.zoom)`.
+    func blocksTouchesDuringPop() -> some View {
+        modifier(PopHitTestGuard())
+    }
+}
+
+/// Observa el ciclo de transición del UINavigationController contenedor desde
+/// SwiftUI. Llama `onChange(true)` al INICIO del pop (no en `onDisappear`, que
+/// llega al final) y `onChange(false)` si el pop interactivo se cancela
+/// (swipe-back soltado a medias) o al (re)aparecer la pantalla.
+///
+/// Usa el `transitionCoordinator` (UIKit público), no gesture recognizers
+/// privados: cubre swipe-back, botón atrás y el gesto del zoom por igual sin
+/// tocar ninguno de ellos.
+private struct NavigationTransitionObserver: UIViewControllerRepresentable {
+    var onChange: (Bool) -> Void
+
+    func makeUIViewController(context: Context) -> ObserverVC {
+        let vc = ObserverVC()
+        vc.onChange = onChange
+        return vc
+    }
+
+    func updateUIViewController(_ vc: ObserverVC, context: Context) {
+        vc.onChange = onChange
+    }
+
+    final class ObserverVC: UIViewController {
+        var onChange: ((Bool) -> Void)?
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            // (Re)entrar a la pantalla la reactiva.
+            onChange?(false)
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            // La pantalla empieza a salir: el contenido deja pasar los toques
+            // durante TODA la transición.
+            onChange?(true)
+            // Si el pop es interactivo y el usuario lo cancela (suelta el
+            // swipe-back a medias), reactivamos el contenido.
+            let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator
+            coordinator?.animate(alongsideTransition: nil) { [weak self] ctx in
+                if ctx.isCancelled { self?.onChange?(false) }
+            }
+        }
+    }
+}

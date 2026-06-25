@@ -378,6 +378,9 @@ struct PlaylistDetailView: View {
         // Propaga el estado activo a SongListView para que sus filas no
         // disparen reproducción ante un ghost tap durante/tras el pop zoom.
         .environment(\.detailIsActive, isViewVisible)
+        // Durante el pop, el contenido deja pasar los toques a la grid de detrás
+        // (recupera el scroll y mata el ghost tap durante la propia animación).
+        .blocksTouchesDuringPop()
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
