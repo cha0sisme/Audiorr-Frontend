@@ -951,7 +951,7 @@ struct HomeView: View {
             HorizontalScrollSection(title: L.discoverSomethingNew) {
                 ForEach(vm.randomAlbums) { album in
                     NavigationLink(value: album) {
-                        AlbumCardView(album: album, subtitle: .year, size: 140, heroNamespace: heroNS)
+                        AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }
