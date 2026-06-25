@@ -45,6 +45,9 @@ final class BackendState {
     }
 
     private var checkTask: Task<Void, Never>?
+    /// Sonda de auto-recuperación tras una caída detectada in-band. Único dueño
+    /// (no se solapan sondas) — ver `scheduleRecoveryProbe()`.
+    private var recoveryTask: Task<Void, Never>?
 
     /// v12 (audit 2026-05-05) — punto unico de mutacion de `isAvailable`.
     /// Mantiene en sync el espejo `TransitionDiagnostics.backendAvailable`
@@ -54,7 +57,11 @@ final class BackendState {
     private func setAvailable(_ value: Bool) {
         self.isAvailable = value
         TransitionDiagnostics.backendAvailable = value
-        if !value {
+        if value {
+            // Recuperado por cualquier vía → la sonda de recuperación ya no aporta.
+            recoveryTask?.cancel()
+            recoveryTask = nil
+        } else {
             // Backend caido → cortar captura inmediatamente. La history existente
             // se conserva (el usuario debe poder exportar lo que ya tenia).
             Task { @MainActor in
@@ -147,6 +154,8 @@ final class BackendState {
     func reset() {
         checkTask?.cancel()
         checkTask = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
         consecutiveInBandFailures = 0
         setAvailable(false)
         isChecking = false
@@ -193,6 +202,57 @@ final class BackendState {
         consecutiveInBandFailures += 1
         if consecutiveInBandFailures >= inBandFailureThreshold && isAvailable {
             setAvailable(false)
+            scheduleRecoveryProbe()
+        }
+    }
+
+    /// Tras una caída detectada in-band, sondea la recuperación con backoff en
+    /// vez de quedar caído hasta el próximo foreground / cambio de red / reinicio
+    /// — esa asimetría (caída rápida, recuperación inexistente) era la causa de
+    /// "se pierde el backend y hay que cerrar y reabrir la app".
+    ///
+    /// Diseño:
+    /// - **Único dueño**: una sola sonda viva a la vez; `setAvailable(true)` y
+    ///   `reset()` la cancelan.
+    /// - **Techo de intentos** + backoff: no martillea al backend/CF si está
+    ///   caído de verdad.
+    /// - **Pausa en segundo plano**: no gasta red/batería ni revela actividad
+    ///   cuando la app no está en uso (el foreground ya tiene su propia sonda).
+    /// - **Gates de auth/cuota mandan**: un 403/429 no es caída de transporte;
+    ///   si están activos, deja de sondear (no reintroduce el martilleo que esos
+    ///   gates evitan).
+    /// - El health-check confirma el TRANSPORTE (CF + Node responden) y
+    ///   desbloquea el gating; el primer tráfico REST autenticado que entonces
+    ///   fluya CONFIRMA (`noteRequestSucceeded`) o REVIERTE (`noteRequestFailed`,
+    ///   que vuelve a armar esta sonda). Así no marcamos "vivo" a ciegas por un
+    ///   health público que no prueba auth.
+    private func scheduleRecoveryProbe() {
+        guard recoveryTask == nil else { return }
+        // Backoff acotado (≈105 s en 6 intentos). Si tras esto sigue caído, el
+        // foreground / cambio de red / reinicio retoman la recuperación.
+        let backoffSeconds: [UInt64] = [3, 6, 12, 24, 30, 30]
+        recoveryTask = Task { [weak self] in
+            for delay in backoffSeconds {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                if self.isAvailable { break }                  // ya recuperado por otra vía
+                // En segundo plano no sondeamos; el foreground tiene su sonda.
+                if UIApplication.shared.applicationState == .background { continue }
+                // Sin credenciales o con gates de auth/cuota activos no hay nada
+                // que recuperar pingueando: esos casos no son caída de transporte.
+                guard NavidromeService.shared.credentials != nil,
+                      AuthTokenStore.shared.backendUnauthorizedUntil() == nil,
+                      AuthTokenStore.shared.lockedUntil() == nil,
+                      AuthTokenStore.shared.consecutiveLoginFailuresUntil() == nil
+                else { break }
+                NavidromeService.shared.invalidateBackendAvailableCache()
+                if await NavidromeService.shared.checkBackendAvailable() {
+                    guard !Task.isCancelled else { return }
+                    self.setAvailable(true)
+                    break
+                }
+            }
+            self?.recoveryTask = nil
         }
     }
 
