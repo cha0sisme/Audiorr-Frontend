@@ -166,12 +166,23 @@ struct LyricsView: View {
 
     // MARK: - Atribución de fuente
 
-    /// Texto de atribución: LRCLIB (en inglés) o homelab (letras locales/embebidas).
+    /// Texto de atribución (localizado): LRCLIB para letras de la base pública,
+    /// o el servidor del propio usuario para letras locales/embebidas.
     private var attributionText: String {
         switch lyrics.source {
-        case .lrclib:   return "Lyrics provided by LRCLIB"
-        case .embedded: return "Letras proporcionadas por homelab"
+        case .lrclib:   return L.lyricsProvidedBy("LRCLIB")
+        case .embedded: return L.lyricsProvidedBy(serverDisplayName)
         }
+    }
+
+    /// Host (con puerto) del servidor Navidrome del usuario, sin esquema, para
+    /// atribuir las letras embebidas a su propio servidor de forma legible.
+    private var serverDisplayName: String {
+        let raw = NavidromeService.shared.credentials?.serverUrl
+        if let raw, let comps = URLComponents(string: raw), let host = comps.host {
+            return comps.port.map { "\(host):\($0)" } ?? host
+        }
+        return raw ?? (LocalizationManager.shared.resolved == .en ? "your server" : "tu servidor")
     }
 
     /// Nota de atribución al final de la letra. Sin highlight, atenuada, sin bold.

@@ -193,6 +193,9 @@ enum L {
     // MARK: - NowPlaying / MiniPlayer
 
     static var nothingPlaying: String { isEn ? "Nothing playing" : "Sin reproducción" }
+    static func lyricsProvidedBy(_ source: String) -> String {
+        isEn ? "Lyrics provided by \(source)" : "Letras proporcionadas por \(source)"
+    }
 
     // MARK: - Queue
 
