@@ -263,10 +263,15 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
 
                 guard type == "album" || type == "playlist" || type == "artist" else { continue }
 
+                // Para artistas el backend deja `title` como best-effort (puede ser
+                // el álbum escuchado); el nombre del artista viaja en `artist`.
+                // Mismo criterio que la app (HomeView.loadRecentContexts).
+                let displayTitle = (type == "artist" && !artist.isEmpty) ? artist : title
+
                 let detail: String? = type == "album" ? artist : nil
                 let icon = type == "artist" ? "person.fill" : "music.note"
                 let item = CPListItem(
-                    text: title,
+                    text: displayTitle,
                     detailText: detail,
                     image: UIImage(systemName: icon),
                     accessoryImage: nil,
@@ -298,7 +303,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate, CPN
                     }
                 case "artist":
                     item.handler = { [weak self] _, completion in
-                        self?.showArtistAlbums(artistId: id, artistName: title)
+                        self?.showArtistAlbums(artistId: id, artistName: displayTitle)
                         completion()
                     }
                     // No avatar fetch — keep JBI snappy. The person.fill SF
