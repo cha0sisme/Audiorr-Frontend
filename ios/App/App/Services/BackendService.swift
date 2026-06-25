@@ -253,6 +253,12 @@ final class BackendService {
 
     func saveLastPlayback(username: String, state: LastPlaybackState) {
         Task {
+            // Endpoint con Bearer estricto (requireSession): sin token daría 401.
+            // No lo disparamos si no hay sesión establecida — evita ruido de
+            // "missing_bearer" en el backend para sesiones sin Bearer (no
+            // autorizado, device locked, login a medias). Sin pérdida real: sin
+            // token la petición fallaba igual. `currentToken()` NO fuerza login.
+            guard await AuthTokenStore.shared.currentToken() != nil else { return }
             guard let body = try? jsonEncoder.encode(state) else { return }
             _ = try? await put(path: "/api/user/\(username.urlEncoded)/last-playback", rawBody: body)
         }

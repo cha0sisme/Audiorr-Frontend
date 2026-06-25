@@ -184,6 +184,10 @@ final class ScrobbleService {
 
     private func scrobbleToBackend(song: PersistableSong, timestamp: Int) async {
         guard let username = api.credentials?.username else { return }
+        // El scrobble al backend exige Bearer estricto: sin sesión no se dispara
+        // (evita 401 ruidoso en el backend). Sin pérdida real — sin token fallaba
+        // igual y el scrobble backend no se reintenta. `currentToken()` no fuerza login.
+        guard await AuthTokenStore.shared.currentToken() != nil else { return }
 
         let payload = BackendService.ScrobblePayload(
             username: username,
