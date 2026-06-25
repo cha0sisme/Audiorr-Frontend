@@ -175,6 +175,16 @@ final class HomeViewModel: ObservableObject {
             }
         }
 
+        // Contextos de artista: el backend deja `title` como best-effort
+        // (COALESCE context_name → álbum), así que cuando el scrobble no trae
+        // context_name el título salía como el ÁLBUM escuchado en vez del nombre
+        // del artista. El campo `artist` del contexto ya trae el nombre del
+        // artista de lo escuchado, que es el título correcto de la tarjeta —
+        // misma resolución en cliente que ya hacemos con las playlists.
+        for i in contexts.indices where contexts[i].type == "artist" && !contexts[i].artist.isEmpty {
+            contexts[i].title = contexts[i].artist
+        }
+
         recentContexts = contexts
     }
 
