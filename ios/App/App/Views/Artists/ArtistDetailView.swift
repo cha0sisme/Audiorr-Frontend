@@ -154,6 +154,11 @@ final class ArtistDetailViewModel: ObservableObject {
 struct ArtistDetailView: View {
     @StateObject private var vm: ArtistDetailViewModel
     @State private var scrollY: CGFloat = 0
+    /// Ver AlbumDetailView: defiende contra ghost taps tras el pop de
+    /// `.navigationTransition(.zoom)`. Se propaga a SongListView vía
+    /// `\.detailIsActive` para que sus filas no reproduzcan al tocar una lista
+    /// de un artista que ya se abandonó.
+    @State private var isViewVisible = false
     /// Namespace provided by the NavigationStack owner so that
     /// `matchedTransitionSource` on cards aligns with the root-level
     /// `navigationDestination(.zoom)` — SwiftUI only honours destinations
@@ -260,9 +265,14 @@ struct ArtistDetailView: View {
         .onChange(of: isLight) { _, light in
             AppTheme.shared.overlayColorScheme = light ? .light : .dark
         }
+        .onAppear { isViewVisible = true }
         .onDisappear {
+            isViewVisible = false
             AppTheme.shared.overlayColorScheme = nil
         }
+        // Propaga el estado activo a SongListView para que sus filas no
+        // disparen reproducción ante un ghost tap durante/tras el pop zoom.
+        .environment(\.detailIsActive, isViewVisible)
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {

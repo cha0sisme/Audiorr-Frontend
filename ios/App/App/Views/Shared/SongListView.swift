@@ -32,6 +32,28 @@ extension View {
     }
 }
 
+// MARK: - Detail-active environment
+
+/// `true` mientras la pantalla de detalle contenedora está activa (visible y no
+/// saliendo). Las filas de `SongListView` consultan este flag para NO disparar
+/// reproducción cuando un "ghost tap" cae sobre la lista de un detalle que ya se
+/// abandonó: tras el pop de `.navigationTransition(.zoom)`, SwiftUI puede
+/// retener el layer de hit-test de la vista saliente y un toque en otra zona
+/// acababa reproduciendo una canción del detalle anterior.
+///
+/// Default `true`: fuera de un detalle (cualquier otro uso de `SongListView`) la
+/// lista funciona con normalidad.
+private struct DetailActiveKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
+extension EnvironmentValues {
+    var detailIsActive: Bool {
+        get { self[DetailActiveKey.self] }
+        set { self[DetailActiveKey.self] = newValue }
+    }
+}
+
 // MARK: - Shared song list (Apple Music style)
 
 /// Reusable song table used by AlbumDetailView, PlaylistDetailView, etc.
@@ -66,6 +88,9 @@ struct SongListView: View {
     /// `navigationDestination(for:)` declarados UNA sola vez en la raíz. Así no
     /// se acumulan destinos duplicados al encadenar Album → Artista → Album → …
     @Environment(\.navPath) private var navPath
+    /// Bloquea la reproducción al tocar una fila cuando el detalle contenedor ya
+    /// no está activo (ghost tap durante/tras el pop de la transición zoom).
+    @Environment(\.detailIsActive) private var detailIsActive
     @State private var addToPlaylistSong: NavidromeSong? = nil
     /// Song cuyo menú "Ver artistas" (plural) está abierto. Vehiculiza la
     /// `ViewArtistsSheet` — cuando es nil, la sheet está cerrada. Identifiable
@@ -112,6 +137,7 @@ struct SongListView: View {
     private func rowView(for song: NavidromeSong, at idx: Int) -> some View {
         HStack(spacing: 0) {
             Button {
+                guard detailIsActive else { return }
                 PlayerService.shared.playPlaylist(songs, startingAt: idx, contextUri: contextUri, contextName: contextName)
             } label: {
                 SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist, showCover: showCover, albumArtist: albumArtist)

@@ -341,6 +341,9 @@ struct AlbumDetailView: View {
             isViewVisible = false
             AppTheme.shared.overlayColorScheme = nil
         }
+        // Propaga el estado activo a SongListView para que sus filas no
+        // disparen reproducción ante un ghost tap durante/tras el pop zoom.
+        .environment(\.detailIsActive, isViewVisible)
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
