@@ -492,7 +492,7 @@ struct ArtistDetailView: View {
                 .padding(.horizontal, 16)
 
                 let visible = vm.showAllSongs ? vm.topSongs : Array(vm.topSongs.prefix(5))
-                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtistInMenu: false, showArtist: false, contextUri: "artist:\(vm.artist.id)", contextName: vm.artist.name)
+                SongListView(songs: visible, palette: vm.palette, showAlbumInMenu: true, showArtistInMenu: false, showArtist: false, showCover: true, contextUri: "artist:\(vm.artist.id)", contextName: vm.artist.name)
                     .id(vm.showAllSongs)
             }
         }
