@@ -155,6 +155,10 @@ struct AlbumDetailView: View {
     // after the user navigates back, causing the next tap on a different
     // card to fire this view's playPlaylist action.
     @State private var isViewVisible = false
+    /// Suprime el play durante la ventana del pop zoom (cuando `isViewVisible`
+    /// aún es `true`). Consultado a tiempo de tap → inmune al snapshot que el zoom
+    /// retiene encima. Ver `PopSuppressionGate`.
+    @State private var popGate = PopSuppressionGate()
     /// Altura medida del bloque de título+metadata (para que heroHeight la
     /// incluya y los huecos del hero no dependan del nº de líneas del título).
     /// El default (~87) cubre el caso de 2 líneas, así que el primer frame nunca
@@ -344,9 +348,12 @@ struct AlbumDetailView: View {
         // Propaga el estado activo a SongListView para que sus filas no
         // disparen reproducción ante un ghost tap durante/tras el pop zoom.
         .environment(\.detailIsActive, isViewVisible)
+        // Gate consultado a tiempo de tap para que las filas (y los botones de
+        // abajo) no reproduzcan durante el pop, aunque el zoom retenga su layer.
+        .environment(\.popGate, popGate)
         // Durante el pop, el contenido deja pasar los toques a la grid de detrás
-        // (recupera el scroll y mata el ghost tap durante la propia animación).
-        .blocksTouchesDuringPop()
+        // (recupera el scroll) y el observer arma/libera el gate.
+        .blocksTouchesDuringPop(gate: popGate)
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
@@ -720,7 +727,7 @@ struct AlbumDetailView: View {
 
         return HStack(spacing: 14) {
             Button {
-                guard isViewVisible, !vm.songs.isEmpty else { return }
+                guard isViewVisible, !popGate.isSuppressing, !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs, contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 HStack(spacing: 8) {
@@ -736,7 +743,7 @@ struct AlbumDetailView: View {
             }
 
             Button {
-                guard isViewVisible, !vm.songs.isEmpty else { return }
+                guard isViewVisible, !popGate.isSuppressing, !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "album:\(vm.displayAlbum.id)", contextName: vm.displayAlbum.name)
             } label: {
                 Image(systemName: "shuffle")

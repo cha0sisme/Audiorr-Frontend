@@ -159,6 +159,10 @@ struct ArtistDetailView: View {
     /// `\.detailIsActive` para que sus filas no reproduzcan al tocar una lista
     /// de un artista que ya se abandonó.
     @State private var isViewVisible = false
+    /// Suprime el play durante la ventana del pop zoom. Consultado a tiempo de tap.
+    /// Aquí el play es async (`loadAndPlay` reproduce TRAS un `await` de red), así
+    /// que el guard va en el TAP, antes de lanzar la tarea. Ver `PopSuppressionGate`.
+    @State private var popGate = PopSuppressionGate()
     /// Namespace provided by the NavigationStack owner so that
     /// `matchedTransitionSource` on cards aligns with the root-level
     /// `navigationDestination(.zoom)` — SwiftUI only honours destinations
@@ -273,9 +277,12 @@ struct ArtistDetailView: View {
         // Propaga el estado activo a SongListView para que sus filas no
         // disparen reproducción ante un ghost tap durante/tras el pop zoom.
         .environment(\.detailIsActive, isViewVisible)
+        // Gate consultado a tiempo de tap para que la lista (y el play del hero)
+        // no reproduzcan durante el pop, aunque el zoom retenga su layer.
+        .environment(\.popGate, popGate)
         // Durante el pop, el contenido deja pasar los toques a la grid de detrás
         // (recupera el scroll y mata el ghost tap durante la propia animación).
-        .blocksTouchesDuringPop()
+        .blocksTouchesDuringPop(gate: popGate)
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
@@ -383,6 +390,9 @@ struct ArtistDetailView: View {
                 Spacer(minLength: 8)
 
                 Button {
+                    // El guard va en el TAP (no en loadAndPlay): el play interno
+                    // ocurre tras un await de red, ya fuera de la ventana del pop.
+                    guard !popGate.isSuppressing else { return }
                     Task { await vm.loadAndPlay() }
                 } label: {
                     Group {

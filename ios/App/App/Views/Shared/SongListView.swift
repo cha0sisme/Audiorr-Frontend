@@ -54,6 +54,56 @@ extension EnvironmentValues {
     }
 }
 
+// MARK: - Pop-suppression gate
+
+/// Gate por-pantalla que suprime la reproducción DURANTE (y un instante tras) el
+/// pop de `.navigationTransition(.zoom)`. Es un *reference type* que se consulta
+/// A TIEMPO DE TAP: aunque el zoom retenga un snapshot del contenido saliente con
+/// el closure del botón ya capturado, ese closure lee `isSuppressing` sobre la
+/// MISMA instancia viva → ve el valor actual. Ataca la ACCIÓN (reproducir), no el
+/// hit-testing, así que es inmune a que el zoom ignore `allowsHitTesting` (el
+/// agujero por el que el ghost tap seguía colándose pese a `detailIsActive`).
+///
+/// `detailIsActive` (de `isViewVisible`) y este gate son complementarios:
+/// `isViewVisible` flipa a `false` al FINAL del pop (`onDisappear`), así que NO
+/// cubre la ventana de la animación; el gate sí la cubre (se arma en
+/// `viewWillDisappear`, al INICIO).
+///
+/// `suppressUntil` es un `Date` AUTO-EXPIRANTE: si el release no llegara (el pop
+/// completo desaloja el VC que lo armó, una transición se interrumpe…), el gate se
+/// cura solo al vencer la ventana — nunca queda "pegado" suprimiendo TODA la
+/// reproducción, que sería peor que el propio ghost tap.
+final class PopSuppressionGate {
+    private var suppressUntil: Date = .distantPast
+
+    /// `true` mientras la ventana de supresión sigue vigente.
+    var isSuppressing: Bool { Date() < suppressUntil }
+
+    /// Inicio del pop (`viewWillDisappear`): red de seguridad amplia que el fin de
+    /// la transición acorta. Si el fin nunca llegara, expira sola.
+    func beginPop() { suppressUntil = Date().addingTimeInterval(2.0) }
+
+    /// Fin de la animación de pop: deja solo un margen de gracia para el layer
+    /// fantasma que el zoom mantiene unos instantes encima.
+    func endPop() { suppressUntil = Date().addingTimeInterval(0.25) }
+
+    /// Pop cancelado (swipe-back soltado) o pantalla (re)activa: interactiva ya.
+    func release() { suppressUntil = .distantPast }
+}
+
+/// Gate de la pantalla de detalle contenedora, inyectado por Environment. `nil`
+/// fuera de un detalle zoom → la lista funciona con normalidad.
+private struct PopGateKey: EnvironmentKey {
+    static let defaultValue: PopSuppressionGate? = nil
+}
+
+extension EnvironmentValues {
+    var popGate: PopSuppressionGate? {
+        get { self[PopGateKey.self] }
+        set { self[PopGateKey.self] = newValue }
+    }
+}
+
 // MARK: - Shared song list (Apple Music style)
 
 /// Reusable song table used by AlbumDetailView, PlaylistDetailView, etc.
@@ -89,8 +139,12 @@ struct SongListView: View {
     /// se acumulan destinos duplicados al encadenar Album → Artista → Album → …
     @Environment(\.navPath) private var navPath
     /// Bloquea la reproducción al tocar una fila cuando el detalle contenedor ya
-    /// no está activo (ghost tap durante/tras el pop de la transición zoom).
+    /// no está activo (ghost tap TRAS el pop de la transición zoom).
     @Environment(\.detailIsActive) private var detailIsActive
+    /// Gate consultado a tiempo de tap: suprime el play DURANTE la ventana del pop
+    /// (cuando `detailIsActive` aún es `true` porque su input flipa al final).
+    /// Ver `PopSuppressionGate`.
+    @Environment(\.popGate) private var popGate
     @State private var addToPlaylistSong: NavidromeSong? = nil
     /// Song cuyo menú "Ver artistas" (plural) está abierto. Vehiculiza la
     /// `ViewArtistsSheet` — cuando es nil, la sheet está cerrada. Identifiable
@@ -137,7 +191,7 @@ struct SongListView: View {
     private func rowView(for song: NavidromeSong, at idx: Int) -> some View {
         HStack(spacing: 0) {
             Button {
-                guard detailIsActive else { return }
+                guard detailIsActive, !(popGate?.isSuppressing ?? false) else { return }
                 PlayerService.shared.playPlaylist(songs, startingAt: idx, contextUri: contextUri, contextName: contextName)
             } label: {
                 SongRowView(song: song, index: idx + 1, palette: palette, showArtist: showArtist, showCover: showCover, albumArtist: albumArtist)
@@ -616,67 +670,98 @@ struct ExplicitBadge: View {
 /// pinch-to-dismiss viven en el UINavigationController, fuera de este contenido,
 /// así que desactivar el hit-test del contenido no los afecta.
 private struct PopHitTestGuard: ViewModifier {
+    let gate: PopSuppressionGate
     @State private var isPopping = false
 
     func body(content: Content) -> some View {
         content
             .allowsHitTesting(!isPopping)
             .background(
-                NavigationTransitionObserver { popping in
-                    if isPopping != popping { isPopping = popping }
-                }
+                NavigationTransitionObserver(
+                    onPopBegan: {
+                        if !isPopping { isPopping = true }
+                        gate.beginPop()
+                    },
+                    onPopEnded: { cancelled in
+                        if isPopping { isPopping = false }
+                        if cancelled { gate.release() } else { gate.endPop() }
+                    },
+                    onReappear: {
+                        if isPopping { isPopping = false }
+                        gate.release()
+                    }
+                )
             )
     }
 }
 
 extension View {
     /// Ver `PopHitTestGuard`. Aplicar al contenido raíz de una pantalla de
-    /// detalle que se abre con `.navigationTransition(.zoom)`.
-    func blocksTouchesDuringPop() -> some View {
-        modifier(PopHitTestGuard())
+    /// detalle que se abre con `.navigationTransition(.zoom)`, pasándole el
+    /// `PopSuppressionGate` que esa pantalla inyecta también por Environment.
+    func blocksTouchesDuringPop(gate: PopSuppressionGate) -> some View {
+        modifier(PopHitTestGuard(gate: gate))
     }
 }
 
 /// Observa el ciclo de transición del UINavigationController contenedor desde
-/// SwiftUI. Llama `onChange(true)` al INICIO del pop (no en `onDisappear`, que
-/// llega al final) y `onChange(false)` si el pop interactivo se cancela
-/// (swipe-back soltado a medias) o al (re)aparecer la pantalla.
+/// SwiftUI:
+/// - `onPopBegan` al INICIO de la salida (`viewWillDisappear`, no en
+///   `onDisappear`, que llega al final). Cubre pop por botón, swipe-back y zoom,
+///   y también el caso de quedar cubierta por un push (inocuo con gate
+///   por-pantalla: la pantalla cubierta no recibe toques).
+/// - `onPopEnded(cancelled:)` al terminar la transición (completion del
+///   `transitionCoordinator`); `cancelled == true` si el swipe-back interactivo
+///   se soltó a medias.
+/// - `onReappear` al (re)aparecer la pantalla (`viewWillAppear`), p.ej. al volver
+///   tras estar cubierta.
 ///
 /// Usa el `transitionCoordinator` (UIKit público), no gesture recognizers
-/// privados: cubre swipe-back, botón atrás y el gesto del zoom por igual sin
-/// tocar ninguno de ellos.
+/// privados, así que no toca la animación ni los gestos de navegación.
 private struct NavigationTransitionObserver: UIViewControllerRepresentable {
-    var onChange: (Bool) -> Void
+    var onPopBegan: () -> Void
+    var onPopEnded: (_ cancelled: Bool) -> Void
+    var onReappear: () -> Void
 
     func makeUIViewController(context: Context) -> ObserverVC {
         let vc = ObserverVC()
-        vc.onChange = onChange
+        vc.onPopBegan = onPopBegan
+        vc.onPopEnded = onPopEnded
+        vc.onReappear = onReappear
         return vc
     }
 
     func updateUIViewController(_ vc: ObserverVC, context: Context) {
-        vc.onChange = onChange
+        vc.onPopBegan = onPopBegan
+        vc.onPopEnded = onPopEnded
+        vc.onReappear = onReappear
     }
 
     final class ObserverVC: UIViewController {
-        var onChange: ((Bool) -> Void)?
+        var onPopBegan: (() -> Void)?
+        var onPopEnded: ((Bool) -> Void)?
+        var onReappear: (() -> Void)?
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            // (Re)entrar a la pantalla la reactiva.
-            onChange?(false)
+            onReappear?()
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            // La pantalla empieza a salir: el contenido deja pasar los toques
-            // durante TODA la transición.
-            onChange?(true)
-            // Si el pop es interactivo y el usuario lo cancela (suelta el
-            // swipe-back a medias), reactivamos el contenido.
+            // La pantalla empieza a salir: arma el gate ya (red de seguridad
+            // amplia) y deja pasar los toques durante la animación.
+            onPopBegan?()
+            // El completion del coordinator acota la ventana al fin REAL de la
+            // animación (y detecta el swipe-back cancelado). Sin coordinator
+            // (desaparición no animada) cerramos la ventana de inmediato.
             let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator
-            coordinator?.animate(alongsideTransition: nil) { [weak self] ctx in
-                if ctx.isCancelled { self?.onChange?(false) }
+            if let coordinator {
+                coordinator.animate(alongsideTransition: nil) { [weak self] ctx in
+                    self?.onPopEnded?(ctx.isCancelled)
+                }
+            } else {
+                onPopEnded?(false)
             }
         }
     }
