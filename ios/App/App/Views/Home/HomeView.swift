@@ -792,7 +792,7 @@ struct HomeView: View {
                             year: nil, genre: nil, explicitStatus: nil
                         )
                         NavigationLink(value: album) {
-                            AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
+                            AlbumCardView(album: album, size: 156, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     } else if isPlaylist {
@@ -802,13 +802,13 @@ struct HomeView: View {
                             owner: nil, coverArt: ctx.coverArtId, changed: nil
                         )
                         NavigationLink(value: playlist) {
-                            PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
+                            PlaylistCardView(playlist: playlist, size: 156, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     } else if ctx.type == "artist" {
                         let artist = NavidromeArtist(id: ctx.id, name: ctx.title, albumCount: nil)
                         NavigationLink(value: artist) {
-                            ArtistCardView(artist: artist, size: 150, heroNamespace: heroNS)
+                            ArtistCardView(artist: artist, size: 156, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -833,7 +833,7 @@ struct HomeView: View {
             ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
-                        AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
+                        AlbumCardView(album: album, size: 156, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }
@@ -931,7 +931,7 @@ struct HomeView: View {
                 HorizontalScrollSection(title: L.yourDailyMixes) {
                     ForEach(vm.dailyMixPlaylists) { playlist in
                         NavigationLink(value: playlist) {
-                            PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
+                            PlaylistCardView(playlist: playlist, size: 156, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
@@ -956,7 +956,7 @@ struct HomeView: View {
             ) {
                 ForEach(visible) { album in
                     NavigationLink(value: album) {
-                        AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
+                        AlbumCardView(album: album, size: 156, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }
@@ -982,7 +982,7 @@ struct HomeView: View {
             HorizontalScrollSection(title: L.discoverSomethingNew) {
                 ForEach(vm.randomAlbums) { album in
                     NavigationLink(value: album) {
-                        AlbumCardView(album: album, size: 150, heroNamespace: heroNS)
+                        AlbumCardView(album: album, size: 156, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }
@@ -998,7 +998,7 @@ struct HomeView: View {
             HorizontalScrollSection(title: L.pinnedPlaylists) {
                 ForEach(vm.pinnedPlaylists) { playlist in
                     NavigationLink(value: playlist) {
-                        PlaylistCardView(playlist: playlist, size: 150, heroNamespace: heroNS)
+                        PlaylistCardView(playlist: playlist, size: 156, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }

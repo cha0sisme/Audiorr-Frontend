@@ -19,7 +19,7 @@ struct AlbumCardView: View {
     /// When `nil`, standard system colors are used.
     var isLight: Bool? = nil
     var axis: Axis = .horizontal
-    var size: CGFloat = 150
+    var size: CGFloat = 156
     var heroNamespace: Namespace.ID?
 
     @State private var coverImage: UIImage?

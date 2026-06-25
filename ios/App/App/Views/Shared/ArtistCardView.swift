@@ -9,7 +9,7 @@ import SwiftUI
 /// real image (or a colored initial if no avatar is available).
 struct ArtistCardView: View {
     let artist: NavidromeArtist
-    var size: CGFloat = 140
+    var size: CGFloat = 146
     /// Pass `true` when the host page has a light background (palette-driven).
     /// When `nil`, standard system colors are used.
     var isLight: Bool? = nil

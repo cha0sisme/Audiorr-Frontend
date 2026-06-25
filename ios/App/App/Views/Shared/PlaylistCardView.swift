@@ -14,7 +14,7 @@ struct PlaylistCardView: View {
     /// When `nil`, standard system colors are used (PlaylistsView, SeeAllGridView).
     var isLight: Bool? = nil
     var axis: Axis = .horizontal
-    var size: CGFloat = 150
+    var size: CGFloat = 156
     var heroNamespace: Namespace.ID?
 
     private let nowPlaying = NowPlayingState.shared

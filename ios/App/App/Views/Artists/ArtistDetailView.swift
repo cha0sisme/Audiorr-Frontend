@@ -627,7 +627,7 @@ struct ArtistDetailView: View {
             ) {
                 ForEach(visible) { artist in
                     NavigationLink(value: artist) {
-                        ArtistCardView(artist: artist, size: 120, isLight: isLight, heroNamespace: heroNS)
+                        ArtistCardView(artist: artist, size: 125, isLight: isLight, heroNamespace: heroNS)
                     }
                     .buttonStyle(.plain)
                 }

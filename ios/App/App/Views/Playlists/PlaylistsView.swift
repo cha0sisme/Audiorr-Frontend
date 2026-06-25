@@ -444,7 +444,7 @@ struct PlaylistsView: View {
                     HorizontalScrollSection(title: section.title) {
                         ForEach(items) { playlist in
                             NavigationLink(value: playlist) {
-                                PlaylistCardView(playlist: playlist, size: 140, heroNamespace: heroNS)
+                                PlaylistCardView(playlist: playlist, size: 146, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                         }

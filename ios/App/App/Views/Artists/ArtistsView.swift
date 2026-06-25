@@ -340,7 +340,7 @@ struct ArtistsView: View {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.featuredArtists) { artist in
                             NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 146, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                         }
@@ -367,7 +367,7 @@ struct ArtistsView: View {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.recentArtists) { artist in
                             NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 146, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                         }
@@ -407,7 +407,7 @@ struct ArtistsView: View {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(vm.genreArtists) { artist in
                             NavigationLink(value: artist) {
-                                ArtistCardView(artist: artist, size: 140, showStats: true, heroNamespace: heroNS)
+                                ArtistCardView(artist: artist, size: 146, showStats: true, heroNamespace: heroNS)
                             }
                             .buttonStyle(.plain)
                         }
@@ -524,7 +524,7 @@ struct ArtistsView: View {
 /// random pick lands).
 private struct ArtistSectionSkeleton: View {
     let title: String?
-    var size: CGFloat = 140
+    var size: CGFloat = 146
     var count: Int = 5
 
     var body: some View {

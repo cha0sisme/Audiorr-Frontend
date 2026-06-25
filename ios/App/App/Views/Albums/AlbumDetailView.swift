@@ -388,7 +388,7 @@ struct AlbumDetailView: View {
             ) {
                 ForEach(vm.relatedAlbums) { album in
                     NavigationLink(value: album) {
-                        AlbumCardView(album: album, isLight: isLight, size: 150)
+                        AlbumCardView(album: album, isLight: isLight, size: 156)
                     }
                     .buttonStyle(.plain)
                 }

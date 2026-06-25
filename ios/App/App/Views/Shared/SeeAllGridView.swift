@@ -26,8 +26,8 @@ struct SeeAllCard: View {
     let remaining: Int
     /// `nil` uses system colors; `true`/`false` for palette-driven pages.
     var isLight: Bool? = nil
-    /// Match the height of the sibling cells (albums = 150, artists = 120).
-    var size: CGFloat = 150
+    /// Match the height of the sibling cells (albums = 156, artists = 125).
+    var size: CGFloat = 156
 
     private var bg: Color {
         guard let isLight else { return Color(.tertiarySystemFill) }
@@ -69,7 +69,7 @@ struct SeeAllArtistCard: View {
     let remaining: Int
     /// `nil` uses system colors; `true`/`false` for palette-driven pages.
     var isLight: Bool? = nil
-    var size: CGFloat = 120
+    var size: CGFloat = 125
 
     private var bg: Color {
         guard let isLight else { return Color(.tertiarySystemFill) }
@@ -149,7 +149,7 @@ struct SeeAllGridView: View {
                 LazyVGrid(columns: artistColumns, spacing: 24) {
                     ForEach(items) { artist in
                         NavigationLink(value: artist) {
-                            ArtistCardView(artist: artist, size: 110, heroNamespace: heroNS)
+                            ArtistCardView(artist: artist, size: 114, heroNamespace: heroNS)
                         }
                         .buttonStyle(.plain)
                     }
