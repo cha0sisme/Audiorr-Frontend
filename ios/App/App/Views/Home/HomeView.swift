@@ -237,6 +237,27 @@ final class HomeViewModel: ObservableObject {
 
     private func loadRandomAlbums() async {
         randomAlbums = await api.getAlbumList(type: "random", size: 8)
+        prefetchRandomCovers(randomAlbums)
+    }
+
+    /// "Descubre algo nuevo" rota álbumes aleatorios en cada carga del Home, así
+    /// que sus portadas casi nunca están ya en caché (a diferencia de secciones
+    /// estables como "Últimos álbumes"). Sin la portada cacheada, el detalle abre
+    /// con placeholder y paleta por defecto y "salta" al layout real al cargar
+    /// (preview pobre durante la transición zoom). Pre-descargarlas en segundo
+    /// plano deja que `AlbumDetailViewModel.init` pinte cover + color (paleta
+    /// extraída de la cover cacheada) desde el primer frame.
+    private func prefetchRandomCovers(_ albums: [NavidromeAlbum]) {
+        Task {
+            for album in albums {
+                guard let coverArt = album.coverArt, !coverArt.isEmpty,
+                      AlbumCoverCache.shared.image(for: coverArt) == nil,
+                      let url = NavidromeService.shared.coverURL(id: coverArt, size: 400),
+                      let (data, _) = try? await AudiorrNetwork.background.data(from: url),
+                      let img = UIImage(data: data) else { continue }
+                AlbumCoverCache.shared.setImage(img, for: coverArt)
+            }
+        }
     }
 
     private func loadRecentlyPlayed() async {
