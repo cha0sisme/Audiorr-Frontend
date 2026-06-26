@@ -279,9 +279,10 @@ struct PlaylistDetailView: View {
     // See AlbumDetailView for rationale: defends against ghost taps after
     // .navigationTransition(.zoom) pop firing the play action of a no-longer-visible view.
     @State private var isViewVisible = false
-    /// Suprime el play durante la ventana del pop zoom (cuando `isViewVisible`
-    /// aún es `true`). Consultado a tiempo de tap. Ver `PopSuppressionGate`.
-    @State private var popGate = PopSuppressionGate()
+    /// Gate del stack (lo arma el owner del NavigationStack al reducirse el path).
+    /// Consultado a tiempo de tap en los botones de play para que un ghost tap
+    /// durante el pop zoom no reproduzca este detalle. Ver `PopSuppressionGate`.
+    @Environment(\.popGate) private var popGate
     /// Altura medida del bloque de título+metadata (para que heroHeight la
     /// incluya y los huecos del hero no dependan del nº de líneas). Igual que
     /// AlbumDetailView.
@@ -381,12 +382,10 @@ struct PlaylistDetailView: View {
         // Propaga el estado activo a SongListView para que sus filas no
         // disparen reproducción ante un ghost tap durante/tras el pop zoom.
         .environment(\.detailIsActive, isViewVisible)
-        // Gate consultado a tiempo de tap para que las filas (y los botones de
-        // abajo) no reproduzcan durante el pop, aunque el zoom retenga su layer.
-        .environment(\.popGate, popGate)
         // Durante el pop, el contenido deja pasar los toques a la grid de detrás
-        // (recupera el scroll) y el observer arma/libera el gate.
-        .blocksTouchesDuringPop(gate: popGate)
+        // (recupera el scroll). El ghost tap lo cubre el PopSuppressionGate que el
+        // owner del stack arma al reducirse el path.
+        .blocksTouchesDuringPop()
         .toolbar {
             if onDismiss != nil {
                 ToolbarItem(placement: .topBarLeading) {
@@ -644,7 +643,7 @@ struct PlaylistDetailView: View {
         return HStack(spacing: 12) {
             // Play — capsule with text normally, collapses to circle when SmartMix active
             Button {
-                guard isViewVisible, !popGate.isSuppressing else { return }
+                guard isViewVisible, !(popGate?.isSuppressing ?? false) else { return }
                 if isPlaylistContext {
                     PlayerService.shared.togglePlayPause()
                 } else {
@@ -671,7 +670,7 @@ struct PlaylistDetailView: View {
 
             // Shuffle
             Button {
-                guard isViewVisible, !popGate.isSuppressing, !vm.songs.isEmpty else { return }
+                guard isViewVisible, !(popGate?.isSuppressing ?? false), !vm.songs.isEmpty else { return }
                 PlayerService.shared.playPlaylist(vm.songs.shuffled(), contextUri: "playlist:\(vm.displayPlaylist.id)", contextName: vm.displayPlaylist.name)
             } label: {
                 Image(systemName: "shuffle")
@@ -774,7 +773,7 @@ struct PlaylistDetailView: View {
         let isExpanded = status == .ready || isSmartMixContext
 
         Button {
-            guard isViewVisible, !popGate.isSuppressing else { return }
+            guard isViewVisible, !(popGate?.isSuppressing ?? false) else { return }
             if isSmartMixContext {
                 // SmartMix is the current context — toggle play/pause
                 PlayerService.shared.togglePlayPause()

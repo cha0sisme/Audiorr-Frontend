@@ -26,9 +26,39 @@ extension EnvironmentValues {
 }
 
 extension View {
-    /// Inyecta el path del stack para que las vistas hijas hagan push por él.
+    /// Inyecta el path del stack para que las vistas hijas hagan push por él, y de
+    /// paso instala el `PopSuppressionGate` del stack (ver `NavPathInstaller`).
     func navPath(_ path: Binding<NavigationPath>) -> some View {
-        environment(\.navPath, path)
+        modifier(NavPathInstaller(path: path))
+    }
+}
+
+/// Inyecta por Environment el `navPath` y el `PopSuppressionGate` del stack, y
+/// ARMA el gate observando el propio `path`: un pop SIEMPRE baja `path.count`
+/// (botón atrás o swipe de borde) → `beginPop()`; un push lo sube → `release()`.
+///
+/// Se aplica al NavigationStack (no a su contenido) para que ambos valores lleguen
+/// también a los destinos empujados (los detalles). Armar el gate AQUÍ — desde el
+/// owner del stack, que NO se destruye en el pop y observa su propio `@State` — es
+/// fiable para el swipe interactivo, a diferencia del `viewWillDisappear` de un
+/// `UIViewControllerRepresentable` embebido en el detalle, que no dispara de forma
+/// fiable en el pop interactivo bajo TabView+NavigationStack (por ahí se colaba el
+/// ghost tap al soltar el swipe).
+private struct NavPathInstaller: ViewModifier {
+    let path: Binding<NavigationPath>
+    @State private var popGate = PopSuppressionGate()
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.navPath, path)
+            .environment(\.popGate, popGate)
+            .onChange(of: path.wrappedValue.count) { oldCount, newCount in
+                if newCount < oldCount {
+                    popGate.beginPop()   // pop (botón o swipe): arma la ventana
+                } else if newCount > oldCount {
+                    popGate.release()    // push: pantalla nueva activa
+                }
+            }
     }
 }
 
@@ -56,38 +86,40 @@ extension EnvironmentValues {
 
 // MARK: - Pop-suppression gate
 
-/// Gate por-pantalla que suprime la reproducción DURANTE (y un instante tras) el
-/// pop de `.navigationTransition(.zoom)`. Es un *reference type* que se consulta
-/// A TIEMPO DE TAP: aunque el zoom retenga un snapshot del contenido saliente con
-/// el closure del botón ya capturado, ese closure lee `isSuppressing` sobre la
-/// MISMA instancia viva → ve el valor actual. Ataca la ACCIÓN (reproducir), no el
+/// Gate por-stack que suprime la reproducción DURANTE (y un instante tras) el pop
+/// de `.navigationTransition(.zoom)`. Es un *reference type* que se consulta A
+/// TIEMPO DE TAP: aunque el zoom retenga un snapshot del contenido saliente con el
+/// closure del botón ya capturado, ese closure lee `isSuppressing` sobre la MISMA
+/// instancia viva → ve el valor actual. Ataca la ACCIÓN (reproducir), no el
 /// hit-testing, así que es inmune a que el zoom ignore `allowsHitTesting` (el
 /// agujero por el que el ghost tap seguía colándose pese a `detailIsActive`).
 ///
+/// Lo ARMA el OWNER del NavigationStack al observar que el `path` se reduce (ver
+/// `NavPathInstaller`), NO un observer de UIKit embebido en el detalle: el
+/// `viewWillDisappear` de un representable embebido no dispara de forma fiable en
+/// el pop INTERACTIVO (swipe de borde) bajo TabView+NavigationStack, y por ahí el
+/// ghost tap se colaba justo al soltar el swipe. El owner no se destruye en el pop.
+///
 /// `detailIsActive` (de `isViewVisible`) y este gate son complementarios:
 /// `isViewVisible` flipa a `false` al FINAL del pop (`onDisappear`), así que NO
-/// cubre la ventana de la animación; el gate sí la cubre (se arma en
-/// `viewWillDisappear`, al INICIO).
+/// cubre la ventana de la animación; el gate sí la cubre (se arma al reducirse el
+/// path, al INICIO del pop).
 ///
-/// `suppressUntil` es un `Date` AUTO-EXPIRANTE: si el release no llegara (el pop
-/// completo desaloja el VC que lo armó, una transición se interrumpe…), el gate se
-/// cura solo al vencer la ventana — nunca queda "pegado" suprimiendo TODA la
-/// reproducción, que sería peor que el propio ghost tap.
+/// `suppressUntil` es un `Date` AUTO-EXPIRANTE: si nunca llegara un `release`, el
+/// gate se cura solo al vencer la ventana — nunca queda "pegado" suprimiendo TODA
+/// la reproducción, que sería peor que el propio ghost tap.
 final class PopSuppressionGate {
     private var suppressUntil: Date = .distantPast
 
     /// `true` mientras la ventana de supresión sigue vigente.
     var isSuppressing: Bool { Date() < suppressUntil }
 
-    /// Inicio del pop (`viewWillDisappear`): red de seguridad amplia que el fin de
-    /// la transición acorta. Si el fin nunca llegara, expira sola.
-    func beginPop() { suppressUntil = Date().addingTimeInterval(2.0) }
+    /// Pop detectado (el `path` se redujo): abre una ventana de gracia que cubre la
+    /// animación de zoom-out y el instante en que el snapshot fantasma sigue encima
+    /// ("justo al terminar", donde caía el ghost tap del swipe). Auto-expira.
+    func beginPop() { suppressUntil = Date().addingTimeInterval(0.8) }
 
-    /// Fin de la animación de pop: deja solo un margen de gracia para el layer
-    /// fantasma que el zoom mantiene unos instantes encima.
-    func endPop() { suppressUntil = Date().addingTimeInterval(0.25) }
-
-    /// Pop cancelado (swipe-back soltado) o pantalla (re)activa: interactiva ya.
+    /// Push (el `path` creció): hay una pantalla nueva activa, no hay que suprimir.
     func release() { suppressUntil = .distantPast }
 }
 
@@ -660,108 +692,81 @@ struct ExplicitBadge: View {
 // MARK: - Pop-aware hit testing
 
 /// Hace que el contenido deje de capturar toques mientras el pop de navegación
-/// está en curso, de modo que los toques ATRAVIESEN hacia la pantalla anterior.
-/// Resuelve dos síntomas del zoom-out de `.navigationTransition(.zoom)`: la grid
-/// de detrás recupera el scroll de inmediato y un toque ya no dispara acciones de
-/// la pantalla que se abandona (ghost tap DURANTE la animación, que el guard por
-/// `onDisappear`/`detailIsActive` no cubre porque llega al final del pop).
+/// está en curso, de modo que los toques ATRAVIESEN hacia la pantalla anterior y
+/// la grid de detrás recupere el scroll de inmediato durante el zoom-out de
+/// `.navigationTransition(.zoom)`.
+///
+/// El ghost tap (un toque que reproduce una canción del detalle abandonado) NO lo
+/// cubre esta capa, sino el `PopSuppressionGate` que arma el owner del stack: el
+/// zoom puede ignorar `allowsHitTesting` sobre el snapshot que retiene encima, así
+/// que la defensa fiable es gatear la ACCIÓN a tiempo de tap, no el hit-testing.
 ///
 /// No toca la animación ni los gestos de navegación: el swipe-back y la
 /// pinch-to-dismiss viven en el UINavigationController, fuera de este contenido,
 /// así que desactivar el hit-test del contenido no los afecta.
 private struct PopHitTestGuard: ViewModifier {
-    let gate: PopSuppressionGate
     @State private var isPopping = false
 
     func body(content: Content) -> some View {
         content
             .allowsHitTesting(!isPopping)
             .background(
-                NavigationTransitionObserver(
-                    onPopBegan: {
-                        if !isPopping { isPopping = true }
-                        gate.beginPop()
-                    },
-                    onPopEnded: { cancelled in
-                        if isPopping { isPopping = false }
-                        if cancelled { gate.release() } else { gate.endPop() }
-                    },
-                    onReappear: {
-                        if isPopping { isPopping = false }
-                        gate.release()
-                    }
-                )
+                NavigationTransitionObserver { popping in
+                    if isPopping != popping { isPopping = popping }
+                }
             )
     }
 }
 
 extension View {
     /// Ver `PopHitTestGuard`. Aplicar al contenido raíz de una pantalla de
-    /// detalle que se abre con `.navigationTransition(.zoom)`, pasándole el
-    /// `PopSuppressionGate` que esa pantalla inyecta también por Environment.
-    func blocksTouchesDuringPop(gate: PopSuppressionGate) -> some View {
-        modifier(PopHitTestGuard(gate: gate))
+    /// detalle que se abre con `.navigationTransition(.zoom)`.
+    func blocksTouchesDuringPop() -> some View {
+        modifier(PopHitTestGuard())
     }
 }
 
 /// Observa el ciclo de transición del UINavigationController contenedor desde
-/// SwiftUI:
-/// - `onPopBegan` al INICIO de la salida (`viewWillDisappear`, no en
-///   `onDisappear`, que llega al final). Cubre pop por botón, swipe-back y zoom,
-///   y también el caso de quedar cubierta por un push (inocuo con gate
-///   por-pantalla: la pantalla cubierta no recibe toques).
-/// - `onPopEnded(cancelled:)` al terminar la transición (completion del
-///   `transitionCoordinator`); `cancelled == true` si el swipe-back interactivo
-///   se soltó a medias.
-/// - `onReappear` al (re)aparecer la pantalla (`viewWillAppear`), p.ej. al volver
-///   tras estar cubierta.
+/// SwiftUI. Llama `onChange(true)` al INICIO del pop (`viewWillDisappear`, no en
+/// `onDisappear`, que llega al final) y `onChange(false)` si el pop interactivo se
+/// cancela (swipe-back soltado a medias) o al (re)aparecer la pantalla.
 ///
 /// Usa el `transitionCoordinator` (UIKit público), no gesture recognizers
-/// privados, así que no toca la animación ni los gestos de navegación.
+/// privados, así que no toca la animación ni los gestos de navegación. Solo
+/// alimenta el `allowsHitTesting` del scroll; el ghost tap lo cubre el
+/// `PopSuppressionGate` del owner.
 private struct NavigationTransitionObserver: UIViewControllerRepresentable {
-    var onPopBegan: () -> Void
-    var onPopEnded: (_ cancelled: Bool) -> Void
-    var onReappear: () -> Void
+    var onChange: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> ObserverVC {
         let vc = ObserverVC()
-        vc.onPopBegan = onPopBegan
-        vc.onPopEnded = onPopEnded
-        vc.onReappear = onReappear
+        vc.onChange = onChange
         return vc
     }
 
     func updateUIViewController(_ vc: ObserverVC, context: Context) {
-        vc.onPopBegan = onPopBegan
-        vc.onPopEnded = onPopEnded
-        vc.onReappear = onReappear
+        vc.onChange = onChange
     }
 
     final class ObserverVC: UIViewController {
-        var onPopBegan: (() -> Void)?
-        var onPopEnded: ((Bool) -> Void)?
-        var onReappear: (() -> Void)?
+        var onChange: ((Bool) -> Void)?
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            onReappear?()
+            // (Re)entrar a la pantalla la reactiva.
+            onChange?(false)
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            // La pantalla empieza a salir: arma el gate ya (red de seguridad
-            // amplia) y deja pasar los toques durante la animación.
-            onPopBegan?()
-            // El completion del coordinator acota la ventana al fin REAL de la
-            // animación (y detecta el swipe-back cancelado). Sin coordinator
-            // (desaparición no animada) cerramos la ventana de inmediato.
+            // La pantalla empieza a salir: el contenido deja pasar los toques
+            // durante TODA la transición.
+            onChange?(true)
+            // Si el pop es interactivo y el usuario lo cancela (suelta el
+            // swipe-back a medias), reactivamos el contenido.
             let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator
-            if let coordinator {
-                coordinator.animate(alongsideTransition: nil) { [weak self] ctx in
-                    self?.onPopEnded?(ctx.isCancelled)
-                }
-            } else {
-                onPopEnded?(false)
+            coordinator?.animate(alongsideTransition: nil) { [weak self] ctx in
+                if ctx.isCancelled { self?.onChange?(false) }
             }
         }
     }
